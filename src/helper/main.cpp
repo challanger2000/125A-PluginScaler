@@ -115,10 +115,28 @@ struct EditorCaptureRequest {
     std::vector<std::uint8_t>* bytes{nullptr};
 };
 
-BOOL CALLBACK firstChildProc(HWND hwnd, LPARAM param) {
-    auto* result = reinterpret_cast<HWND*>(param);
-    *result = hwnd;
-    return FALSE;
+struct EditorChildCandidate {
+    HWND hwnd{nullptr};
+    LONG area{0};
+};
+
+BOOL CALLBACK largestChildProc(HWND hwnd, LPARAM param) {
+    auto* candidate = reinterpret_cast<EditorChildCandidate*>(param);
+    if (!candidate || !IsWindow(hwnd))
+        return TRUE;
+
+    RECT rc{};
+    if (!GetClientRect(hwnd, &rc))
+        return TRUE;
+
+    const LONG width = rc.right - rc.left;
+    const LONG height = rc.bottom - rc.top;
+    const LONG area = width > 0 && height > 0 ? width * height : 0;
+    if (area > candidate->area) {
+        candidate->hwnd = hwnd;
+        candidate->area = area;
+    }
+    return TRUE;
 }
 
 LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -145,8 +163,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (!ctx->module->openEditor(hwnd))
             return 0;
 
-        HWND child = nullptr;
-        EnumChildWindows(hwnd, firstChildProc, reinterpret_cast<LPARAM>(&child));
+        EditorChildCandidate candidate{};
+        EnumChildWindows(hwnd, largestChildProc,
+                         reinterpret_cast<LPARAM>(&candidate));
+        HWND child = candidate.hwnd;
         if (!child || !IsWindow(child))
             return 0;
 
@@ -187,12 +207,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
             return 0;
 
-        HWND captureWindow = ctx->surrogate && IsWindow(ctx->surrogate)
-            ? ctx->surrogate : ctx->editor;
+        HWND captureWindow = ctx->editor && IsWindow(ctx->editor)
+            ? ctx->editor : ctx->surrogate;
 
-        RedrawWindow(captureWindow, nullptr, nullptr,
+        RedrawWindow(ctx->editor, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         UpdateWindow(ctx->editor);
+        RedrawWindow(captureWindow, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
         RECT rc{};
         if (!GetClientRect(captureWindow, &rc))
