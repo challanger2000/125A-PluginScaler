@@ -27,6 +27,41 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     }
 }
 
+bool processAndCheck(AEffect* effect, VstInt32 frames, float seed) {
+    std::vector<float> inL(static_cast<std::size_t>(frames));
+    std::vector<float> inR(static_cast<std::size_t>(frames));
+    std::vector<float> outL(static_cast<std::size_t>(frames), 0.0f);
+    std::vector<float> outR(static_cast<std::size_t>(frames), 0.0f);
+
+    for (VstInt32 i = 0; i < frames; ++i) {
+        inL[static_cast<std::size_t>(i)] = seed + static_cast<float>(i + 1) / 100.0f;
+        inR[static_cast<std::size_t>(i)] = seed + static_cast<float>((i + 1) * 2) / 100.0f;
+    }
+
+    float* inputs[2]{inL.data(), inR.data()};
+    float* outputs[2]{outL.data(), outR.data()};
+    effect->processReplacing(effect, inputs, outputs, frames);
+
+    for (VstInt32 i = 0; i < frames; ++i) {
+        const float expectL = inL[static_cast<std::size_t>(i)] * 2.0f;
+        const float expectR = inR[static_cast<std::size_t>(i)] * 2.0f;
+        if (std::fabs(outL[static_cast<std::size_t>(i)] - expectL) > 0.00001f ||
+            std::fabs(outR[static_cast<std::size_t>(i)] - expectR) > 0.00001f)
+            return false;
+    }
+
+    std::cout << "block=" << frames
+              << " seed=" << seed
+              << " outL0=" << outL[0]
+              << " outRlast=" << outR.back() << "\n";
+    return true;
+}
+
+bool configure(AEffect* effect, float sampleRate, VstInt32 blockSize) {
+    return effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, sampleRate) != 0 &&
+           effect->dispatcher(effect, EffSetBlockSize, 0, blockSize, nullptr, 0.0f) != 0;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -55,44 +90,42 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f);
-    effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f);
-    effect->dispatcher(effect, EffSetBlockSize, 0, 64, nullptr, 0.0f);
 
-    if (!effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
+    if (!configure(effect, 48000.0f, 64) ||
+        !effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
         effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
         FreeLibrary(proxy);
         return 5;
     }
 
-    std::vector<float> inL(64);
-    std::vector<float> inR(64);
-    std::vector<float> outL(64, 0.0f);
-    std::vector<float> outR(64, 0.0f);
+    bool ok = true;
 
-    for (int i = 0; i < 64; ++i) {
-        inL[static_cast<std::size_t>(i)] = static_cast<float>(i + 1) / 100.0f;
-        inR[static_cast<std::size_t>(i)] = static_cast<float>((i + 1) * 2) / 100.0f;
-    }
+    // Repeated blocks at the same configuration.
+    for (int n = 0; n < 8 && ok; ++n)
+        ok = processAndCheck(effect, 64, static_cast<float>(n) * 0.01f);
 
-    float* inputs[2]{inL.data(), inR.data()};
-    float* outputs[2]{outL.data(), outR.data()};
-    effect->processReplacing(effect, inputs, outputs, 64);
+    // Change both sample rate and block size while active.
+    if (ok)
+        ok = configure(effect, 44100.0f, 128) &&
+             processAndCheck(effect, 128, 0.25f);
 
-    const bool ok =
-        std::fabs(outL[0] - 0.02f) < 0.00001f &&
-        std::fabs(outR[0] - 0.04f) < 0.00001f &&
-        std::fabs(outL[63] - 1.28f) < 0.00001f &&
-        std::fabs(outR[63] - 2.56f) < 0.00001f;
+    if (ok)
+        ok = configure(effect, 96000.0f, 32) &&
+             processAndCheck(effect, 32, 0.5f);
 
-    std::cout
-        << "outL0=" << outL[0] << "\n"
-        << "outR0=" << outR[0] << "\n"
-        << "outL63=" << outL[63] << "\n"
-        << "outR63=" << outR[63] << "\n";
+    // Stop transport/plugin processing and restart the helper path.
+    if (ok)
+        ok = effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f) != 0;
+
+    if (ok)
+        ok = configure(effect, 48000.0f, 64) &&
+             effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0 &&
+             processAndCheck(effect, 64, 0.75f);
 
     effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
     effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
     FreeLibrary(proxy);
 
+    std::cout << "torture=" << (ok ? "PASS" : "FAIL") << "\n";
     return ok ? 0 : 6;
 }

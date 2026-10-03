@@ -113,7 +113,11 @@ jobs:
           $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
           $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
 
-          & $proxyHostExe $proxy $helper $plugin
+          $output = & $proxyHostExe $proxy $helper $plugin
+          $output | Write-Host
           if ($LASTEXITCODE -ne 0) {
             throw "End-to-end x64 VST2 proxy bridge failed with exit code $LASTEXITCODE"
+          }
+          if (($output | Out-String) -notmatch "torture=PASS") {
+            throw "Proxy lifecycle torture marker missing"
           }

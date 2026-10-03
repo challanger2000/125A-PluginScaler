@@ -51,7 +51,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
 void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs, VstInt32 frames) {
     auto* state = static_cast<MockState*>(effect ? effect->object : nullptr);
     const bool configured =
-        state && state->mains && state->sampleRate == 48000.0f && state->blockSize == 64;
+        state && state->mains && state->sampleRate > 0.0f &&
+        state->blockSize == frames;
 
     for (VstInt32 ch = 0; ch < effect->numOutputs; ++ch) {
         const VstInt32 inputCh = std::min(ch, effect->numInputs - 1);
