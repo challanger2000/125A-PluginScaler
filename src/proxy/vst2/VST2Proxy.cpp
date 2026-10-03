@@ -828,7 +828,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
             HWND mag = CreateWindowExW(
                 WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
-                WC_MAGNIFIER, L"",
+                L"Magnifier", L"",
                 WS_CHILD | WS_VISIBLE,
                 0, 0, scaledWidth, scaledHeight,
                 surface, nullptr, GetModuleHandleW(nullptr), nullptr);
