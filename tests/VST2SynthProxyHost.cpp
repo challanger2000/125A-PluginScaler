@@ -160,28 +160,59 @@ int wmain(int argc, wchar_t** argv) {
     if (ok) {
         editorHost = createHostWindow();
         VstRect* rect = nullptr;
-        ok = editorHost != nullptr &&
-             effect->dispatcher(effect, EffEditGetRect, 0, 0, &rect, 0.0f) != 0 &&
-             rect != nullptr &&
-             (rect->right - rect->left) == 640 &&
-             (rect->bottom - rect->top) == 360 &&
-             effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f) != 0;
-        Sleep(50);
-        ok = ok && childCount(editorHost) >= 1;
+        const auto rectResult = editorHost
+            ? effect->dispatcher(effect, EffEditGetRect, 0, 0, &rect, 0.0f)
+            : 0;
+        const int rectWidth = rect ? (rect->right - rect->left) : 0;
+        const int rectHeight = rect ? (rect->bottom - rect->top) : 0;
+        const auto openResult =
+            (editorHost && rectResult && rectWidth == 640 && rectHeight == 360)
+                ? effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f)
+                : 0;
 
+        ShowWindow(editorHost, SW_SHOW);
+        UpdateWindow(editorHost);
+        Sleep(100);
+
+        const int children = childCount(editorHost);
         HWND surface = FindWindowExW(editorHost, nullptr,
                                      L"125A_PluginScaler_ScaledSurface", nullptr);
-        if (ok && surface) {
+
+        COLORREF pixel = CLR_INVALID;
+        if (surface) {
+            RedrawWindow(surface, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             HDC dc = GetDC(surface);
-            const COLORREF pixel = GetPixel(dc, 100, 80);
+            pixel = GetPixel(dc, 100, 80);
             ReleaseDC(surface, dc);
-            ok = pixel != CLR_INVALID &&
-                 GetRValue(pixel) > 180 &&
-                 GetGValue(pixel) < 120 &&
-                 GetBValue(pixel) < 100;
-        } else {
-            ok = false;
         }
+
+        std::cout << "editor-rect=" << rectWidth << "x" << rectHeight << "\n";
+        std::cout << "editor-open-result=" << openResult << "\n";
+        std::cout << "editor-children=" << children << "\n";
+        std::cout << "editor-surface=" << (surface ? 1 : 0) << "\n";
+        std::cout << "editor-pixel=";
+        if (pixel == CLR_INVALID) {
+            std::cout << "INVALID\n";
+        } else {
+            std::cout << static_cast<unsigned>(GetRValue(pixel)) << ","
+                      << static_cast<unsigned>(GetGValue(pixel)) << ","
+                      << static_cast<unsigned>(GetBValue(pixel)) << "\n";
+        }
+
+        ok = editorHost != nullptr &&
+             rectResult != 0 &&
+             rect != nullptr &&
+             rectWidth == 640 &&
+             rectHeight == 360 &&
+             openResult != 0 &&
+             children >= 1 &&
+             surface != nullptr &&
+             pixel != CLR_INVALID &&
+             GetRValue(pixel) > 180 &&
+             GetGValue(pixel) < 120 &&
+             GetBValue(pixel) < 100;
+
         std::cout << "editor-scale=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
     }
