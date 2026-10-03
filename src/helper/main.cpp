@@ -139,6 +139,13 @@ BOOL CALLBACK largestChildProc(HWND hwnd, LPARAM param) {
     return TRUE;
 }
 
+BOOL CALLBACK collectChildProc(HWND hwnd, LPARAM param) {
+    auto* windows = reinterpret_cast<std::vector<HWND>*>(param);
+    if (windows && IsWindow(hwnd))
+        windows->push_back(hwnd);
+    return TRUE;
+}
+
 LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* ctx = reinterpret_cast<EditorGuiContext*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -207,108 +214,152 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
             return 0;
 
-        HWND captureWindow = ctx->editor && IsWindow(ctx->editor)
-            ? ctx->editor : ctx->surrogate;
+        std::vector<HWND> candidates;
+        if (ctx->surrogate && IsWindow(ctx->surrogate))
+            candidates.push_back(ctx->surrogate);
+        candidates.push_back(ctx->editor);
+        EnumChildWindows(ctx->surrogate, collectChildProc,
+                         reinterpret_cast<LPARAM>(&candidates));
 
-        RedrawWindow(ctx->editor, nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-        UpdateWindow(ctx->editor);
-        RedrawWindow(captureWindow, nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        std::vector<std::uint8_t> bestPixels;
+        std::uint32_t bestWidth = 0;
+        std::uint32_t bestHeight = 0;
+        std::uint32_t bestStride = 0;
+        std::uint64_t bestScore = 0;
 
-        RECT rc{};
-        if (!GetClientRect(captureWindow, &rc))
-            return 0;
-        const int width = rc.right - rc.left;
-        const int height = rc.bottom - rc.top;
-        if (width <= 0 || height <= 0)
-            return 0;
-
-        BITMAPINFO bmi{};
-        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = width;
-        bmi.bmiHeader.biHeight = -height;
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB;
-
-        HDC screen = GetDC(nullptr);
-        HDC mem = CreateCompatibleDC(screen);
-        void* bits = nullptr;
-        HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS,
-                                          &bits, nullptr, 0);
-        ReleaseDC(nullptr, screen);
-        if (!mem || !bitmap || !bits) {
-            if (bitmap) DeleteObject(bitmap);
-            if (mem) DeleteDC(mem);
-            return 0;
-        }
-
-        HGDIOBJ old = SelectObject(mem, bitmap);
-
-        const std::size_t stride = static_cast<std::size_t>(width) * 4u;
-        const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
-
-        auto clearBits = [&] {
-            std::memset(bits, 0, pixelBytes);
-        };
-        auto hasUsefulPixels = [&] {
-            const auto* p = static_cast<const std::uint8_t*>(bits);
-            if (pixelBytes < 4) return false;
+        auto scorePixels = [](const std::uint8_t* p, std::size_t bytes) -> std::uint64_t {
+            if (!p || bytes < 4) return 0;
             std::uint8_t minValue = 255;
             std::uint8_t maxValue = 0;
-            std::size_t nonBlack = 0;
-            const std::size_t step = (std::max<std::size_t>)(4, pixelBytes / 4096u);
-            for (std::size_t i = 0; i + 2 < pixelBytes; i += step) {
+            std::uint64_t nonBlack = 0;
+            std::uint64_t variation = 0;
+            const std::size_t step = (std::max<std::size_t>)(4, bytes / 4096u);
+            std::uint8_t prev = 0;
+            bool havePrev = false;
+            for (std::size_t i = 0; i + 2 < bytes; i += step) {
                 const std::uint8_t b = p[i + 0];
                 const std::uint8_t g = p[i + 1];
-                const std::uint8_t r = p[i + 2];
-                minValue = (std::min)({minValue, b, g, r});
-                maxValue = (std::max)({maxValue, b, g, r});
-                if (r > 6 || g > 6 || b > 6)
+                const std::uint8_t rr = p[i + 2];
+                minValue = (std::min)({minValue, b, g, rr});
+                maxValue = (std::max)({maxValue, b, g, rr});
+                if (rr > 6 || g > 6 || b > 6)
                     ++nonBlack;
+                const std::uint8_t luma =
+                    static_cast<std::uint8_t>((static_cast<unsigned>(rr) * 3u +
+                                               static_cast<unsigned>(g) * 6u +
+                                               static_cast<unsigned>(b)) / 10u);
+                if (havePrev)
+                    variation += static_cast<std::uint64_t>(
+                        luma > prev ? luma - prev : prev - luma);
+                prev = luma;
+                havePrev = true;
             }
-            return nonBlack > 8 && maxValue > static_cast<std::uint8_t>(minValue + 4);
+            if (maxValue <= static_cast<std::uint8_t>(minValue + 3))
+                return 0;
+            return nonBlack * 1024ull + variation;
         };
 
-        bool captured = false;
+        auto tryCapture = [&](HWND target, int mode) {
+            if (!target || !IsWindow(target))
+                return;
 
-        clearBits();
-        if (PrintWindow(captureWindow, mem, PW_CLIENTONLY | 0x00000002))
-            captured = hasUsefulPixels();
+            RECT rc{};
+            if (!GetClientRect(target, &rc))
+                return;
+            const int width = rc.right - rc.left;
+            const int height = rc.bottom - rc.top;
+            if (width <= 0 || height <= 0)
+                return;
 
-        if (!captured) {
-            clearBits();
-            SendMessageW(captureWindow, WM_PRINT, reinterpret_cast<WPARAM>(mem),
-                         PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
-            captured = hasUsefulPixels();
-        }
+            const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+            const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
+            if (pixelBytes == 0 ||
+                pixelBytes + sizeof(pluginscaler::ipc::EditorBitmapHeader) >
+                    pluginscaler::ipc::kMaxControlPayload)
+                return;
 
-        if (!captured) {
-            clearBits();
-            HDC source = GetDC(captureWindow);
-            if (source) {
-                captured = BitBlt(mem, 0, 0, width, height,
-                                  source, 0, 0, SRCCOPY) != FALSE;
-                ReleaseDC(captureWindow, source);
-                captured = captured && hasUsefulPixels();
+            BITMAPINFO bmi{};
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = width;
+            bmi.bmiHeader.biHeight = -height;
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            HDC screen = GetDC(nullptr);
+            if (!screen) return;
+            HDC mem = CreateCompatibleDC(screen);
+            void* bits = nullptr;
+            HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS,
+                                              &bits, nullptr, 0);
+            ReleaseDC(nullptr, screen);
+            if (!mem || !bitmap || !bits) {
+                if (bitmap) DeleteObject(bitmap);
+                if (mem) DeleteDC(mem);
+                return;
             }
+
+            std::memset(bits, 0, pixelBytes);
+            HGDIOBJ old = SelectObject(mem, bitmap);
+
+            RedrawWindow(target, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            UpdateWindow(target);
+
+            bool apiOk = false;
+            if (mode == 0) {
+                apiOk = PrintWindow(target, mem, PW_CLIENTONLY | 0x00000002) != FALSE;
+            } else if (mode == 1) {
+                SendMessageW(target, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+                             PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+                apiOk = true;
+            } else {
+                HDC source = GetDC(target);
+                if (source) {
+                    apiOk = BitBlt(mem, 0, 0, width, height,
+                                   source, 0, 0, SRCCOPY) != FALSE;
+                    ReleaseDC(target, source);
+                }
+            }
+
+            SelectObject(mem, old);
+
+            if (apiOk) {
+                const auto score = scorePixels(
+                    static_cast<const std::uint8_t*>(bits), pixelBytes);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestWidth = static_cast<std::uint32_t>(width);
+                    bestHeight = static_cast<std::uint32_t>(height);
+                    bestStride = static_cast<std::uint32_t>(stride);
+                    bestPixels.resize(pixelBytes);
+                    std::memcpy(bestPixels.data(), bits, pixelBytes);
+                }
+            }
+
+            DeleteObject(bitmap);
+            DeleteDC(mem);
+        };
+
+        for (HWND candidate : candidates) {
+            tryCapture(candidate, 0);
+            tryCapture(candidate, 1);
+            tryCapture(candidate, 2);
         }
 
-        SelectObject(mem, old);
+        if (bestScore == 0 || bestPixels.empty())
+            return 0;
 
         pluginscaler::ipc::EditorBitmapHeader header{};
-        header.width = static_cast<std::uint32_t>(width);
-        header.height = static_cast<std::uint32_t>(height);
-        header.strideBytes = static_cast<std::uint32_t>(stride);
+        header.width = bestWidth;
+        header.height = bestHeight;
+        header.strideBytes = bestStride;
 
-        request->bytes->resize(sizeof(header) + pixelBytes);
+        request->bytes->resize(sizeof(header) + bestPixels.size());
         std::memcpy(request->bytes->data(), &header, sizeof(header));
-        std::memcpy(request->bytes->data() + sizeof(header), bits, pixelBytes);
-
-        DeleteObject(bitmap);
-        DeleteDC(mem);
-        return captured ? 1 : 0;
+        std::memcpy(request->bytes->data() + sizeof(header),
+                    bestPixels.data(), bestPixels.size());
+        return 1;
     }
     case kEditorShutdownMessage:
         KillTimer(hwnd, kEditorIdleTimer);
