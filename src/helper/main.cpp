@@ -1,5 +1,6 @@
 #define NOMINMAX
 #include "pluginscaler/formats/VST2PluginModule.h"
+#include <cstdlib>
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/Protocol.h"
 #include "pluginscaler/ipc/ControlProtocol.h"
@@ -146,6 +147,35 @@ BOOL CALLBACK collectChildProc(HWND hwnd, LPARAM param) {
     return TRUE;
 }
 
+std::vector<HWND> editorCaptureCandidates(const EditorGuiContext* ctx) {
+    std::vector<HWND> windows;
+    if (!ctx) return windows;
+
+    if (ctx->editor && IsWindow(ctx->editor))
+        windows.push_back(ctx->editor);
+
+    if (ctx->surrogate && IsWindow(ctx->surrogate)) {
+        if (std::find(windows.begin(), windows.end(), ctx->surrogate) == windows.end())
+            windows.push_back(ctx->surrogate);
+
+        std::vector<HWND> descendants;
+        EnumChildWindows(ctx->surrogate, collectChildProc,
+                         reinterpret_cast<LPARAM>(&descendants));
+        for (HWND hwnd : descendants) {
+            if (std::find(windows.begin(), windows.end(), hwnd) == windows.end())
+                windows.push_back(hwnd);
+        }
+    }
+    return windows;
+}
+
+BOOL CALLBACK collectChildProc(HWND hwnd, LPARAM param) {
+    auto* windows = reinterpret_cast<std::vector<HWND>*>(param);
+    if (windows && IsWindow(hwnd))
+        windows->push_back(hwnd);
+    return TRUE;
+}
+
 LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* ctx = reinterpret_cast<EditorGuiContext*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -211,72 +241,37 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         break;
     case kEditorCaptureMessage: {
         auto* request = reinterpret_cast<EditorCaptureRequest*>(lp);
-        if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
+        if (!request || !request->bytes)
             return 0;
 
-        std::vector<HWND> candidates;
-        if (ctx->surrogate && IsWindow(ctx->surrogate))
-            candidates.push_back(ctx->surrogate);
-        candidates.push_back(ctx->editor);
-        EnumChildWindows(ctx->surrogate, collectChildProc,
-                         reinterpret_cast<LPARAM>(&candidates));
+        const auto candidates = editorCaptureCandidates(ctx);
+        if (candidates.empty())
+            return 0;
 
-        std::vector<std::uint8_t> bestPixels;
-        std::uint32_t bestWidth = 0;
-        std::uint32_t bestHeight = 0;
-        std::uint32_t bestStride = 0;
-        std::uint64_t bestScore = 0;
-
-        auto scorePixels = [](const std::uint8_t* p, std::size_t bytes) -> std::uint64_t {
-            if (!p || bytes < 4) return 0;
-            std::uint8_t minValue = 255;
-            std::uint8_t maxValue = 0;
-            std::uint64_t nonBlack = 0;
-            std::uint64_t variation = 0;
-            const std::size_t step = (std::max<std::size_t>)(4, bytes / 4096u);
-            std::uint8_t prev = 0;
-            bool havePrev = false;
-            for (std::size_t i = 0; i + 2 < bytes; i += step) {
-                const std::uint8_t b = p[i + 0];
-                const std::uint8_t g = p[i + 1];
-                const std::uint8_t rr = p[i + 2];
-                minValue = (std::min)({minValue, b, g, rr});
-                maxValue = (std::max)({maxValue, b, g, rr});
-                if (rr > 6 || g > 6 || b > 6)
-                    ++nonBlack;
-                const std::uint8_t luma =
-                    static_cast<std::uint8_t>((static_cast<unsigned>(rr) * 3u +
-                                               static_cast<unsigned>(g) * 6u +
-                                               static_cast<unsigned>(b)) / 10u);
-                if (havePrev)
-                    variation += static_cast<std::uint64_t>(
-                        luma > prev ? luma - prev : prev - luma);
-                prev = luma;
-                havePrev = true;
-            }
-            if (maxValue <= static_cast<std::uint8_t>(minValue + 3))
-                return 0;
-            return nonBlack * 1024ull + variation;
+        struct CaptureResult {
+            std::vector<std::uint8_t> pixels;
+            int width{0};
+            int height{0};
+            std::size_t score{0};
         };
 
-        auto tryCapture = [&](HWND target, int mode) {
-            if (!target || !IsWindow(target))
-                return;
+        CaptureResult best{};
+
+        for (HWND captureWindow : candidates) {
+            if (!captureWindow || !IsWindow(captureWindow))
+                continue;
+
+            RedrawWindow(captureWindow, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            UpdateWindow(captureWindow);
 
             RECT rc{};
-            if (!GetClientRect(target, &rc))
-                return;
+            if (!GetClientRect(captureWindow, &rc))
+                continue;
             const int width = rc.right - rc.left;
             const int height = rc.bottom - rc.top;
-            if (width <= 0 || height <= 0)
-                return;
-
-            const std::size_t stride = static_cast<std::size_t>(width) * 4u;
-            const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
-            if (pixelBytes == 0 ||
-                pixelBytes + sizeof(pluginscaler::ipc::EditorBitmapHeader) >
-                    pluginscaler::ipc::kMaxControlPayload)
-                return;
+            if (width <= 8 || height <= 8)
+                continue;
 
             BITMAPINFO bmi{};
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -287,7 +282,6 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             bmi.bmiHeader.biCompression = BI_RGB;
 
             HDC screen = GetDC(nullptr);
-            if (!screen) return;
             HDC mem = CreateCompatibleDC(screen);
             void* bits = nullptr;
             HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS,
@@ -296,69 +290,101 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             if (!mem || !bitmap || !bits) {
                 if (bitmap) DeleteObject(bitmap);
                 if (mem) DeleteDC(mem);
-                return;
+                continue;
             }
 
-            std::memset(bits, 0, pixelBytes);
             HGDIOBJ old = SelectObject(mem, bitmap);
+            const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+            const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
 
-            RedrawWindow(target, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-            UpdateWindow(target);
-
-            bool apiOk = false;
-            if (mode == 0) {
-                apiOk = PrintWindow(target, mem, PW_CLIENTONLY | 0x00000002) != FALSE;
-            } else if (mode == 1) {
-                SendMessageW(target, WM_PRINT, reinterpret_cast<WPARAM>(mem),
-                             PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
-                apiOk = true;
-            } else {
-                HDC source = GetDC(target);
-                if (source) {
-                    apiOk = BitBlt(mem, 0, 0, width, height,
-                                   source, 0, 0, SRCCOPY) != FALSE;
-                    ReleaseDC(target, source);
+            auto clearBits = [&] { std::memset(bits, 0, pixelBytes); };
+            auto scorePixels = [&]() -> std::size_t {
+                const auto* p = static_cast<const std::uint8_t*>(bits);
+                if (pixelBytes < 4) return 0;
+                std::size_t score = 0;
+                const std::size_t step = (std::max<std::size_t>)(4, pixelBytes / 8192u);
+                std::uint8_t lastR = 0, lastG = 0, lastB = 0;
+                bool haveLast = false;
+                for (std::size_t i = 0; i + 2 < pixelBytes; i += step) {
+                    const std::uint8_t b = p[i + 0];
+                    const std::uint8_t g = p[i + 1];
+                    const std::uint8_t r = p[i + 2];
+                    if (r > 8 || g > 8 || b > 8)
+                        score += 2;
+                    if (haveLast &&
+                        (std::abs(static_cast<int>(r) - static_cast<int>(lastR)) > 4 ||
+                         std::abs(static_cast<int>(g) - static_cast<int>(lastG)) > 4 ||
+                         std::abs(static_cast<int>(b) - static_cast<int>(lastB)) > 4))
+                        ++score;
+                    lastR = r; lastG = g; lastB = b; haveLast = true;
                 }
+                return score;
+            };
+
+            std::size_t localBestScore = 0;
+            std::vector<std::uint8_t> localBest;
+
+            clearBits();
+            if (PrintWindow(captureWindow, mem, PW_CLIENTONLY | 0x00000002)) {
+                const auto score = scorePixels();
+                if (score > localBestScore) {
+                    localBestScore = score;
+                    localBest.assign(static_cast<const std::uint8_t*>(bits),
+                                     static_cast<const std::uint8_t*>(bits) + pixelBytes);
+                }
+            }
+
+            clearBits();
+            SendMessageW(captureWindow, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+                         PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+            {
+                const auto score = scorePixels();
+                if (score > localBestScore) {
+                    localBestScore = score;
+                    localBest.assign(static_cast<const std::uint8_t*>(bits),
+                                     static_cast<const std::uint8_t*>(bits) + pixelBytes);
+                }
+            }
+
+            clearBits();
+            HDC source = GetDC(captureWindow);
+            if (source) {
+                if (BitBlt(mem, 0, 0, width, height, source, 0, 0, SRCCOPY)) {
+                    const auto score = scorePixels();
+                    if (score > localBestScore) {
+                        localBestScore = score;
+                        localBest.assign(static_cast<const std::uint8_t*>(bits),
+                                         static_cast<const std::uint8_t*>(bits) + pixelBytes);
+                    }
+                }
+                ReleaseDC(captureWindow, source);
             }
 
             SelectObject(mem, old);
-
-            if (apiOk) {
-                const auto score = scorePixels(
-                    static_cast<const std::uint8_t*>(bits), pixelBytes);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestWidth = static_cast<std::uint32_t>(width);
-                    bestHeight = static_cast<std::uint32_t>(height);
-                    bestStride = static_cast<std::uint32_t>(stride);
-                    bestPixels.resize(pixelBytes);
-                    std::memcpy(bestPixels.data(), bits, pixelBytes);
-                }
-            }
-
             DeleteObject(bitmap);
             DeleteDC(mem);
-        };
 
-        for (HWND candidate : candidates) {
-            tryCapture(candidate, 0);
-            tryCapture(candidate, 1);
-            tryCapture(candidate, 2);
+            if (localBestScore > best.score && !localBest.empty()) {
+                best.score = localBestScore;
+                best.width = width;
+                best.height = height;
+                best.pixels = std::move(localBest);
+            }
         }
 
-        if (bestScore == 0 || bestPixels.empty())
+        if (best.pixels.empty() || best.score == 0)
             return 0;
 
+        const std::size_t stride = static_cast<std::size_t>(best.width) * 4u;
         pluginscaler::ipc::EditorBitmapHeader header{};
-        header.width = bestWidth;
-        header.height = bestHeight;
-        header.strideBytes = bestStride;
+        header.width = static_cast<std::uint32_t>(best.width);
+        header.height = static_cast<std::uint32_t>(best.height);
+        header.strideBytes = static_cast<std::uint32_t>(stride);
 
-        request->bytes->resize(sizeof(header) + bestPixels.size());
+        request->bytes->resize(sizeof(header) + best.pixels.size());
         std::memcpy(request->bytes->data(), &header, sizeof(header));
         std::memcpy(request->bytes->data() + sizeof(header),
-                    bestPixels.data(), bestPixels.size());
+                    best.pixels.data(), best.pixels.size());
         return 1;
     }
     case kEditorShutdownMessage:
