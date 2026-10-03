@@ -154,9 +154,11 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (GetClientRect(child, &rc)) {
             const int width = static_cast<int>((std::max)(1L, rc.right - rc.left));
             const int height = static_cast<int>((std::max)(1L, rc.bottom - rc.top));
-            SetWindowPos(hwnd, HWND_BOTTOM, -32000, -32000, width, height,
+            SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, width, height,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
             ShowWindow(child, SW_SHOWNA);
+            RedrawWindow(hwnd, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             UpdateWindow(child);
         }
 
@@ -185,8 +187,15 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
             return 0;
 
+        HWND captureWindow = ctx->surrogate && IsWindow(ctx->surrogate)
+            ? ctx->surrogate : ctx->editor;
+
+        RedrawWindow(captureWindow, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+        UpdateWindow(ctx->editor);
+
         RECT rc{};
-        if (!GetClientRect(ctx->editor, &rc))
+        if (!GetClientRect(captureWindow, &rc))
             return 0;
         const int width = rc.right - rc.left;
         const int height = rc.bottom - rc.top;
@@ -243,23 +252,23 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         bool captured = false;
 
         clearBits();
-        if (PrintWindow(ctx->editor, mem, PW_CLIENTONLY))
+        if (PrintWindow(captureWindow, mem, PW_CLIENTONLY | 0x00000002))
             captured = hasUsefulPixels();
 
         if (!captured) {
             clearBits();
-            SendMessageW(ctx->editor, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+            SendMessageW(captureWindow, WM_PRINT, reinterpret_cast<WPARAM>(mem),
                          PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
             captured = hasUsefulPixels();
         }
 
         if (!captured) {
             clearBits();
-            HDC source = GetDC(ctx->editor);
+            HDC source = GetDC(captureWindow);
             if (source) {
                 captured = BitBlt(mem, 0, 0, width, height,
                                   source, 0, 0, SRCCOPY) != FALSE;
-                ReleaseDC(ctx->editor, source);
+                ReleaseDC(captureWindow, source);
                 captured = captured && hasUsefulPixels();
             }
         }
@@ -347,8 +356,9 @@ int runSharedVst2Server(const std::filesystem::path& path,
         }
 
         HWND surrogate = CreateWindowExW(
-            WS_EX_TOOLWINDOW, kClassName, L"125A PluginScaler Editor Surrogate",
-            WS_POPUP, 0, 0, 32, 32,
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName,
+            L"125A PluginScaler Editor Surrogate",
+            WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 32, 32,
             nullptr, nullptr, GetModuleHandleW(nullptr), &guiContext);
         SetEvent(guiReady);
         if (!surrogate)
