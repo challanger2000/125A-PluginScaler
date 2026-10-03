@@ -372,6 +372,12 @@ bool VST2PluginModule::closeEditor() noexcept {
     return callDispatcherSafely(effect_, EffEditClose, 0, 0, nullptr, 0.0f, &result);
 }
 
+bool VST2PluginModule::editorIdle() noexcept {
+    if (!effect_ || !effect_->dispatcher) return false;
+    VstIntPtr result = 0;
+    return callDispatcherSafely(effect_, EffEditIdle, 0, 0, nullptr, 0.0f, &result);
+}
+
 std::int32_t VST2PluginModule::numParams() const noexcept {
     return effect_ ? effect_->numParams : 0;
 }

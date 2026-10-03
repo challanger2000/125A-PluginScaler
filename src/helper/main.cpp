@@ -108,6 +108,7 @@ inline constexpr UINT kEditorOpenMessage = WM_APP + 0x125;
 inline constexpr UINT kEditorCloseMessage = WM_APP + 0x126;
 inline constexpr UINT kEditorShutdownMessage = WM_APP + 0x127;
 inline constexpr UINT kEditorCaptureMessage = WM_APP + 0x128;
+inline constexpr UINT_PTR kEditorIdleTimer = 0x125A;
 
 struct EditorCaptureRequest {
     std::vector<std::uint8_t>* bytes{nullptr};
@@ -145,15 +146,39 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
         HWND child = nullptr;
         EnumChildWindows(hwnd, firstChildProc, reinterpret_cast<LPARAM>(&child));
+        if (!child || !IsWindow(child))
+            return 0;
+
+        RECT rc{};
+        if (GetClientRect(child, &rc)) {
+            const int width = std::max(1L, rc.right - rc.left);
+            const int height = std::max(1L, rc.bottom - rc.top);
+            SetWindowPos(hwnd, HWND_BOTTOM, -32000, -32000, width, height,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ShowWindow(child, SW_SHOWNA);
+            UpdateWindow(child);
+        }
+
         ctx->editor = child;
+        SetTimer(hwnd, kEditorIdleTimer, 30, nullptr);
         return reinterpret_cast<LRESULT>(child);
     }
     case kEditorCloseMessage: {
+        KillTimer(hwnd, kEditorIdleTimer);
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         const bool ok = ctx->module->closeEditor();
         ctx->editor = nullptr;
+        ShowWindow(hwnd, SW_HIDE);
         return ok ? 1 : 0;
     }
+    case WM_TIMER:
+        if (wp == kEditorIdleTimer && ctx->editor && IsWindow(ctx->editor)) {
+            std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+            (void)ctx->module->editorIdle();
+            UpdateWindow(ctx->editor);
+            return 0;
+        }
+        break;
     case kEditorCaptureMessage: {
         auto* request = reinterpret_cast<EditorCaptureRequest*>(lp);
         if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
@@ -188,13 +213,58 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         HGDIOBJ old = SelectObject(mem, bitmap);
-        const LRESULT printed = SendMessageW(
-            ctx->editor, WM_PRINT, reinterpret_cast<WPARAM>(mem),
-            PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
-        SelectObject(mem, old);
 
         const std::size_t stride = static_cast<std::size_t>(width) * 4u;
         const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
+
+        auto clearBits = [&] {
+            std::memset(bits, 0, pixelBytes);
+        };
+        auto hasUsefulPixels = [&] {
+            const auto* p = static_cast<const std::uint8_t*>(bits);
+            if (pixelBytes < 4) return false;
+            std::uint8_t minValue = 255;
+            std::uint8_t maxValue = 0;
+            std::size_t nonBlack = 0;
+            const std::size_t step = std::max<std::size_t>(4, pixelBytes / 4096u);
+            for (std::size_t i = 0; i + 2 < pixelBytes; i += step) {
+                const std::uint8_t b = p[i + 0];
+                const std::uint8_t g = p[i + 1];
+                const std::uint8_t r = p[i + 2];
+                minValue = std::min({minValue, b, g, r});
+                maxValue = std::max({maxValue, b, g, r});
+                if (r > 6 || g > 6 || b > 6)
+                    ++nonBlack;
+            }
+            return nonBlack > 8 && maxValue > static_cast<std::uint8_t>(minValue + 4);
+        };
+
+        bool captured = false;
+
+        clearBits();
+        if (PrintWindow(ctx->editor, mem, PW_CLIENTONLY))
+            captured = hasUsefulPixels();
+
+        if (!captured) {
+            clearBits();
+            SendMessageW(ctx->editor, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+                         PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+            captured = hasUsefulPixels();
+        }
+
+        if (!captured) {
+            clearBits();
+            HDC source = GetDC(ctx->editor);
+            if (source) {
+                captured = BitBlt(mem, 0, 0, width, height,
+                                  source, 0, 0, SRCCOPY) != FALSE;
+                ReleaseDC(ctx->editor, source);
+                captured = captured && hasUsefulPixels();
+            }
+        }
+
+        SelectObject(mem, old);
+
         pluginscaler::ipc::EditorBitmapHeader header{};
         header.width = static_cast<std::uint32_t>(width);
         header.height = static_cast<std::uint32_t>(height);
@@ -206,9 +276,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
         DeleteObject(bitmap);
         DeleteDC(mem);
-        return printed != 0 || pixelBytes > 0 ? 1 : 0;
+        return captured ? 1 : 0;
     }
     case kEditorShutdownMessage:
+        KillTimer(hwnd, kEditorIdleTimer);
         DestroyWindow(hwnd);
         return 1;
     case WM_DESTROY:

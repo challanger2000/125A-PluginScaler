@@ -69,6 +69,7 @@ public:
     bool editorRect(vst2abi::VstRect& rect) noexcept;
     bool openEditor(void* parentWindow) noexcept;
     bool closeEditor() noexcept;
+    bool editorIdle() noexcept;
     std::int32_t numParams() const noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
