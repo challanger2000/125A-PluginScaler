@@ -3,6 +3,8 @@
 #include <windows.h>
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <vector>
@@ -27,7 +29,7 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     }
 }
 
-bool processAndCheck(AEffect* effect, VstInt32 frames, float seed) {
+bool processAndCheck(AEffect* effect, VstInt32 frames, float seed, float expectedOffset = 0.0f) {
     std::vector<float> inL(static_cast<std::size_t>(frames));
     std::vector<float> inR(static_cast<std::size_t>(frames));
     std::vector<float> outL(static_cast<std::size_t>(frames), 0.0f);
@@ -43,8 +45,8 @@ bool processAndCheck(AEffect* effect, VstInt32 frames, float seed) {
     effect->processReplacing(effect, inputs, outputs, frames);
 
     for (VstInt32 i = 0; i < frames; ++i) {
-        const float expectL = inL[static_cast<std::size_t>(i)] * 2.0f;
-        const float expectR = inR[static_cast<std::size_t>(i)] * 2.0f;
+        const float expectL = inL[static_cast<std::size_t>(i)] * 2.0f + expectedOffset;
+        const float expectR = inR[static_cast<std::size_t>(i)] * 2.0f + expectedOffset;
         if (std::fabs(outL[static_cast<std::size_t>(i)] - expectL) > 0.00001f ||
             std::fabs(outR[static_cast<std::size_t>(i)] - expectR) > 0.00001f)
             return false;
@@ -55,6 +57,26 @@ bool processAndCheck(AEffect* effect, VstInt32 frames, float seed) {
               << " outL0=" << outL[0]
               << " outRlast=" << outR.back() << "\n";
     return true;
+}
+
+bool sendNoteOn(AEffect* effect, std::uint8_t note, std::uint8_t velocity) {
+    VstMidiEvent midi{};
+    midi.type = kVstMidiType;
+    midi.byteSize = sizeof(VstMidiEvent);
+    midi.deltaFrames = 7;
+    midi.midiData[0] = static_cast<char>(0x90);
+    midi.midiData[1] = static_cast<char>(note);
+    midi.midiData[2] = static_cast<char>(velocity);
+
+    struct OneEventList {
+        VstInt32 numEvents;
+        VstIntPtr reserved;
+        VstEvent* events[2];
+    } list{};
+    list.numEvents = 1;
+    list.events[0] = reinterpret_cast<VstEvent*>(&midi);
+
+    return effect->dispatcher(effect, EffProcessEvents, 0, 0, &list, 0.0f) != 0;
 }
 
 bool configure(AEffect* effect, float sampleRate, VstInt32 blockSize) {
@@ -104,10 +126,18 @@ int wmain(int argc, wchar_t** argv) {
     for (int n = 0; n < 8 && ok; ++n)
         ok = processAndCheck(effect, 64, static_cast<float>(n) * 0.01f);
 
-    // Change both sample rate and block size while active.
+    // Verify a MIDI Note On crosses x64 -> x86 and affects the mock plugin.
     if (ok)
-        ok = configure(effect, 44100.0f, 128) &&
+        ok = sendNoteOn(effect, 60, 100) &&
+             processAndCheck(effect, 64, 0.20f, 0.060f);
+
+    // Restart before the remaining audio-only lifecycle checks so MIDI state resets.
+    if (ok)
+        ok = effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f) != 0 &&
+             configure(effect, 44100.0f, 128) &&
+             effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0 &&
              processAndCheck(effect, 128, 0.25f);
+
 
     if (ok)
         ok = configure(effect, 96000.0f, 32) &&

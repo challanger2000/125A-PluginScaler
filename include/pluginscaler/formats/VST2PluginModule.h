@@ -56,7 +56,8 @@ public:
                            std::int32_t blockSize,
                            std::string& error);
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
-
+    bool processMidiEvents(const vst2abi::VstMidiEvent* events,
+                           std::int32_t eventCount) noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
 

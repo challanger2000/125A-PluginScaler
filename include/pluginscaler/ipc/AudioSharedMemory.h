@@ -6,7 +6,8 @@
 namespace pluginscaler::ipc {
 
 inline constexpr std::uint32_t kAudioSharedMagic = 0x41505341u; // "ASPA"
-inline constexpr std::uint32_t kAudioSharedVersion = 2;
+inline constexpr std::uint32_t kAudioSharedVersion = 3;
+inline constexpr std::uint32_t kMaxMidiEvents = 256;
 inline constexpr std::uint32_t kMaxAudioChannels = 8;
 inline constexpr std::uint32_t kMaxAudioFrames = 2048;
 
@@ -29,15 +30,26 @@ struct alignas(64) AudioSharedHeader {
     std::uint64_t sequence{0};
     std::atomic<std::uint32_t> state{static_cast<std::uint32_t>(AudioBlockState::Idle)};
     std::uint32_t errorCode{0};
-    std::uint8_t reserved[24]{};
+    std::uint32_t midiEventCount{0};
+    std::uint8_t reserved[20]{};
+};
+
+struct MidiSharedEvent {
+    std::int32_t deltaFrames{0};
+    std::int32_t flags{0};
+    std::uint8_t data[4]{};
+    std::uint8_t reserved[4]{};
 };
 
 struct AudioSharedBlock {
     AudioSharedHeader header{};
+    MidiSharedEvent midiEvents[kMaxMidiEvents]{};
     float inputs[kMaxAudioChannels][kMaxAudioFrames]{};
     float outputs[kMaxAudioChannels][kMaxAudioFrames]{};
 };
 
 static_assert(alignof(AudioSharedHeader) == 64);
+static_assert(sizeof(AudioSharedHeader) == 64);
+static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
 } // namespace pluginscaler::ipc

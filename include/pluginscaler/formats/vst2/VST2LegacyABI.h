@@ -12,6 +12,38 @@ using VstIntPtr = std::intptr_t;
 
 struct AEffect;
 
+#pragma pack(push, 8)
+struct VstEvent {
+    VstInt32 type;
+    VstInt32 byteSize;
+    VstInt32 deltaFrames;
+    VstInt32 flags;
+    char data[16];
+};
+
+struct VstMidiEvent {
+    VstInt32 type;
+    VstInt32 byteSize;
+    VstInt32 deltaFrames;
+    VstInt32 flags;
+    VstInt32 noteLength;
+    VstInt32 noteOffset;
+    char midiData[4];
+    char detune;
+    char noteOffVelocity;
+    char reserved1;
+    char reserved2;
+};
+
+struct VstEvents {
+    VstInt32 numEvents;
+    VstIntPtr reserved;
+    VstEvent* events[2];
+};
+#pragma pack(pop)
+
+inline constexpr VstInt32 kVstMidiType = 1;
+
 using AudioMasterCallback = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
 using DispatcherProc = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
 using ProcessProc = void (__cdecl *)(AEffect*, float**, float**, VstInt32);
@@ -60,6 +92,7 @@ enum DispatcherOpcode : VstInt32 {
     EffEditGetRect = 13,
     EffEditOpen = 14,
     EffEditClose = 15,
+    EffProcessEvents = 25,
     EffGetEffectName = 45,
     EffGetVendorString = 47,
     EffGetProductString = 48,

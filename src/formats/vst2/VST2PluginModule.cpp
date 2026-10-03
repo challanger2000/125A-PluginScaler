@@ -5,6 +5,7 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -245,6 +246,32 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
 bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {
     if (!effect_ || !mainsOn_ || frames <= 0) return false;
     return callProcessReplacingSafely(effect_, inputs, outputs, frames);
+}
+
+bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
+                                         std::int32_t eventCount) noexcept {
+    if (!effect_ || !mainsOn_ || !effect_->dispatcher || !events || eventCount <= 0)
+        return eventCount == 0;
+
+    std::vector<VstEvent*> pointers(static_cast<std::size_t>(eventCount));
+    for (std::int32_t i = 0; i < eventCount; ++i)
+        pointers[static_cast<std::size_t>(i)] =
+            reinterpret_cast<VstEvent*>(const_cast<VstMidiEvent*>(&events[i]));
+
+    const std::size_t bytes = sizeof(VstEvents) +
+        (eventCount > 2 ? static_cast<std::size_t>(eventCount - 2) * sizeof(VstEvent*) : 0);
+    std::vector<std::uint8_t> storage(bytes, 0);
+    auto* list = reinterpret_cast<VstEvents*>(storage.data());
+    list->numEvents = eventCount;
+    list->reserved = 0;
+    auto** dst = reinterpret_cast<VstEvent**>(
+        storage.data() + offsetof(VstEvents, events));
+    for (std::int32_t i = 0; i < eventCount; ++i)
+        dst[i] = pointers[static_cast<std::size_t>(i)];
+
+    VstIntPtr result = 0;
+    return callDispatcherSafely(effect_, EffProcessEvents, 0, 0, list, 0.0f, &result) &&
+           result != 0;
 }
 
 std::int32_t VST2PluginModule::numInputs() const noexcept {

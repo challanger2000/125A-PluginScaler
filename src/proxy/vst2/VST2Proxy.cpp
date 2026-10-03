@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <array>
+#include <cstddef>
 #include <string>
 
 using namespace pluginscaler::formats::vst2abi;
@@ -29,6 +31,8 @@ struct ProxyInstance {
     bool mainsOn{false};
     bool bridgeStarted{false};
     std::uint64_t sequence{0};
+    std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
+    std::uint32_t pendingMidiCount{0};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -173,6 +177,34 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32,
     case EffGetVendorVersion:
         return 100;
 
+    case EffProcessEvents: {
+        if (!ptr) return 0;
+        auto* events = static_cast<VstEvents*>(ptr);
+        if (events->numEvents < 0) return 0;
+
+        const auto count = std::min<std::uint32_t>(
+            static_cast<std::uint32_t>(events->numEvents),
+            pluginscaler::ipc::kMaxMidiEvents);
+        auto** eventPtrs = reinterpret_cast<VstEvent**>(
+            reinterpret_cast<std::uint8_t*>(events) + offsetof(VstEvents, events));
+
+        std::uint32_t written = 0;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            auto* ev = eventPtrs[i];
+            if (!ev || ev->type != kVstMidiType ||
+                ev->byteSize < static_cast<VstInt32>(sizeof(VstMidiEvent)))
+                continue;
+            auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
+            auto& dst = inst->pendingMidi[written++];
+            dst.deltaFrames = midi->deltaFrames;
+            dst.flags = midi->flags;
+            for (int b = 0; b < 4; ++b)
+                dst.data[b] = static_cast<std::uint8_t>(midi->midiData[b]);
+        }
+        inst->pendingMidiCount = written;
+        return 1;
+    }
+
     case EffCanDo:
         return 0;
 
@@ -215,6 +247,9 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<std::uint32_t>(std::llround(inst->sampleRate));
     block->header.sequence = ++inst->sequence;
     block->header.errorCode = 0;
+    block->header.midiEventCount = inst->pendingMidiCount;
+    for (std::uint32_t i = 0; i < inst->pendingMidiCount; ++i)
+        block->midiEvents[i] = inst->pendingMidi[i];
 
     for (std::uint32_t ch = 0; ch < inChannels; ++ch) {
         if (inputs && inputs[ch])
@@ -229,6 +264,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     block->header.state.store(
         static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::InputReady),
         std::memory_order_release);
+
+    inst->pendingMidiCount = 0;
 
     if (!inst->channel.signalInput() ||
         !inst->channel.waitForOutput(std::chrono::milliseconds(1000))) {

@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstddef>
+#include <cstdint>
 
 using namespace pluginscaler::formats::vst2abi;
 
@@ -11,6 +13,8 @@ struct MockState {
     float sampleRate{0.0f};
     VstInt32 blockSize{0};
     bool mains{false};
+    bool midiSeen{false};
+    std::uint8_t lastMidiNote{0};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr value, void* ptr, float opt) {
@@ -32,6 +36,25 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
     case EffMainsChanged:
         if (state) state->mains = value != 0;
         return 1;
+    case EffProcessEvents:
+        if (state && ptr) {
+            auto* events = static_cast<VstEvents*>(ptr);
+            auto** eventPtrs = reinterpret_cast<VstEvent**>(
+                reinterpret_cast<std::uint8_t*>(events) + offsetof(VstEvents, events));
+            for (VstInt32 i = 0; i < events->numEvents; ++i) {
+                auto* ev = eventPtrs[i];
+                if (!ev || ev->type != kVstMidiType) continue;
+                auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
+                const auto status = static_cast<std::uint8_t>(midi->midiData[0]) & 0xF0u;
+                const auto velocity = static_cast<std::uint8_t>(midi->midiData[2]);
+                if (status == 0x90u && velocity > 0) {
+                    state->midiSeen = true;
+                    state->lastMidiNote = static_cast<std::uint8_t>(midi->midiData[1]);
+                }
+            }
+            return 1;
+        }
+        return 0;
     case EffGetEffectName:
         if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "125A Mock VST2");
         return 1;
@@ -60,7 +83,9 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs, 
             const float in = (configured && inputs && effect->numInputs > 0)
                 ? inputs[inputCh][i]
                 : 0.0f;
-            outputs[ch][i] = in * 2.0f;
+            const float midiOffset =
+                (state && state->midiSeen) ? static_cast<float>(state->lastMidiNote) / 1000.0f : 0.0f;
+            outputs[ch][i] = in * 2.0f + midiOffset;
         }
     }
 }

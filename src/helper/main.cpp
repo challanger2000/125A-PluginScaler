@@ -103,7 +103,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
         if (block->header.frames == 0 || block->header.frames > ipc::kMaxAudioFrames ||
             block->header.sampleRateHz == 0 ||
             block->header.inputChannels > ipc::kMaxAudioChannels ||
-            block->header.outputChannels > ipc::kMaxAudioChannels) {
+            block->header.outputChannels > ipc::kMaxAudioChannels ||
+            block->header.midiEventCount > ipc::kMaxMidiEvents) {
             block->header.errorCode = 102;
             block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
                                       std::memory_order_release);
@@ -133,6 +134,29 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
             configuredBlockSize = requestedBlockSize;
             configuredSampleRate = requestedSampleRate;
+        }
+
+        if (block->header.midiEventCount > 0) {
+            std::vector<formats::vst2abi::VstMidiEvent> midi(
+                static_cast<std::size_t>(block->header.midiEventCount));
+            for (std::uint32_t i = 0; i < block->header.midiEventCount; ++i) {
+                auto& dst = midi[static_cast<std::size_t>(i)];
+                const auto& src = block->midiEvents[i];
+                dst.type = formats::vst2abi::kVstMidiType;
+                dst.byteSize = sizeof(formats::vst2abi::VstMidiEvent);
+                dst.deltaFrames = src.deltaFrames;
+                dst.flags = src.flags;
+                for (int b = 0; b < 4; ++b)
+                    dst.midiData[b] = static_cast<char>(src.data[b]);
+            }
+            if (!module.processMidiEvents(midi.data(),
+                                          static_cast<std::int32_t>(midi.size()))) {
+                block->header.errorCode = 104;
+                block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
+                                          std::memory_order_release);
+                channel.signalOutput();
+                continue;
+            }
         }
 
         const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
