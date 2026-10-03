@@ -70,6 +70,7 @@ int wmain(int argc, wchar_t** argv) {
     block->header.inputChannels = 2;
     block->header.outputChannels = 2;
     block->header.frames = 64;
+    block->header.sampleRateHz = 48000;
     block->header.sequence = 1;
 
     for (std::uint32_t i = 0; i < block->header.frames; ++i) {
