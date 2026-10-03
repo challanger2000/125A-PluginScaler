@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "pluginscaler/formats/VST2PluginModule.h"
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/Protocol.h"
@@ -151,8 +152,8 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
         RECT rc{};
         if (GetClientRect(child, &rc)) {
-            const int width = std::max(1L, rc.right - rc.left);
-            const int height = std::max(1L, rc.bottom - rc.top);
+            const int width = static_cast<int>((std::max)(1L, rc.right - rc.left));
+            const int height = static_cast<int>((std::max)(1L, rc.bottom - rc.top));
             SetWindowPos(hwnd, HWND_BOTTOM, -32000, -32000, width, height,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW);
             ShowWindow(child, SW_SHOWNA);
@@ -226,13 +227,13 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             std::uint8_t minValue = 255;
             std::uint8_t maxValue = 0;
             std::size_t nonBlack = 0;
-            const std::size_t step = std::max<std::size_t>(4, pixelBytes / 4096u);
+            const std::size_t step = (std::max<std::size_t>)(4, pixelBytes / 4096u);
             for (std::size_t i = 0; i + 2 < pixelBytes; i += step) {
                 const std::uint8_t b = p[i + 0];
                 const std::uint8_t g = p[i + 1];
                 const std::uint8_t r = p[i + 2];
-                minValue = std::min({minValue, b, g, r});
-                maxValue = std::max({maxValue, b, g, r});
+                minValue = (std::min)({minValue, b, g, r});
+                maxValue = (std::max)({maxValue, b, g, r});
                 if (r > 6 || g > 6 || b > 6)
                     ++nonBlack;
             }
