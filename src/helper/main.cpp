@@ -97,6 +97,69 @@ int runVst2AudioProbe(const std::filesystem::path& path) {
             result.closed) ? 0 : 3;
 }
 
+struct EditorGuiContext {
+    pluginscaler::formats::VST2PluginModule* module{nullptr};
+    std::mutex* moduleMutex{nullptr};
+    HWND surrogate{nullptr};
+    HWND editor{nullptr};
+};
+
+inline constexpr UINT kEditorOpenMessage = WM_APP + 0x125;
+inline constexpr UINT kEditorCloseMessage = WM_APP + 0x126;
+inline constexpr UINT kEditorShutdownMessage = WM_APP + 0x127;
+
+BOOL CALLBACK firstChildProc(HWND hwnd, LPARAM param) {
+    auto* result = reinterpret_cast<HWND*>(param);
+    *result = hwnd;
+    return FALSE;
+}
+
+LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* ctx = reinterpret_cast<EditorGuiContext*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        ctx = static_cast<EditorGuiContext*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(ctx));
+        if (ctx) ctx->surrogate = hwnd;
+    }
+
+    if (!ctx)
+        return DefWindowProcW(hwnd, msg, wp, lp);
+
+    switch (msg) {
+    case kEditorOpenMessage: {
+        std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        if (ctx->editor && IsWindow(ctx->editor))
+            return reinterpret_cast<LRESULT>(ctx->editor);
+
+        if (!ctx->module->openEditor(hwnd))
+            return 0;
+
+        HWND child = nullptr;
+        EnumChildWindows(hwnd, firstChildProc, reinterpret_cast<LPARAM>(&child));
+        ctx->editor = child;
+        return reinterpret_cast<LRESULT>(child);
+    }
+    case kEditorCloseMessage: {
+        std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        const bool ok = ctx->module->closeEditor();
+        ctx->editor = nullptr;
+        return ok ? 1 : 0;
+    }
+    case kEditorShutdownMessage:
+        DestroyWindow(hwnd);
+        return 1;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
 int runSharedVst2Server(const std::filesystem::path& path,
                         const std::wstring& mappingName,
                         const std::wstring& inputEvent,
@@ -130,6 +193,48 @@ int runSharedVst2Server(const std::filesystem::path& path,
             std::cerr << "error=" << error << '\n';
             return 12;
         }
+    }
+
+    EditorGuiContext guiContext{};
+    guiContext.module = &module;
+    guiContext.moduleMutex = &moduleMutex;
+
+    HANDLE guiReady = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!guiReady)
+        return 15;
+
+    std::thread guiThread([&] {
+        static const wchar_t* kClassName = L"125A_PluginScaler_EditorSurrogate";
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = editorSurrogateProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kClassName;
+        ATOM atom = RegisterClassW(&wc);
+        if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            SetEvent(guiReady);
+            return;
+        }
+
+        HWND surrogate = CreateWindowExW(
+            WS_EX_TOOLWINDOW, kClassName, L"125A PluginScaler Editor Surrogate",
+            WS_POPUP, 0, 0, 32, 32,
+            nullptr, nullptr, GetModuleHandleW(nullptr), &guiContext);
+        SetEvent(guiReady);
+        if (!surrogate)
+            return;
+
+        MSG msg{};
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    });
+
+    WaitForSingleObject(guiReady, 3000);
+    CloseHandle(guiReady);
+    if (!guiContext.surrogate) {
+        if (guiThread.joinable()) guiThread.join();
+        return 16;
     }
 
     auto readExact = [](HANDLE pipe, void* data, DWORD bytes) -> bool {
@@ -243,20 +348,29 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     break;
                 }
                 case ipc::ControlCommand::OpenEditor: {
-                    if (payload.size() != sizeof(ipc::EditorOpenPayload)) {
+                    if (!payload.empty()) {
                         resp.status = ipc::ControlStatus::InvalidRequest;
                         break;
                     }
-                    ipc::EditorOpenPayload request{};
-                    std::memcpy(&request, payload.data(), sizeof(request));
-                    auto parent = reinterpret_cast<void*>(
-                        static_cast<std::uintptr_t>(request.parentWindow));
-                    if (!module.openEditor(parent))
+                    const LRESULT editorResult = SendMessageW(
+                        guiContext.surrogate, kEditorOpenMessage, 0, 0);
+                    HWND editor = reinterpret_cast<HWND>(editorResult);
+                    if (!editor || !IsWindow(editor)) {
                         resp.status = ipc::ControlStatus::PluginError;
+                        break;
+                    }
+                    ipc::EditorOpenResult result{};
+                    result.surrogateWindow = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(guiContext.surrogate));
+                    result.editorWindow = static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(editor));
+                    reply.resize(sizeof(result));
+                    std::memcpy(reply.data(), &result, sizeof(result));
                     break;
                 }
                 case ipc::ControlCommand::CloseEditor:
-                    if (!module.closeEditor())
+                    if (!SendMessageW(guiContext.surrogate,
+                                      kEditorCloseMessage, 0, 0))
                         resp.status = ipc::ControlStatus::PluginError;
                     break;
                 case ipc::ControlCommand::Shutdown:
@@ -418,6 +532,11 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
     if (controlThread.joinable())
         controlThread.join();
+
+    if (guiContext.surrogate && IsWindow(guiContext.surrogate))
+        SendMessageW(guiContext.surrogate, kEditorShutdownMessage, 0, 0);
+    if (guiThread.joinable())
+        guiThread.join();
 
     {
         std::lock_guard<std::mutex> lock(moduleMutex);

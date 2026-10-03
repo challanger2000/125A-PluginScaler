@@ -50,6 +50,8 @@ struct ProxyInstance {
     HANDLE controlPipe{INVALID_HANDLE_VALUE};
     std::vector<std::uint8_t> stateChunk;
     VstRect editorRect{};
+    HWND editorWindow{nullptr};
+    HWND editorSurrogate{nullptr};
     bool editorOpen{false};
 
     double sampleRate{48000.0};
@@ -221,9 +223,14 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
+            if (inst->editorWindow && inst->editorSurrogate &&
+                IsWindow(inst->editorWindow) && IsWindow(inst->editorSurrogate))
+                SetParent(inst->editorWindow, inst->editorSurrogate);
             std::vector<std::uint8_t> ignored;
             (void)controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
                               0, nullptr, 0, ignored);
+            inst->editorWindow = nullptr;
+            inst->editorSurrogate = nullptr;
             inst->editorOpen = false;
         }
         if (inst->controlPipe != INVALID_HANDLE_VALUE) {
@@ -380,22 +387,54 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffEditOpen: {
         if (!ptr || !startBridge(inst)) return 0;
-        pluginscaler::ipc::EditorOpenPayload request{};
-        request.parentWindow = static_cast<std::uint64_t>(
-            reinterpret_cast<std::uintptr_t>(ptr));
-        std::vector<std::uint8_t> ignored;
-        const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                                    0, &request, sizeof(request), ignored);
-        inst->editorOpen = ok;
-        return ok ? 1 : 0;
+        std::vector<std::uint8_t> reply;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
+                         0, nullptr, 0, reply) ||
+            reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
+            return 0;
+
+        pluginscaler::ipc::EditorOpenResult result{};
+        std::memcpy(&result, reply.data(), sizeof(result));
+        HWND editor = reinterpret_cast<HWND>(
+            static_cast<std::uintptr_t>(result.editorWindow));
+        HWND surrogate = reinterpret_cast<HWND>(
+            static_cast<std::uintptr_t>(result.surrogateWindow));
+        HWND parent = static_cast<HWND>(ptr);
+        if (!editor || !surrogate || !IsWindow(editor) || !IsWindow(surrogate))
+            return 0;
+
+        LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+        style &= ~static_cast<LONG_PTR>(WS_POPUP);
+        style |= WS_CHILD;
+        SetWindowLongPtrW(editor, GWL_STYLE, style);
+
+        if (!SetParent(editor, parent))
+            return 0;
+
+        const int width = inst->editorRect.right - inst->editorRect.left;
+        const int height = inst->editorRect.bottom - inst->editorRect.top;
+        if (width > 0 && height > 0)
+            MoveWindow(editor, 0, 0, width, height, TRUE);
+
+        inst->editorWindow = editor;
+        inst->editorSurrogate = surrogate;
+        inst->editorOpen = true;
+        return 1;
     }
 
     case EffEditClose: {
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
+
+        if (inst->editorWindow && inst->editorSurrogate &&
+            IsWindow(inst->editorWindow) && IsWindow(inst->editorSurrogate))
+            SetParent(inst->editorWindow, inst->editorSurrogate);
+
         std::vector<std::uint8_t> ignored;
         const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
                                     0, nullptr, 0, ignored);
+        inst->editorWindow = nullptr;
+        inst->editorSurrogate = nullptr;
         inst->editorOpen = false;
         return ok ? 1 : 0;
     }

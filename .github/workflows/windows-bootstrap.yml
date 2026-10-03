@@ -139,6 +139,7 @@ jobs:
           }
 
       - name: Run x64 proxy with x86 zero-input synth
+        timeout-minutes: 3
         shell: pwsh
         run: |
           $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
