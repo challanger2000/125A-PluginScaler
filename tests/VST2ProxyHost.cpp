@@ -166,6 +166,34 @@ int wmain(int argc, wchar_t** argv) {
              processAndCheck(effect, 128, 0.25f, 0.25f);
 
 
+    // Verify plugin-native chunk state crosses the separate control pipe.
+    if (ok) {
+        void* chunkPtr = nullptr;
+        const auto chunkBytes = effect->dispatcher(
+            effect, EffGetChunk, 0, 0, &chunkPtr, 0.0f);
+        std::vector<std::uint8_t> saved;
+        if (chunkBytes > 0 && chunkPtr) {
+            const auto* first = static_cast<const std::uint8_t*>(chunkPtr);
+            saved.assign(first, first + static_cast<std::size_t>(chunkBytes));
+        } else {
+            ok = false;
+        }
+
+        if (ok) {
+            effect->setParameter(effect, 0, 0.75f);
+            ok = processAndCheck(effect, 128, 0.40f, 0.75f);
+        }
+
+        if (ok) {
+            ok = effect->dispatcher(effect, EffSetChunk, 0,
+                                    static_cast<VstIntPtr>(saved.size()),
+                                    saved.data(), 0.0f) != 0 &&
+                 std::fabs(effect->getParameter(effect, 0) - 0.25f) < 0.00001f &&
+                 processAndCheck(effect, 128, 0.45f, 0.25f);
+        }
+        std::cout << "state=" << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
     if (ok)
         ok = configure(effect, 96000.0f, 32) &&
              processAndCheck(effect, 32, 0.5f, 0.25f);

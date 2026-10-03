@@ -131,6 +131,9 @@ jobs:
           if ($joined -notmatch "parameter=PASS") {
             throw "Proxy parameter bridge marker missing"
           }
+          if ($joined -notmatch "state=PASS") {
+            throw "Proxy state/control bridge marker missing"
+          }
           if ($joined -notmatch "torture=PASS") {
             throw "Proxy lifecycle torture marker missing"
           }

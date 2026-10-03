@@ -1,6 +1,9 @@
 #include "pluginscaler/formats/VST2PluginModule.h"
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/Protocol.h"
+#include "pluginscaler/ipc/ControlProtocol.h"
+
+#include <windows.h>
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +14,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 namespace {
 
@@ -92,7 +98,8 @@ int runVst2AudioProbe(const std::filesystem::path& path) {
 int runSharedVst2Server(const std::filesystem::path& path,
                         const std::wstring& mappingName,
                         const std::wstring& inputEvent,
-                        const std::wstring& outputEvent) {
+                        const std::wstring& outputEvent,
+                        const std::wstring& controlPipeName) {
     using namespace pluginscaler;
 
     ipc::AudioSharedChannel channel;
@@ -105,14 +112,152 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (!block) return 11;
 
     formats::VST2PluginModule module;
-    std::int32_t configuredBlockSize = 0;
-    std::uint32_t configuredSampleRate = 0;
+    std::mutex moduleMutex;
+    std::vector<std::uint8_t> persistedChunk;
+    std::int32_t persistedChunkIndex = 0;
+    std::atomic<bool> controlStop{false};
+
+    std::int32_t configuredBlockSize = 512;
+    std::uint32_t configuredSampleRate = 48000;
     std::uint32_t appliedParameterGeneration = 0;
 
+    {
+        std::lock_guard<std::mutex> lock(moduleMutex);
+        std::string error;
+        if (!module.openForProcessing(path, 48000.0, 512, error)) {
+            std::cerr << "error=" << error << '\n';
+            return 12;
+        }
+    }
+
+    auto readExact = [](HANDLE pipe, void* data, DWORD bytes) -> bool {
+        auto* p = static_cast<std::uint8_t*>(data);
+        DWORD done = 0;
+        while (done < bytes) {
+            DWORD got = 0;
+            if (!ReadFile(pipe, p + done, bytes - done, &got, nullptr) || got == 0)
+                return false;
+            done += got;
+        }
+        return true;
+    };
+    auto writeExact = [](HANDLE pipe, const void* data, DWORD bytes) -> bool {
+        const auto* p = static_cast<const std::uint8_t*>(data);
+        DWORD done = 0;
+        while (done < bytes) {
+            DWORD sent = 0;
+            if (!WriteFile(pipe, p + done, bytes - done, &sent, nullptr) || sent == 0)
+                return false;
+            done += sent;
+        }
+        return true;
+    };
+
+    std::thread controlThread([&] {
+        HANDLE pipe = CreateNamedPipeW(
+            controlPipeName.c_str(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1, 64 * 1024, 64 * 1024, 0, nullptr);
+        if (pipe == INVALID_HANDLE_VALUE)
+            return;
+
+        const BOOL connected = ConnectNamedPipe(pipe, nullptr)
+            ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+        if (!connected) {
+            CloseHandle(pipe);
+            return;
+        }
+
+        while (!controlStop.load(std::memory_order_acquire)) {
+            ipc::ControlMessageHeader req{};
+            if (!readExact(pipe, &req, sizeof(req)))
+                break;
+
+            ipc::ControlMessageHeader resp{};
+            resp.command = req.command;
+            resp.arg0 = req.arg0;
+
+            if (req.magic != ipc::kControlMagic ||
+                req.version != ipc::kControlVersion ||
+                req.payloadBytes > ipc::kMaxControlPayload) {
+                resp.status = ipc::ControlStatus::InvalidRequest;
+                if (!writeExact(pipe, &resp, sizeof(resp))) break;
+                continue;
+            }
+
+            std::vector<std::uint8_t> payload(req.payloadBytes);
+            if (req.payloadBytes &&
+                !readExact(pipe, payload.data(), req.payloadBytes))
+                break;
+
+            std::vector<std::uint8_t> reply;
+            {
+                std::lock_guard<std::mutex> lock(moduleMutex);
+                switch (req.command) {
+                case ipc::ControlCommand::GetState: {
+                    if (!module.getChunk(req.arg0, reply)) {
+                        resp.status = ipc::ControlStatus::PluginError;
+                    } else {
+                        persistedChunk = reply;
+                        persistedChunkIndex = req.arg0;
+                    }
+                    break;
+                }
+                case ipc::ControlCommand::SetState:
+                    if (payload.empty() ||
+                        !module.setChunk(req.arg0, payload.data(), payload.size())) {
+                        resp.status = ipc::ControlStatus::PluginError;
+                    } else {
+                        persistedChunk = payload;
+                        persistedChunkIndex = req.arg0;
+                    }
+                    break;
+                case ipc::ControlCommand::GetParameters: {
+                    const auto count = std::max<std::int32_t>(0, module.numParams());
+                    reply.resize(static_cast<std::size_t>(count) * sizeof(float));
+                    auto* values = reinterpret_cast<float*>(reply.data());
+                    for (std::int32_t i = 0; i < count; ++i)
+                        values[i] = module.getParameter(i);
+                    break;
+                }
+                case ipc::ControlCommand::Shutdown:
+                    controlStop.store(true, std::memory_order_release);
+                    break;
+                default:
+                    resp.status = ipc::ControlStatus::InvalidRequest;
+                    break;
+                }
+            }
+
+            if (reply.size() > ipc::kMaxControlPayload) {
+                reply.clear();
+                resp.status = ipc::ControlStatus::PayloadTooLarge;
+            }
+            resp.responseBytes = static_cast<std::uint32_t>(reply.size());
+
+            if (!writeExact(pipe, &resp, sizeof(resp))) break;
+            if (!reply.empty() &&
+                !writeExact(pipe, reply.data(), resp.responseBytes))
+                break;
+
+            if (req.command == ipc::ControlCommand::Shutdown)
+                break;
+        }
+
+        FlushFileBuffers(pipe);
+        DisconnectNamedPipe(pipe);
+        CloseHandle(pipe);
+    });
+
+    int resultCode = 0;
     for (;;) {
         if (!channel.waitForInput(std::chrono::seconds(10))) {
+            if (controlStop.load(std::memory_order_acquire))
+                break;
             std::cerr << "error=input-timeout\n";
-            return 13;
+            resultCode = 13;
+            break;
         }
 
         const auto state = static_cast<ipc::AudioBlockState>(
@@ -145,83 +290,77 @@ int runSharedVst2Server(const std::filesystem::path& path,
         block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Processing),
                                   std::memory_order_release);
 
-        const auto requestedBlockSize = static_cast<std::int32_t>(block->header.frames);
-        const auto requestedSampleRate = block->header.sampleRateHz;
-        if (configuredBlockSize != requestedBlockSize ||
-            configuredSampleRate != requestedSampleRate) {
-            module.close();
+        bool ok = true;
+        {
+            std::lock_guard<std::mutex> lock(moduleMutex);
 
-            std::string error;
-            if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
-                                          requestedBlockSize, error)) {
-                block->header.errorCode = 100;
-                block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
-                                          std::memory_order_release);
-                channel.signalOutput();
-                std::cerr << "error=" << error << '\n';
-                return 12;
-            }
+            const auto requestedBlockSize = static_cast<std::int32_t>(block->header.frames);
+            const auto requestedSampleRate = block->header.sampleRateHz;
+            if (configuredBlockSize != requestedBlockSize ||
+                configuredSampleRate != requestedSampleRate) {
+                module.close();
 
-            configuredBlockSize = requestedBlockSize;
-            configuredSampleRate = requestedSampleRate;
-            appliedParameterGeneration = 0;
-        }
-
-        if (block->header.parameterCount > 0 &&
-            appliedParameterGeneration != block->header.parameterGeneration) {
-            bool parameterOk = true;
-            for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
-                if (!module.setParameter(static_cast<std::int32_t>(i),
-                                         block->parameterValues[i])) {
-                    parameterOk = false;
-                    break;
+                std::string error;
+                if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
+                                              requestedBlockSize, error)) {
+                    std::cerr << "error=" << error << '\n';
+                    ok = false;
+                } else {
+                    configuredBlockSize = requestedBlockSize;
+                    configuredSampleRate = requestedSampleRate;
+                    appliedParameterGeneration = 0;
+                    if (!persistedChunk.empty())
+                        ok = module.setChunk(persistedChunkIndex,
+                                             persistedChunk.data(),
+                                             persistedChunk.size());
                 }
             }
-            if (!parameterOk) {
-                block->header.errorCode = 105;
-                block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
-                                          std::memory_order_release);
-                channel.signalOutput();
-                continue;
+
+            if (ok && block->header.parameterCount > 0 &&
+                appliedParameterGeneration != block->header.parameterGeneration) {
+                for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
+                    if (!module.setParameter(static_cast<std::int32_t>(i),
+                                             block->parameterValues[i])) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok)
+                    appliedParameterGeneration = block->header.parameterGeneration;
             }
-            appliedParameterGeneration = block->header.parameterGeneration;
+
+            if (ok && block->header.midiEventCount > 0) {
+                std::vector<formats::vst2abi::VstMidiEvent> midi(
+                    static_cast<std::size_t>(block->header.midiEventCount));
+                for (std::uint32_t i = 0; i < block->header.midiEventCount; ++i) {
+                    auto& dst = midi[static_cast<std::size_t>(i)];
+                    const auto& src = block->midiEvents[i];
+                    dst.type = formats::vst2abi::kVstMidiType;
+                    dst.byteSize = sizeof(formats::vst2abi::VstMidiEvent);
+                    dst.deltaFrames = src.deltaFrames;
+                    dst.flags = src.flags;
+                    for (int b = 0; b < 4; ++b)
+                        dst.midiData[b] = static_cast<char>(src.data[b]);
+                }
+                ok = module.processMidiEvents(midi.data(),
+                                              static_cast<std::int32_t>(midi.size()));
+            }
+
+            if (ok) {
+                const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
+                const auto outCount = std::max<std::uint32_t>(1, block->header.outputChannels);
+                std::vector<float*> inputs(inCount);
+                std::vector<float*> outputs(outCount);
+                for (std::uint32_t ch = 0; ch < inCount; ++ch)
+                    inputs[ch] = block->inputs[ch];
+                for (std::uint32_t ch = 0; ch < outCount; ++ch)
+                    outputs[ch] = block->outputs[ch];
+
+                ok = module.processReplacing(
+                    inputs.data(), outputs.data(),
+                    static_cast<std::int32_t>(block->header.frames));
+            }
         }
-
-        if (block->header.midiEventCount > 0) {
-            std::vector<formats::vst2abi::VstMidiEvent> midi(
-                static_cast<std::size_t>(block->header.midiEventCount));
-            for (std::uint32_t i = 0; i < block->header.midiEventCount; ++i) {
-                auto& dst = midi[static_cast<std::size_t>(i)];
-                const auto& src = block->midiEvents[i];
-                dst.type = formats::vst2abi::kVstMidiType;
-                dst.byteSize = sizeof(formats::vst2abi::VstMidiEvent);
-                dst.deltaFrames = src.deltaFrames;
-                dst.flags = src.flags;
-                for (int b = 0; b < 4; ++b)
-                    dst.midiData[b] = static_cast<char>(src.data[b]);
-            }
-            if (!module.processMidiEvents(midi.data(),
-                                          static_cast<std::int32_t>(midi.size()))) {
-                block->header.errorCode = 104;
-                block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
-                                          std::memory_order_release);
-                channel.signalOutput();
-                continue;
-            }
-        }
-
-        const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
-        const auto outCount = std::max<std::uint32_t>(1, block->header.outputChannels);
-
-        std::vector<float*> inputs(inCount);
-        std::vector<float*> outputs(outCount);
-        for (std::uint32_t ch = 0; ch < inCount; ++ch)
-            inputs[ch] = block->inputs[ch];
-        for (std::uint32_t ch = 0; ch < outCount; ++ch)
-            outputs[ch] = block->outputs[ch];
-
-        const bool ok = module.processReplacing(
-            inputs.data(), outputs.data(), static_cast<std::int32_t>(block->header.frames));
 
         block->header.errorCode = ok ? 0u : 103u;
         block->header.state.store(static_cast<std::uint32_t>(
@@ -231,8 +370,22 @@ int runSharedVst2Server(const std::filesystem::path& path,
         channel.signalOutput();
     }
 
-    module.close();
-    return 0;
+    controlStop.store(true, std::memory_order_release);
+
+    // Wake a blocked control pipe server during normal audio shutdown.
+    HANDLE wake = CreateFileW(controlPipeName.c_str(), GENERIC_READ | GENERIC_WRITE,
+                              0, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (wake != INVALID_HANDLE_VALUE)
+        CloseHandle(wake);
+
+    if (controlThread.joinable())
+        controlThread.join();
+
+    {
+        std::lock_guard<std::mutex> lock(moduleMutex);
+        module.close();
+    }
+    return resultCode;
 }
 
 } // namespace
@@ -247,8 +400,8 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 4 && std::wstring_view(argv[1]) == L"--write-vst2-manifest")
         return writeVst2Manifest(argv[2], argv[3]);
 
-    if (argc == 6 && std::wstring_view(argv[1]) == L"--serve-vst2-shm")
-        return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5]);
+    if (argc == 7 && std::wstring_view(argv[1]) == L"--serve-vst2-shm")
+        return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5], argv[6]);
 
     std::cout << "125A PluginScaler Helper\n"
               << "protocol=" << pluginscaler::ipc::kProtocolMajor << "."
@@ -257,6 +410,6 @@ int wmain(int argc, wchar_t** argv) {
               << "  PluginScalerHelper --probe-vst2 <plugin.dll>\n"
               << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n"
               << "  PluginScalerHelper --write-vst2-manifest <plugin.dll> <manifest.txt>\n"
-              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event>\n";
+              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event> <control-pipe>\n";
     return 0;
 }

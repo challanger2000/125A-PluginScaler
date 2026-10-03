@@ -319,6 +319,39 @@ float VST2PluginModule::getParameter(std::int32_t index) const noexcept {
     return callGetParameterSafely(effect_, index);
 }
 
+bool VST2PluginModule::getChunk(std::int32_t index,
+                                std::vector<std::uint8_t>& data) noexcept {
+    data.clear();
+    if (!effect_ || !effect_->dispatcher) return false;
+
+    void* chunk = nullptr;
+    VstIntPtr bytes = 0;
+    if (!callDispatcherSafely(effect_, EffGetChunk, index, 0, &chunk, 0.0f, &bytes) ||
+        bytes <= 0 || !chunk)
+        return false;
+
+    const auto size = static_cast<std::size_t>(bytes);
+    data.resize(size);
+    std::memcpy(data.data(), chunk, size);
+    return true;
+}
+
+bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
+                                std::size_t bytes) noexcept {
+    if (!effect_ || !effect_->dispatcher || !data || bytes == 0 ||
+        bytes > static_cast<std::size_t>(INTPTR_MAX))
+        return false;
+    VstIntPtr result = 0;
+    return callDispatcherSafely(effect_, EffSetChunk, index,
+                                static_cast<VstIntPtr>(bytes),
+                                const_cast<void*>(data), 0.0f, &result) &&
+           result != 0;
+}
+
+std::int32_t VST2PluginModule::numParams() const noexcept {
+    return effect_ ? effect_->numParams : 0;
+}
+
 std::int32_t VST2PluginModule::numInputs() const noexcept {
     return effect_ ? effect_->numInputs : 0;
 }

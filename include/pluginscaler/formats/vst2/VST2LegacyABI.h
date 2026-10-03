@@ -92,6 +92,8 @@ enum DispatcherOpcode : VstInt32 {
     EffEditGetRect = 13,
     EffEditOpen = 14,
     EffEditClose = 15,
+    EffGetChunk = 23,
+    EffSetChunk = 24,
     EffProcessEvents = 25,
     EffGetEffectName = 45,
     EffGetVendorString = 47,

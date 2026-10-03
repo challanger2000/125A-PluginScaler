@@ -37,6 +37,18 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
     case EffMainsChanged:
         if (state) state->mains = value != 0;
         return 1;
+    case EffGetChunk:
+        if (state && ptr) {
+            *static_cast<void**>(ptr) = state->parameters;
+            return static_cast<VstIntPtr>(sizeof(state->parameters));
+        }
+        return 0;
+    case EffSetChunk:
+        if (state && ptr && value == static_cast<VstIntPtr>(sizeof(state->parameters))) {
+            std::memcpy(state->parameters, ptr, sizeof(state->parameters));
+            return 1;
+        }
+        return 0;
     case EffProcessEvents:
         if (state && ptr) {
             auto* events = static_cast<VstEvents*>(ptr);
@@ -120,7 +132,7 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numParams = 16;
     effect->numInputs = 2;
     effect->numOutputs = 2;
-    effect->flags = (1 << 4) | (1 << 8);
+    effect->flags = (1 << 4) | (1 << 5) | (1 << 8);
     effect->object = new MockState{};
     effect->uniqueId = 0x31323541;
     effect->version = 1000;

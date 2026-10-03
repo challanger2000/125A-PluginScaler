@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <cstddef>
 
 namespace pluginscaler::formats {
 
@@ -63,6 +64,9 @@ public:
                            std::int32_t eventCount) noexcept;
     bool setParameter(std::int32_t index, float value) noexcept;
     float getParameter(std::int32_t index) const noexcept;
+    bool getChunk(std::int32_t index, std::vector<std::uint8_t>& data) noexcept;
+    bool setChunk(std::int32_t index, const void* data, std::size_t bytes) noexcept;
+    std::int32_t numParams() const noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
 

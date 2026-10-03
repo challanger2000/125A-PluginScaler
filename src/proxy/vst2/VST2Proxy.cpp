@@ -1,5 +1,6 @@
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 #include "pluginscaler/ipc/AudioSharedChannel.h"
+#include "pluginscaler/ipc/ControlProtocol.h"
 
 #include <windows.h>
 
@@ -17,6 +18,7 @@
 #include <array>
 #include <cstddef>
 #include <string>
+#include <thread>
 
 using namespace pluginscaler::formats::vst2abi;
 
@@ -44,6 +46,8 @@ struct ProxyInstance {
 
     pluginscaler::ipc::AudioSharedChannel channel;
     PROCESS_INFORMATION helperProcess{};
+    HANDLE controlPipe{INVALID_HANDLE_VALUE};
+    std::vector<std::uint8_t> stateChunk;
 
     double sampleRate{48000.0};
     VstInt32 blockSize{512};
@@ -133,10 +137,94 @@ void zeroOutputs(AEffect* effect, float** outputs, VstInt32 frames) noexcept {
     }
 }
 
+bool readExact(HANDLE pipe, void* data, DWORD bytes) noexcept {
+    auto* p = static_cast<std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, p + done, bytes - done, &got, nullptr) || got == 0)
+            return false;
+        done += got;
+    }
+    return true;
+}
+
+bool writeExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD sent = 0;
+        if (!WriteFile(pipe, p + done, bytes - done, &sent, nullptr) || sent == 0)
+            return false;
+        done += sent;
+    }
+    return true;
+}
+
+bool controlCall(ProxyInstance* inst,
+                 pluginscaler::ipc::ControlCommand command,
+                 std::int32_t arg0,
+                 const void* payload,
+                 std::uint32_t payloadBytes,
+                 std::vector<std::uint8_t>& reply) {
+    reply.clear();
+    if (!inst || inst->controlPipe == INVALID_HANDLE_VALUE ||
+        payloadBytes > pluginscaler::ipc::kMaxControlPayload)
+        return false;
+
+    pluginscaler::ipc::ControlMessageHeader req{};
+    req.command = command;
+    req.arg0 = arg0;
+    req.payloadBytes = payloadBytes;
+
+    if (!writeExact(inst->controlPipe, &req, sizeof(req)) ||
+        (payloadBytes && !writeExact(inst->controlPipe, payload, payloadBytes)))
+        return false;
+
+    pluginscaler::ipc::ControlMessageHeader resp{};
+    if (!readExact(inst->controlPipe, &resp, sizeof(resp)) ||
+        resp.magic != pluginscaler::ipc::kControlMagic ||
+        resp.version != pluginscaler::ipc::kControlVersion ||
+        resp.command != command ||
+        resp.status != pluginscaler::ipc::ControlStatus::Ok ||
+        resp.responseBytes > pluginscaler::ipc::kMaxControlPayload)
+        return false;
+
+    reply.resize(resp.responseBytes);
+    return resp.responseBytes == 0 ||
+           readExact(inst->controlPipe, reply.data(), resp.responseBytes);
+}
+
+void refreshParametersFromHelper(ProxyInstance* inst) {
+    if (!inst) return;
+    std::vector<std::uint8_t> reply;
+    if (!controlCall(inst, pluginscaler::ipc::ControlCommand::GetParameters,
+                     0, nullptr, 0, reply) ||
+        reply.size() % sizeof(float) != 0)
+        return;
+
+    const auto count = reply.size() / sizeof(float);
+    const auto copyCount = std::min(count, inst->parameterValues.size());
+    const auto* values = reinterpret_cast<const float*>(reply.data());
+    for (std::size_t i = 0; i < copyCount; ++i)
+        inst->parameterValues[i] = values[i];
+    ++inst->parameterGeneration;
+    if (inst->parameterGeneration == 0)
+        inst->parameterGeneration = 1;
+}
+
 void stopBridge(ProxyInstance* inst) noexcept {
     if (!inst) return;
 
     if (inst->bridgeStarted) {
+        if (inst->controlPipe != INVALID_HANDLE_VALUE) {
+            std::vector<std::uint8_t> ignored;
+            (void)controlCall(inst, pluginscaler::ipc::ControlCommand::Shutdown,
+                              0, nullptr, 0, ignored);
+            CloseHandle(inst->controlPipe);
+            inst->controlPipe = INVALID_HANDLE_VALUE;
+        }
+
         if (auto* block = inst->channel.block()) {
             block->header.state.store(
                 static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::Shutdown),
@@ -175,6 +263,7 @@ bool startBridge(ProxyInstance* inst) {
     const std::wstring mapName = L"Local\\125A_PluginScaler_Proxy_Map_" + suffix;
     const std::wstring inEvent = L"Local\\125A_PluginScaler_Proxy_In_" + suffix;
     const std::wstring outEvent = L"Local\\125A_PluginScaler_Proxy_Out_" + suffix;
+    const std::wstring controlPipeName = L"\\\\.\\pipe\\125A_PluginScaler_Control_" + suffix;
 
     if (!inst->channel.create(mapName, inEvent, outEvent))
         return false;
@@ -184,7 +273,8 @@ bool startBridge(ProxyInstance* inst) {
         quote(target) + L" " +
         quote(mapName) + L" " +
         quote(inEvent) + L" " +
-        quote(outEvent);
+        quote(outEvent) + L" " +
+        quote(controlPipeName);
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -196,12 +286,44 @@ bool startBridge(ProxyInstance* inst) {
         return false;
     }
 
+    HANDLE control = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 100 && control == INVALID_HANDLE_VALUE; ++attempt) {
+        control = CreateFileW(controlPipeName.c_str(),
+                              GENERIC_READ | GENERIC_WRITE,
+                              0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (control != INVALID_HANDLE_VALUE)
+            break;
+        if (GetLastError() != ERROR_PIPE_BUSY &&
+            GetLastError() != ERROR_FILE_NOT_FOUND)
+            break;
+        WaitNamedPipeW(controlPipeName.c_str(), 20);
+        Sleep(10);
+    }
+
+    if (control == INVALID_HANDLE_VALUE) {
+        TerminateProcess(pi.hProcess, 2);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        inst->channel.close();
+        return false;
+    }
+
+    inst->controlPipe = control;
     inst->helperProcess = pi;
     inst->bridgeStarted = true;
+
+    if (!inst->stateChunk.empty()) {
+        std::vector<std::uint8_t> ignored;
+        if (controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
+                        0, inst->stateChunk.data(),
+                        static_cast<std::uint32_t>(inst->stateChunk.size()), ignored))
+            refreshParametersFromHelper(inst);
+    }
+
     return true;
 }
 
-VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32,
+VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                              VstIntPtr value, void* ptr, float opt) {
     auto* inst = self(effect);
     if (!inst) return 0;
@@ -229,6 +351,33 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32,
             return startBridge(inst) ? 1 : 0;
         stopBridge(inst);
         return 1;
+
+    case EffGetChunk: {
+        if (!ptr || !startBridge(inst)) return 0;
+        std::vector<std::uint8_t> reply;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::GetState,
+                         index, nullptr, 0, reply) ||
+            reply.empty())
+            return 0;
+        inst->stateChunk = std::move(reply);
+        *static_cast<void**>(ptr) = inst->stateChunk.data();
+        return static_cast<VstIntPtr>(inst->stateChunk.size());
+    }
+
+    case EffSetChunk: {
+        if (!ptr || value <= 0 || !startBridge(inst) ||
+            static_cast<std::uint64_t>(value) > pluginscaler::ipc::kMaxControlPayload)
+            return 0;
+        std::vector<std::uint8_t> ignored;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
+                         index, ptr, static_cast<std::uint32_t>(value), ignored))
+            return 0;
+        inst->stateChunk.assign(static_cast<const std::uint8_t*>(ptr),
+                                static_cast<const std::uint8_t*>(ptr) +
+                                    static_cast<std::size_t>(value));
+        refreshParametersFromHelper(inst);
+        return 1;
+    }
 
     case EffGetEffectName:
         if (ptr) strcpy_s(static_cast<char*>(ptr), 256, inst->manifest.effectName.c_str());
