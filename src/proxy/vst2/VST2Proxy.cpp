@@ -252,6 +252,40 @@ bool captureEditorBitmap(ProxyInstance* inst) {
     return true;
 }
 
+bool forwardScaledMouse(ProxyInstance* inst, UINT message,
+                        WPARAM wp, LPARAM lp) {
+    if (!inst || !inst->editorOpen ||
+        inst->editorBitmapWidth == 0 || inst->editorBitmapHeight == 0)
+        return false;
+
+    RECT rc{};
+    if (!inst->editorSurface || !GetClientRect(inst->editorSurface, &rc))
+        return false;
+    const int surfaceWidth = rc.right - rc.left;
+    const int surfaceHeight = rc.bottom - rc.top;
+    if (surfaceWidth <= 0 || surfaceHeight <= 0)
+        return false;
+
+    const int scaledX = GET_X_LPARAM(lp);
+    const int scaledY = GET_Y_LPARAM(lp);
+    const int nativeX = std::clamp(
+        scaledX * static_cast<int>(inst->editorBitmapWidth) / surfaceWidth,
+        0, static_cast<int>(inst->editorBitmapWidth) - 1);
+    const int nativeY = std::clamp(
+        scaledY * static_cast<int>(inst->editorBitmapHeight) / surfaceHeight,
+        0, static_cast<int>(inst->editorBitmapHeight) - 1);
+
+    pluginscaler::ipc::EditorMousePayload mouse{};
+    mouse.message = message;
+    mouse.x = nativeX;
+    mouse.y = nativeY;
+    mouse.keyFlags = static_cast<std::uint32_t>(wp);
+
+    std::vector<std::uint8_t> ignored;
+    return controlCall(inst, pluginscaler::ipc::ControlCommand::SendEditorMouse,
+                       0, &mouse, sizeof(mouse), ignored);
+}
+
 LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* inst = reinterpret_cast<ProxyInstance*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -268,6 +302,22 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP: {
+        if (msg == WM_LBUTTONDOWN)
+            SetCapture(hwnd);
+        const bool sent = forwardScaledMouse(inst, msg, wp, lp);
+        if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
+            ReleaseCapture();
+        if (sent) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateWindow(hwnd);
+        }
+        return sent ? 0 : DefWindowProcW(hwnd, msg, wp, lp);
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC dc = BeginPaint(hwnd, &ps);

@@ -393,6 +393,30 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                   kEditorCaptureMessage, 0,
                                   reinterpret_cast<LPARAM>(&capture)))
                     resp.status = ipc::ControlStatus::PluginError;
+            } else if (req.command == ipc::ControlCommand::SendEditorMouse) {
+                if (payload.size() != sizeof(ipc::EditorMousePayload) ||
+                    !guiContext.editor || !IsWindow(guiContext.editor)) {
+                    resp.status = ipc::ControlStatus::InvalidRequest;
+                } else {
+                    ipc::EditorMousePayload mouse{};
+                    std::memcpy(&mouse, payload.data(), sizeof(mouse));
+                    const UINT message = static_cast<UINT>(mouse.message);
+                    const bool allowed =
+                        message == WM_MOUSEMOVE ||
+                        message == WM_LBUTTONDOWN ||
+                        message == WM_LBUTTONUP ||
+                        message == WM_RBUTTONDOWN ||
+                        message == WM_RBUTTONUP;
+                    if (!allowed) {
+                        resp.status = ipc::ControlStatus::InvalidRequest;
+                    } else {
+                        const LPARAM coords = MAKELPARAM(
+                            static_cast<short>(mouse.x),
+                            static_cast<short>(mouse.y));
+                        SendMessageW(guiContext.editor, message,
+                                     static_cast<WPARAM>(mouse.keyFlags), coords);
+                    }
+                }
             } else if (req.command == ipc::ControlCommand::Shutdown) {
                 controlStop.store(true, std::memory_order_release);
             } else {

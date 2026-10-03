@@ -169,6 +169,9 @@ jobs:
           if ($joined -notmatch "editor-open=PASS") {
             throw "Cross-process editor open marker missing"
           }
+          if ($joined -notmatch "editor-mouse-map=PASS") {
+            throw "Scaled editor mouse mapping marker missing"
+          }
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
           }

@@ -215,6 +215,25 @@ int wmain(int argc, wchar_t** argv) {
 
         std::cout << "editor-scale=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
+
+        if (ok && surface) {
+            SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(100, 80));
+            SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(100, 80));
+            RedrawWindow(surface, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+            HDC dc = GetDC(surface);
+            const COLORREF mappedPixel = GetPixel(dc, 100, 80);
+            ReleaseDC(surface, dc);
+
+            const bool mappingOk =
+                mappedPixel != CLR_INVALID &&
+                GetRValue(mappedPixel) < 100 &&
+                GetGValue(mappedPixel) > 170 &&
+                GetBValue(mappedPixel) < 120;
+            std::cout << "editor-mouse-map=" << (mappingOk ? "PASS" : "FAIL") << "\n";
+            ok = ok && mappingOk;
+        }
     }
 
     if (ok) {

@@ -10,10 +10,21 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+bool gMappedClickReceived = false;
+
 LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_LBUTTONDOWN: {
+        const int x = GET_X_LPARAM(lp);
+        const int y = GET_Y_LPARAM(lp);
+        if (x == 50 && y == 40) {
+            gMappedClickReceived = true;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 1;
+    }
     case WM_PAINT:
     case WM_PRINT:
     case WM_PRINTCLIENT: {
@@ -31,7 +42,8 @@ LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             FillRect(dc, &rc, background);
             DeleteObject(background);
             RECT marker{20, 20, 80, 60};
-            HBRUSH accent = CreateSolidBrush(RGB(240, 64, 32));
+            HBRUSH accent = CreateSolidBrush(
+                gMappedClickReceived ? RGB(32, 220, 64) : RGB(240, 64, 32));
             FillRect(dc, &marker, accent);
             DeleteObject(accent);
         }

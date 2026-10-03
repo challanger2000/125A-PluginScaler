@@ -16,7 +16,8 @@ enum class ControlCommand : std::uint16_t {
     GetEditorRect = 5,
     OpenEditor = 6,
     CloseEditor = 7,
-    CaptureEditor = 8
+    CaptureEditor = 8,
+    SendEditorMouse = 9
 };
 
 #pragma pack(push, 1)
@@ -38,11 +39,19 @@ struct EditorBitmapHeader {
     std::uint32_t strideBytes{0};
     std::uint32_t format{1}; // 1 = BGRA8, top-down
 };
+
+struct EditorMousePayload {
+    std::uint32_t message{0};
+    std::int32_t x{0};
+    std::int32_t y{0};
+    std::uint32_t keyFlags{0};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(EditorRectPayload) == 16);
 static_assert(sizeof(EditorOpenResult) == 16);
 static_assert(sizeof(EditorBitmapHeader) == 16);
+static_assert(sizeof(EditorMousePayload) == 16);
 
 enum class ControlStatus : std::uint32_t {
     Ok = 0,
