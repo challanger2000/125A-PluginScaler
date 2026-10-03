@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <string_view>
 #include <vector>
 
 using namespace pluginscaler::formats::vst2abi;
@@ -125,12 +126,20 @@ bool processNoteOffBlock(AEffect* effect, VstInt32 frames,
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 5) return 1;
+    if (argc != 5 && argc != 6) return 1;
 
-    SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
-    SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
-    SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
-    SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"200");
+    const bool sidecarMode = argc == 6 && std::wstring_view(argv[5]) == L"--sidecar";
+    if (!sidecarMode) {
+        SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"200");
+    } else {
+        SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", nullptr);
+    }
 
     HMODULE proxy = LoadLibraryW(argv[1]);
     if (!proxy) return 2;

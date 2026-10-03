@@ -41,10 +41,21 @@ struct ProxyManifest {
     bool valid{false};
 };
 
+struct ProxySettings {
+    std::wstring helper;
+    std::wstring target;
+    std::wstring manifest;
+    int scalePercent{200};
+    bool sidecarLoaded{false};
+};
+
+HMODULE g_moduleHandle{nullptr};
+
 struct ProxyInstance {
     AEffect effect{};
     AudioMasterCallback host{nullptr};
     ProxyManifest manifest{};
+    ProxySettings settings{};
 
     pluginscaler::ipc::AudioSharedChannel channel;
     PROCESS_INFORMATION helperProcess{};
@@ -91,16 +102,105 @@ std::wstring getenvWide(const wchar_t* name) {
     return value;
 }
 
+std::filesystem::path proxyModulePath() {
+    if (!g_moduleHandle) return {};
+    std::wstring buffer(32768, L'\0');
+    const DWORD written = GetModuleFileNameW(
+        g_moduleHandle, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (written == 0 || written >= buffer.size())
+        return {};
+    buffer.resize(written);
+    return std::filesystem::path(buffer);
+}
+
+std::wstring trimWide(std::wstring value) {
+    const auto first = value.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) return {};
+    const auto last = value.find_last_not_of(L" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::filesystem::path resolveSidecarPath(const std::filesystem::path& baseDir,
+                                         const std::wstring& value) {
+    if (value.empty()) return {};
+    std::filesystem::path p(value);
+    if (p.is_relative())
+        p = baseDir / p;
+    return p.lexically_normal();
+}
+
+ProxySettings loadSettings() {
+    ProxySettings settings;
+
+    const auto modulePath = proxyModulePath();
+    const auto baseDir = modulePath.empty()
+        ? std::filesystem::path{}
+        : modulePath.parent_path();
+
+    if (!modulePath.empty()) {
+        auto configPath = modulePath;
+        configPath.replace_extension(L".pluginscaler.ini");
+
+        std::wifstream in(configPath);
+        if (in) {
+            std::wstring line;
+            while (std::getline(in, line)) {
+                line = trimWide(line);
+                if (line.empty() || line[0] == L'#' || line[0] == L';')
+                    continue;
+                const auto eq = line.find(L'=');
+                if (eq == std::wstring::npos)
+                    continue;
+                const auto key = trimWide(line.substr(0, eq));
+                const auto value = trimWide(line.substr(eq + 1));
+
+                if (key == L"helper")
+                    settings.helper = resolveSidecarPath(baseDir, value).wstring();
+                else if (key == L"target")
+                    settings.target = resolveSidecarPath(baseDir, value).wstring();
+                else if (key == L"manifest")
+                    settings.manifest = resolveSidecarPath(baseDir, value).wstring();
+                else if (key == L"scale") {
+                    try {
+                        settings.scalePercent = std::clamp(std::stoi(value), 100, 400);
+                    } catch (...) {
+                        settings.scalePercent = 200;
+                    }
+                }
+            }
+            settings.sidecarLoaded = true;
+        }
+    }
+
+    if (const auto env = getenvWide(L"PLUGINSCALER_HELPER_X86"); !env.empty())
+        settings.helper = env;
+    if (const auto env = getenvWide(L"PLUGINSCALER_TARGET_VST2"); !env.empty())
+        settings.target = env;
+    if (const auto env = getenvWide(L"PLUGINSCALER_TARGET_MANIFEST"); !env.empty())
+        settings.manifest = env;
+    if (const auto env = getenvWide(L"PLUGINSCALER_SCALE_PERCENT"); !env.empty()) {
+        try {
+            settings.scalePercent = std::clamp(std::stoi(env), 100, 400);
+        } catch (...) {
+            settings.scalePercent = 200;
+        }
+    }
+
+    if (settings.helper.empty() && !baseDir.empty())
+        settings.helper = (baseDir / L"PluginScalerHelper-x86.exe").wstring();
+
+    return settings;
+}
+
 std::wstring quote(const std::wstring& s) {
     return L"\"" + s + L"\"";
 }
 
-ProxyManifest loadManifest() {
+ProxyManifest loadManifest(const std::wstring& manifestPath) {
     ProxyManifest m;
-    const auto path = getenvWide(L"PLUGINSCALER_TARGET_MANIFEST");
-    if (path.empty()) return m;
+    if (manifestPath.empty()) return m;
 
-    std::ifstream in(std::filesystem::path(path), std::ios::binary);
+    std::ifstream in(std::filesystem::path(manifestPath), std::ios::binary);
     if (!in) return m;
 
     std::string line;
@@ -450,8 +550,8 @@ bool startBridge(ProxyInstance* inst) {
     if (!inst) return false;
     if (inst->bridgeStarted) return true;
 
-    const std::wstring helper = getenvWide(L"PLUGINSCALER_HELPER_X86");
-    const std::wstring target = getenvWide(L"PLUGINSCALER_TARGET_VST2");
+    const std::wstring& helper = inst->settings.helper;
+    const std::wstring& target = inst->settings.target;
     if (helper.empty() || target.empty())
         return false;
 
@@ -816,6 +916,12 @@ float __cdecl getParameter(AEffect* effect, VstInt32 index) {
 
 } // namespace
 
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH)
+        g_moduleHandle = instance;
+    return TRUE;
+}
+
 extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallback host) {
     if (!host) return nullptr;
 
@@ -824,15 +930,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
 
     auto* inst = new ProxyInstance{};
     inst->host = host;
-    inst->manifest = loadManifest();
+    inst->settings = loadSettings();
+    inst->manifest = loadManifest(inst->settings.manifest);
     inst->parameterValues = inst->manifest.parameterDefaults;
-    if (const auto scale = getenvWide(L"PLUGINSCALER_SCALE_PERCENT"); !scale.empty()) {
-        try {
-            inst->scalePercent = std::clamp(std::stoi(scale), 100, 400);
-        } catch (...) {
-            inst->scalePercent = 200;
-        }
-    }
+    inst->scalePercent = inst->settings.scalePercent;
 
     inst->effect.magic = kEffectMagic;
     inst->effect.dispatcher = dispatcher;

@@ -187,3 +187,56 @@ jobs:
           if ($joined -notmatch "synth=PASS") {
             throw "Synth bridge marker missing"
           }
+
+      - name: Run x64 proxy from sidecar configuration
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
+          $sourceProxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $sourceHelper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $synth = Resolve-Path "build-x86\tests\Release\MockVST2Synth.dll"
+
+          $testDir = Join-Path $PWD "sidecar-test"
+          New-Item -ItemType Directory -Force $testDir | Out-Null
+
+          $proxy = Join-Path $testDir "MockSynth-125A.dll"
+          $helper = Join-Path $testDir "PluginScalerHelper-x86.exe"
+          $manifest = Join-Path $testDir "MockSynth.pluginscaler.txt"
+          $config = Join-Path $testDir "MockSynth-125A.pluginscaler.ini"
+
+          Copy-Item $sourceProxy $proxy -Force
+          Copy-Item $sourceHelper $helper -Force
+          & $helper --write-vst2-manifest $synth $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Sidecar manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          @"
+          helper=PluginScalerHelper-x86.exe
+          target=$synth
+          manifest=MockSynth.pluginscaler.txt
+          scale=200
+          "@ | Set-Content -Path $config -Encoding Unicode
+
+          $output = & $synthHost $proxy $helper $synth $manifest --sidecar
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Sidecar-configured proxy failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          foreach ($marker in @(
+            "synth-metadata=PASS",
+            "editor-scale=PASS",
+            "editor-mouse-map=PASS",
+            "editor-drag-1to1=PASS",
+            "editor-close=PASS",
+            "synth-note-on=PASS",
+            "synth-note-off=PASS",
+            "synth=PASS"
+          )) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "Sidecar marker missing: $marker"
+            }
+          }
