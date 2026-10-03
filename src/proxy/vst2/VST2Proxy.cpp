@@ -46,6 +46,7 @@ struct ProxySettings {
     std::wstring target;
     std::wstring manifest;
     int scalePercent{200};
+    bool directEditor{false};
     bool sidecarLoaded{false};
 };
 
@@ -156,6 +157,7 @@ ProxySettings loadSettings() {
             const auto targetValue = readIniValue(L"target");
             const auto manifestValue = readIniValue(L"manifest");
             const auto scaleValue = readIniValue(L"scale");
+            const auto editorValue = readIniValue(L"editor");
 
             if (!helperValue.empty())
                 settings.helper = resolveSidecarPath(baseDir, helperValue).wstring();
@@ -169,6 +171,12 @@ ProxySettings loadSettings() {
                 } catch (...) {
                     settings.scalePercent = 200;
                 }
+            }
+            if (!editorValue.empty()) {
+                std::wstring mode = editorValue;
+                std::transform(mode.begin(), mode.end(), mode.begin(),
+                               [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+                settings.directEditor = (mode == L"direct" || mode == L"integrated");
             }
 
             settings.sidecarLoaded = true;
@@ -187,6 +195,12 @@ ProxySettings loadSettings() {
         } catch (...) {
             settings.scalePercent = 200;
         }
+    }
+    if (const auto env = getenvWide(L"PLUGINSCALER_EDITOR_MODE"); !env.empty()) {
+        std::wstring mode = env;
+        std::transform(mode.begin(), mode.end(), mode.begin(),
+                       [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+        settings.directEditor = (mode == L"direct" || mode == L"integrated");
     }
 
     if (settings.helper.empty() && !baseDir.empty())
@@ -509,6 +523,12 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
+            if (inst->settings.directEditor &&
+                inst->editorWindow && IsWindow(inst->editorWindow) &&
+                inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
+                ShowWindow(inst->editorWindow, SW_HIDE);
+                SetParent(inst->editorWindow, inst->editorSurrogate);
+            }
             if (inst->editorSurface && IsWindow(inst->editorSurface))
                 DestroyWindow(inst->editorSurface);
             inst->editorSurface = nullptr;
@@ -665,8 +685,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         std::memcpy(&remote, reply.data(), sizeof(remote));
         const int nativeWidth = remote.right - remote.left;
         const int nativeHeight = remote.bottom - remote.top;
-        const int scaledWidth = nativeWidth * inst->scalePercent / 100;
-        const int scaledHeight = nativeHeight * inst->scalePercent / 100;
+        const int effectiveScale = inst->settings.directEditor ? 100 : inst->scalePercent;
+        const int scaledWidth = nativeWidth * effectiveScale / 100;
+        const int scaledHeight = nativeHeight * effectiveScale / 100;
         inst->editorRect.left = 0;
         inst->editorRect.top = 0;
         inst->editorRect.right = static_cast<std::int16_t>(scaledWidth);
@@ -691,7 +712,44 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             static_cast<std::uintptr_t>(result.surrogateWindow));
         HWND parent = static_cast<HWND>(ptr);
         if (!editor || !surrogate || !IsWindow(editor) || !IsWindow(surrogate) ||
-            !ensureScalerSurfaceClass())
+            !parent || !IsWindow(parent))
+            return 0;
+
+        inst->editorWindow = editor;
+        inst->editorSurrogate = surrogate;
+        inst->editorHost = parent;
+        inst->dragActive = false;
+
+        if (inst->settings.directEditor) {
+            RECT rc{};
+            if (!GetClientRect(editor, &rc))
+                return 0;
+            const int width = rc.right - rc.left;
+            const int height = rc.bottom - rc.top;
+            if (width <= 0 || height <= 0)
+                return 0;
+
+            SetLastError(0);
+            HWND previousParent = SetParent(editor, parent);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+
+            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+            style |= WS_CHILD | WS_VISIBLE;
+            style &= ~WS_POPUP;
+            SetWindowLongPtrW(editor, GWL_STYLE, style);
+
+            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            RedrawWindow(editor, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+            inst->editorSurface = nullptr;
+            inst->editorOpen = true;
+            return 1;
+        }
+
+        if (!ensureScalerSurfaceClass())
             return 0;
 
         const int width = inst->editorRect.right - inst->editorRect.left;
@@ -704,11 +762,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!surface)
             return 0;
 
-        inst->editorWindow = editor;
-        inst->editorSurrogate = surrogate;
         inst->editorSurface = surface;
-        inst->editorHost = parent;
-        inst->dragActive = false;
         inst->editorOpen = true;
         InvalidateRect(surface, nullptr, TRUE);
         UpdateWindow(surface);
@@ -718,6 +772,13 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffEditClose: {
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
+
+        if (inst->settings.directEditor &&
+            inst->editorWindow && IsWindow(inst->editorWindow) &&
+            inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
+            ShowWindow(inst->editorWindow, SW_HIDE);
+            SetParent(inst->editorWindow, inst->editorSurrogate);
+        }
 
         if (inst->editorSurface && IsWindow(inst->editorSurface))
             DestroyWindow(inst->editorSurface);

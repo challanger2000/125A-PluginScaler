@@ -14,6 +14,9 @@ param(
     [ValidateRange(100, 400)]
     [int]$Scale = 200,
 
+    [ValidateSet("Capture", "Direct")]
+    [string]$EditorMode = "Capture",
+
     [string]$WrapperName
 )
 
@@ -50,6 +53,7 @@ helper=PluginScalerHelper-x86.exe
 target=$target
 manifest=$([System.IO.Path]::GetFileName($manifest))
 scale=$Scale
+editor=$($EditorMode.ToLowerInvariant())
 "@ | Set-Content -LiteralPath $config -Encoding Unicode
 
 Write-Host "wrapper=$wrapperDll"
@@ -58,3 +62,4 @@ Write-Host "manifest=$manifest"
 Write-Host "config=$config"
 Write-Host "target=$target"
 Write-Host "scale=$Scale"
+Write-Host "editor=$EditorMode"

@@ -258,6 +258,7 @@ jobs:
             -HelperExe $sourceHelper `
             -OutputDir $outDir `
             -Scale 200 `
+            -EditorMode Capture `
             -WrapperName "MockSynth-125A"
 
           if ($LASTEXITCODE -ne 0) {
@@ -310,7 +311,8 @@ jobs:
             -ProxyDll ".\PluginScalerVST2Proxy.dll" `
             -HelperExe ".\PluginScalerHelper-x86.exe" `
             -OutputDir ".\Pro53-Test" `
-            -Scale 200 `
+            -Scale 100 `
+            -EditorMode Direct `
             -WrapperName "Pro-53-125A"
           "@ | Set-Content (Join-Path $kit "PRO53-QUICKSTART.txt") -Encoding UTF8
 
