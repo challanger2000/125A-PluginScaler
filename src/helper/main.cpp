@@ -153,14 +153,18 @@ int runSharedVst2Server(const std::filesystem::path& path,
         return true;
     };
 
+    HANDLE controlServerPipe = CreateNamedPipeW(
+        controlPipeName.c_str(),
+        PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1, 64 * 1024, 64 * 1024, 0, nullptr);
+    if (controlServerPipe == INVALID_HANDLE_VALUE) {
+        std::cerr << "error=control-pipe-create\n";
+        return 14;
+    }
+
     std::thread controlThread([&] {
-        HANDLE pipe = CreateNamedPipeW(
-            controlPipeName.c_str(),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1, 64 * 1024, 64 * 1024, 0, nullptr);
-        if (pipe == INVALID_HANDLE_VALUE)
-            return;
+        HANDLE pipe = controlServerPipe;
 
         const BOOL connected = ConnectNamedPipe(pipe, nullptr)
             ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);

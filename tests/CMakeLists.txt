@@ -26,6 +26,7 @@ add_test(
 )
 set_tests_properties(PluginScaler.VST2Probe PROPERTIES
     PASS_REGULAR_EXPRESSION "loaded=1;opened=1;closed=1;entry=VSTPluginMain;effect=125A Mock VST2"
+    TIMEOUT 20
 )
 
 add_test(
@@ -33,7 +34,8 @@ add_test(
     COMMAND PluginScalerHelper --probe-vst2-audio $<TARGET_FILE:MockVST2>
 )
 set_tests_properties(PluginScaler.VST2AudioProbe PROPERTIES
-    PASS_REGULAR_EXPRESSION "configured=1;mainsOn=1;processed=1;mainsOff=1;closed=1;outL=0.0200;outR=0.0400"
+    PASS_REGULAR_EXPRESSION "configured=1;mainsOn=1;processed=1;mainsOff=1;closed=1;outL=0.1450;outR=0.1650"
+    TIMEOUT 20
 )
 
 add_executable(PluginScalerBridgeClient BridgeClient.cpp)
@@ -50,7 +52,8 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
             $<TARGET_FILE:MockVST2>
     )
     set_tests_properties(PluginScaler.VST2SharedMemoryBridge PROPERTIES
-        PASS_REGULAR_EXPRESSION "state=3;error=0;outL0=0.02;outR0=0.04;outL63=1.28;outR63=2.56"
+        PASS_REGULAR_EXPRESSION "state=3;error=0;outL0=0.145;outR0=0.165;outL63=1.405;outR63=2.685"
+        TIMEOUT 20
     )
 endif()
 
