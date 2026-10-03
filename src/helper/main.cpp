@@ -17,6 +17,8 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <cstring>
+#include <cstdint>
 
 namespace {
 
@@ -225,6 +227,38 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         values[i] = module.getParameter(i);
                     break;
                 }
+                case ipc::ControlCommand::GetEditorRect: {
+                    formats::vst2abi::VstRect rect{};
+                    if (!module.editorRect(rect)) {
+                        resp.status = ipc::ControlStatus::PluginError;
+                    } else {
+                        ipc::EditorRectPayload out{};
+                        out.left = rect.left;
+                        out.top = rect.top;
+                        out.right = rect.right;
+                        out.bottom = rect.bottom;
+                        reply.resize(sizeof(out));
+                        std::memcpy(reply.data(), &out, sizeof(out));
+                    }
+                    break;
+                }
+                case ipc::ControlCommand::OpenEditor: {
+                    if (payload.size() != sizeof(ipc::EditorOpenPayload)) {
+                        resp.status = ipc::ControlStatus::InvalidRequest;
+                        break;
+                    }
+                    ipc::EditorOpenPayload request{};
+                    std::memcpy(&request, payload.data(), sizeof(request));
+                    auto parent = reinterpret_cast<void*>(
+                        static_cast<std::uintptr_t>(request.parentWindow));
+                    if (!module.openEditor(parent))
+                        resp.status = ipc::ControlStatus::PluginError;
+                    break;
+                }
+                case ipc::ControlCommand::CloseEditor:
+                    if (!module.closeEditor())
+                        resp.status = ipc::ControlStatus::PluginError;
+                    break;
                 case ipc::ControlCommand::Shutdown:
                     controlStop.store(true, std::memory_order_release);
                     break;

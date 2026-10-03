@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <windows.h>
 
 using namespace pluginscaler::formats::vst2abi;
 
@@ -24,6 +25,8 @@ struct SynthState {
     bool active{false};
     std::uint8_t note{60};
     std::uint8_t velocity{0};
+    HWND editorWindow{nullptr};
+    VstRect editorRect{0, 0, 180, 320};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
@@ -41,6 +44,40 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
         return 1;
     case EffSetBlockSize:
         if (state) state->blockSize = static_cast<VstInt32>(value);
+        return 1;
+    case EffEditGetRect:
+        if (state && ptr) {
+            *static_cast<VstRect**>(ptr) = &state->editorRect;
+            return 1;
+        }
+        return 0;
+    case EffEditOpen:
+        if (state && ptr) {
+            static const wchar_t* kClassName = L"125A_MockVST2SynthEditor";
+            static ATOM atom = 0;
+            if (!atom) {
+                WNDCLASSW wc{};
+                wc.lpfnWndProc = DefWindowProcW;
+                wc.hInstance = GetModuleHandleW(nullptr);
+                wc.lpszClassName = kClassName;
+                atom = RegisterClassW(&wc);
+                if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+                    return 0;
+            }
+            HWND parent = static_cast<HWND>(ptr);
+            state->editorWindow = CreateWindowExW(
+                0, kClassName, L"125A Mock Synth Editor",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, 320, 180,
+                parent, nullptr, GetModuleHandleW(nullptr), nullptr);
+            return state->editorWindow ? 1 : 0;
+        }
+        return 0;
+    case EffEditClose:
+        if (state && state->editorWindow) {
+            DestroyWindow(state->editorWindow);
+            state->editorWindow = nullptr;
+        }
         return 1;
     case EffMainsChanged:
         if (state) {

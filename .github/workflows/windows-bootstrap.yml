@@ -162,6 +162,12 @@ jobs:
           if ($joined -notmatch "synth-metadata=PASS") {
             throw "Synth metadata marker missing"
           }
+          if ($joined -notmatch "editor-open=PASS") {
+            throw "Cross-process editor open marker missing"
+          }
+          if ($joined -notmatch "editor-close=PASS") {
+            throw "Cross-process editor close marker missing"
+          }
           if ($joined -notmatch "synth-note-on=PASS") {
             throw "Synth note-on marker missing"
           }

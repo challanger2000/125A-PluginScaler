@@ -348,6 +348,30 @@ bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
            result != 0;
 }
 
+bool VST2PluginModule::editorRect(VstRect& rect) noexcept {
+    if (!effect_ || !effect_->dispatcher) return false;
+    VstRect* pluginRect = nullptr;
+    VstIntPtr result = 0;
+    if (!callDispatcherSafely(effect_, EffEditGetRect, 0, 0, &pluginRect, 0.0f, &result) ||
+        !result || !pluginRect)
+        return false;
+    rect = *pluginRect;
+    return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+bool VST2PluginModule::openEditor(void* parentWindow) noexcept {
+    if (!effect_ || !effect_->dispatcher || !parentWindow) return false;
+    VstIntPtr result = 0;
+    return callDispatcherSafely(effect_, EffEditOpen, 0, 0, parentWindow, 0.0f, &result) &&
+           result != 0;
+}
+
+bool VST2PluginModule::closeEditor() noexcept {
+    if (!effect_ || !effect_->dispatcher) return false;
+    VstIntPtr result = 0;
+    return callDispatcherSafely(effect_, EffEditClose, 0, 0, nullptr, 0.0f, &result);
+}
+
 std::int32_t VST2PluginModule::numParams() const noexcept {
     return effect_ ? effect_->numParams : 0;
 }

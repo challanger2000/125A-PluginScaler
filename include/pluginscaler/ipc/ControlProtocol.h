@@ -12,8 +12,27 @@ enum class ControlCommand : std::uint16_t {
     GetState = 1,
     SetState = 2,
     GetParameters = 3,
-    Shutdown = 4
+    Shutdown = 4,
+    GetEditorRect = 5,
+    OpenEditor = 6,
+    CloseEditor = 7
 };
+
+#pragma pack(push, 1)
+struct EditorRectPayload {
+    std::int32_t left{0};
+    std::int32_t top{0};
+    std::int32_t right{0};
+    std::int32_t bottom{0};
+};
+
+struct EditorOpenPayload {
+    std::uint64_t parentWindow{0};
+};
+#pragma pack(pop)
+
+static_assert(sizeof(EditorRectPayload) == 16);
+static_assert(sizeof(EditorOpenPayload) == 8);
 
 enum class ControlStatus : std::uint32_t {
     Ok = 0,

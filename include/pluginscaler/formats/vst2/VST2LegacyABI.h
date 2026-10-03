@@ -13,6 +13,15 @@ using VstIntPtr = std::intptr_t;
 struct AEffect;
 
 #pragma pack(push, 8)
+struct VstRect {
+    std::int16_t top;
+    std::int16_t left;
+    std::int16_t bottom;
+    std::int16_t right;
+};
+#pragma pack(pop)
+
+#pragma pack(push, 8)
 struct VstEvent {
     VstInt32 type;
     VstInt32 byteSize;

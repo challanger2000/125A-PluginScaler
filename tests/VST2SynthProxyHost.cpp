@@ -12,6 +12,40 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+HWND createHostWindow() {
+    static const wchar_t* kClassName = L"125A_PluginScaler_TestHost";
+    static ATOM atom = 0;
+    if (!atom) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = hostWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kClassName;
+        atom = RegisterClassW(&wc);
+        if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return nullptr;
+    }
+    return CreateWindowExW(0, kClassName, L"PluginScaler Test Host",
+                           WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
+                           nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+BOOL CALLBACK countChildProc(HWND, LPARAM param) {
+    auto* count = reinterpret_cast<int*>(param);
+    ++(*count);
+    return TRUE;
+}
+
+int childCount(HWND parent) {
+    int count = 0;
+    EnumChildWindows(parent, countChildProc, reinterpret_cast<LPARAM>(&count));
+    return count;
+}
+
 VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
                                VstIntPtr, void*, float) {
     switch (opcode) {
@@ -120,6 +154,30 @@ int wmain(int argc, wchar_t** argv) {
         effect->uniqueId == 0x53594E31 &&
         (effect->flags & (1 << 8)) != 0;
     std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << "\n";
+
+    HWND editorHost = nullptr;
+    if (ok) {
+        editorHost = createHostWindow();
+        VstRect* rect = nullptr;
+        ok = editorHost != nullptr &&
+             effect->dispatcher(effect, EffEditGetRect, 0, 0, &rect, 0.0f) != 0 &&
+             rect != nullptr &&
+             (rect->right - rect->left) == 320 &&
+             (rect->bottom - rect->top) == 180 &&
+             effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f) != 0;
+        Sleep(50);
+        ok = ok && childCount(editorHost) >= 1;
+        std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    if (ok) {
+        ok = effect->dispatcher(effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
+        Sleep(50);
+        ok = ok && childCount(editorHost) == 0;
+        std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << "\n";
+    }
+    if (editorHost)
+        DestroyWindow(editorHost);
 
     if (ok)
         ok = effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f) != 0 &&

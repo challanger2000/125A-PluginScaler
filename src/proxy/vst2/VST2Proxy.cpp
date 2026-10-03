@@ -49,6 +49,8 @@ struct ProxyInstance {
     PROCESS_INFORMATION helperProcess{};
     HANDLE controlPipe{INVALID_HANDLE_VALUE};
     std::vector<std::uint8_t> stateChunk;
+    VstRect editorRect{};
+    bool editorOpen{false};
 
     double sampleRate{48000.0};
     VstInt32 blockSize{512};
@@ -218,6 +220,12 @@ void stopBridge(ProxyInstance* inst) noexcept {
     if (!inst) return;
 
     if (inst->bridgeStarted) {
+        if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
+            std::vector<std::uint8_t> ignored;
+            (void)controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
+                              0, nullptr, 0, ignored);
+            inst->editorOpen = false;
+        }
         if (inst->controlPipe != INVALID_HANDLE_VALUE) {
             std::vector<std::uint8_t> ignored;
             (void)controlCall(inst, pluginscaler::ipc::ControlCommand::Shutdown,
@@ -352,6 +360,45 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return startBridge(inst) ? 1 : 0;
         stopBridge(inst);
         return 1;
+
+    case EffEditGetRect: {
+        if (!ptr || !startBridge(inst)) return 0;
+        std::vector<std::uint8_t> reply;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::GetEditorRect,
+                         0, nullptr, 0, reply) ||
+            reply.size() != sizeof(pluginscaler::ipc::EditorRectPayload))
+            return 0;
+        pluginscaler::ipc::EditorRectPayload remote{};
+        std::memcpy(&remote, reply.data(), sizeof(remote));
+        inst->editorRect.left = static_cast<std::int16_t>(remote.left);
+        inst->editorRect.top = static_cast<std::int16_t>(remote.top);
+        inst->editorRect.right = static_cast<std::int16_t>(remote.right);
+        inst->editorRect.bottom = static_cast<std::int16_t>(remote.bottom);
+        *static_cast<VstRect**>(ptr) = &inst->editorRect;
+        return 1;
+    }
+
+    case EffEditOpen: {
+        if (!ptr || !startBridge(inst)) return 0;
+        pluginscaler::ipc::EditorOpenPayload request{};
+        request.parentWindow = static_cast<std::uint64_t>(
+            reinterpret_cast<std::uintptr_t>(ptr));
+        std::vector<std::uint8_t> ignored;
+        const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
+                                    0, &request, sizeof(request), ignored);
+        inst->editorOpen = ok;
+        return ok ? 1 : 0;
+    }
+
+    case EffEditClose: {
+        if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
+            return 1;
+        std::vector<std::uint8_t> ignored;
+        const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
+                                    0, nullptr, 0, ignored);
+        inst->editorOpen = false;
+        return ok ? 1 : 0;
+    }
 
     case EffGetChunk: {
         if (!ptr || !startBridge(inst)) return 0;
