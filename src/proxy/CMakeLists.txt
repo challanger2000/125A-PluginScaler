@@ -13,3 +13,5 @@ target_link_libraries(PluginScalerProxyCore PUBLIC
 
 target_compile_features(PluginScalerProxyCore PUBLIC cxx_std_20)
 pluginscaler_enable_warnings(PluginScalerProxyCore)
+
+add_subdirectory(vst2)

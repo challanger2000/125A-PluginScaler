@@ -53,3 +53,10 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 4)
         PASS_REGULAR_EXPRESSION "state=3;error=0;outL0=0.02;outR0=0.04;outL63=1.28;outR63=2.56"
     )
 endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_executable(PluginScalerVST2ProxyHost VST2ProxyHost.cpp)
+    target_include_directories(PluginScalerVST2ProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2ProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2ProxyHost)
+endif()

@@ -37,9 +37,8 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
-
   cross-bitness-vst2:
-    name: x64 client -> x86 VST2 helper
+    name: x64 proxy -> x86 VST2 helper
     runs-on: windows-2022
 
     steps:
@@ -63,8 +62,11 @@ jobs:
           -DPLUGINSCALER_FETCH_VST3_SDK=OFF
           -DPLUGINSCALER_BUILD_TESTS=ON
 
-      - name: Build x64 bridge client
-        run: cmake --build build-x64 --config Release --target PluginScalerBridgeClient --parallel
+      - name: Build x64 proxy and host harness
+        run: >
+          cmake --build build-x64 --config Release
+          --target PluginScalerVST2Proxy PluginScalerVST2ProxyHost PluginScalerBridgeClient
+          --parallel
 
       - name: Verify PE architectures
         shell: pwsh
@@ -72,23 +74,26 @@ jobs:
           $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $dumpbin) { throw "dumpbin.exe not found" }
 
-          $client = "build-x64\tests\Release\PluginScalerBridgeClient.exe"
+          $proxyHost = "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
           $helper = "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
           $plugin = "build-x86\tests\Release\MockVST2.dll"
 
-          & $dumpbin.FullName /headers $client | Select-String "machine"
-          & $dumpbin.FullName /headers $helper | Select-String "machine"
-          & $dumpbin.FullName /headers $plugin | Select-String "machine"
+          foreach ($f in @($proxyHost, $proxy, $helper, $plugin)) {
+            & $dumpbin.FullName /headers $f | Select-String "machine"
+          }
 
-          $clientHeader = (& $dumpbin.FullName /headers $client | Out-String)
+          $hostHeader = (& $dumpbin.FullName /headers $proxyHost | Out-String)
+          $proxyHeader = (& $dumpbin.FullName /headers $proxy | Out-String)
           $helperHeader = (& $dumpbin.FullName /headers $helper | Out-String)
           $pluginHeader = (& $dumpbin.FullName /headers $plugin | Out-String)
 
-          if ($clientHeader -notmatch "8664 machine") { throw "Bridge client is not x64" }
+          if ($hostHeader -notmatch "8664 machine") { throw "Proxy host is not x64" }
+          if ($proxyHeader -notmatch "8664 machine") { throw "VST2 proxy is not x64" }
           if ($helperHeader -notmatch "14C machine") { throw "Helper is not x86" }
           if ($pluginHeader -notmatch "14C machine") { throw "Mock VST2 is not x86" }
 
-      - name: Run real x64-to-x86 audio bridge
+      - name: Run direct x64-to-x86 shared-memory bridge
         shell: pwsh
         run: |
           $client = Resolve-Path "build-x64\tests\Release\PluginScalerBridgeClient.exe"
@@ -97,5 +102,18 @@ jobs:
 
           & $client $helper $plugin
           if ($LASTEXITCODE -ne 0) {
-            throw "Cross-bitness VST2 bridge test failed with exit code $LASTEXITCODE"
+            throw "Cross-bitness shared-memory bridge failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run x64 VST2 proxy through x86 helper
+        shell: pwsh
+        run: |
+          $host = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
+
+          & $host $proxy $helper $plugin
+          if ($LASTEXITCODE -ne 0) {
+            throw "End-to-end x64 VST2 proxy bridge failed with exit code $LASTEXITCODE"
           }

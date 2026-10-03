@@ -78,6 +78,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
     formats::VST2PluginModule module;
     std::int32_t configuredBlockSize = 0;
+    std::uint32_t configuredSampleRate = 0;
 
     for (;;) {
         if (!channel.waitForInput(std::chrono::seconds(10))) {
@@ -100,6 +101,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
         }
 
         if (block->header.frames == 0 || block->header.frames > ipc::kMaxAudioFrames ||
+            block->header.sampleRateHz == 0 ||
             block->header.inputChannels > ipc::kMaxAudioChannels ||
             block->header.outputChannels > ipc::kMaxAudioChannels) {
             block->header.errorCode = 102;
@@ -113,11 +115,14 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                   std::memory_order_release);
 
         const auto requestedBlockSize = static_cast<std::int32_t>(block->header.frames);
-        if (configuredBlockSize != requestedBlockSize) {
+        const auto requestedSampleRate = block->header.sampleRateHz;
+        if (configuredBlockSize != requestedBlockSize ||
+            configuredSampleRate != requestedSampleRate) {
             module.close();
 
             std::string error;
-            if (!module.openForProcessing(path, 48000.0, requestedBlockSize, error)) {
+            if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
+                                          requestedBlockSize, error)) {
                 block->header.errorCode = 100;
                 block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
                                           std::memory_order_release);
@@ -127,6 +132,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
             }
 
             configuredBlockSize = requestedBlockSize;
+            configuredSampleRate = requestedSampleRate;
         }
 
         const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
