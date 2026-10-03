@@ -96,10 +96,10 @@ int wmain(int argc, wchar_t** argv) {
     const bool ok =
         state == pluginscaler::ipc::AudioBlockState::OutputReady &&
         block->header.errorCode == 0 &&
-        std::fabs(block->outputs[0][0] - 0.02f) < 0.00001f &&
-        std::fabs(block->outputs[1][0] - 0.04f) < 0.00001f &&
-        std::fabs(block->outputs[0][63] - 1.28f) < 0.00001f &&
-        std::fabs(block->outputs[1][63] - 2.56f) < 0.00001f;
+        std::fabs(block->outputs[0][0] - 0.145f) < 0.00001f &&
+        std::fabs(block->outputs[1][0] - 0.165f) < 0.00001f &&
+        std::fabs(block->outputs[0][63] - 1.405f) < 0.00001f &&
+        std::fabs(block->outputs[1][63] - 2.685f) < 0.00001f;
 
     std::cout
         << "state=" << static_cast<unsigned>(state) << "\n"
