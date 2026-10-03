@@ -35,3 +35,21 @@ add_test(
 set_tests_properties(PluginScaler.VST2AudioProbe PROPERTIES
     PASS_REGULAR_EXPRESSION "configured=1;mainsOn=1;processed=1;mainsOff=1;closed=1;outL=0.0200;outR=0.0400"
 )
+
+add_executable(PluginScalerBridgeClient BridgeClient.cpp)
+target_include_directories(PluginScalerBridgeClient PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(PluginScalerBridgeClient PRIVATE PluginScalerIPC)
+target_compile_features(PluginScalerBridgeClient PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(PluginScalerBridgeClient)
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_test(
+        NAME PluginScaler.VST2SharedMemoryBridge
+        COMMAND PluginScalerBridgeClient
+            $<TARGET_FILE:PluginScalerHelper>
+            $<TARGET_FILE:MockVST2>
+    )
+    set_tests_properties(PluginScaler.VST2SharedMemoryBridge PROPERTIES
+        PASS_REGULAR_EXPRESSION "state=3;error=0;outL0=0.02;outR0=0.04;outL63=1.28;outR63=2.56"
+    )
+endif()

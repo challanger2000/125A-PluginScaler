@@ -50,6 +50,16 @@ public:
     VST2AudioProbeResult probeAudio(const std::filesystem::path& path,
                                     double sampleRate = 48000.0,
                                     std::int32_t blockSize = 64);
+
+    bool openForProcessing(const std::filesystem::path& path,
+                           double sampleRate,
+                           std::int32_t blockSize,
+                           std::string& error);
+    bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
+
+    std::int32_t numInputs() const noexcept;
+    std::int32_t numOutputs() const noexcept;
+
     void close() noexcept;
 
 private:

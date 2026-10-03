@@ -3,7 +3,7 @@
 #include <windows.h>
 
 #include <array>
-#include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -205,52 +205,70 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     return result;
 }
 
+bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
+                                         double sampleRate,
+                                         std::int32_t blockSize,
+                                         std::string& error) {
+    if (sampleRate <= 0.0 || blockSize <= 0) {
+        error = "invalid audio configuration";
+        return false;
+    }
+
+    if (!loadAndOpen(path, error))
+        return false;
+
+    if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
+                              static_cast<float>(sampleRate)) ||
+        !callDispatcherSafely(effect_, EffSetBlockSize, 0,
+                              static_cast<VstIntPtr>(blockSize), nullptr, 0.0f)) {
+        error = "exception while configuring VST2 audio";
+        close();
+        return false;
+    }
+
+    if (!effect_->processReplacing) {
+        error = "processReplacing not available";
+        close();
+        return false;
+    }
+
+    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
+        error = "exception during mains-on";
+        close();
+        return false;
+    }
+
+    mainsOn_ = true;
+    return true;
+}
+
+bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {
+    if (!effect_ || !mainsOn_ || frames <= 0) return false;
+    return callProcessReplacingSafely(effect_, inputs, outputs, frames);
+}
+
+std::int32_t VST2PluginModule::numInputs() const noexcept {
+    return effect_ ? effect_->numInputs : 0;
+}
+
+std::int32_t VST2PluginModule::numOutputs() const noexcept {
+    return effect_ ? effect_->numOutputs : 0;
+}
+
 VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& path,
                                                  double sampleRate,
                                                  std::int32_t blockSize) {
     VST2AudioProbeResult result;
     std::string error;
-    if (!loadAndOpen(path, error)) {
+    if (!openForProcessing(path, sampleRate, blockSize, error)) {
         result.error = std::move(error);
         return result;
     }
 
     result.loaded = true;
     result.opened = true;
-
-    if (blockSize <= 0 || sampleRate <= 0.0) {
-        result.error = "invalid audio configuration";
-        close();
-        result.closed = true;
-        return result;
-    }
-
-    if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
-                              static_cast<float>(sampleRate)) ||
-        !callDispatcherSafely(effect_, EffSetBlockSize, 0,
-                              static_cast<VstIntPtr>(blockSize), nullptr, 0.0f)) {
-        result.error = "exception while configuring VST2 audio";
-        close();
-        result.closed = true;
-        return result;
-    }
     result.configured = true;
-
-    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
-        result.error = "exception during mains-on";
-        close();
-        result.closed = true;
-        return result;
-    }
-    mainsOn_ = true;
     result.mainsOn = true;
-
-    if (!effect_->processReplacing) {
-        result.error = "processReplacing not available";
-        close();
-        result.closed = true;
-        return result;
-    }
 
     const auto inputsCount = std::max<std::int32_t>(1, effect_->numInputs);
     const auto outputsCount = std::max<std::int32_t>(1, effect_->numOutputs);
@@ -276,7 +294,7 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     for (std::int32_t ch = 0; ch < outputsCount; ++ch)
         outputs[static_cast<std::size_t>(ch)] = outputStorage[static_cast<std::size_t>(ch)].data();
 
-    if (!callProcessReplacingSafely(effect_, inputs.data(), outputs.data(), blockSize)) {
+    if (!processReplacing(inputs.data(), outputs.data(), blockSize)) {
         result.error = "exception during processReplacing";
         close();
         result.closed = true;

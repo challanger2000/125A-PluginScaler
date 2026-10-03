@@ -1,10 +1,15 @@
 #include "pluginscaler/formats/VST2PluginModule.h"
+#include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/Protocol.h"
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -56,6 +61,90 @@ int runVst2AudioProbe(const std::filesystem::path& path) {
             result.closed) ? 0 : 3;
 }
 
+int runSharedVst2Server(const std::filesystem::path& path,
+                        const std::wstring& mappingName,
+                        const std::wstring& inputEvent,
+                        const std::wstring& outputEvent) {
+    using namespace pluginscaler;
+
+    ipc::AudioSharedChannel channel;
+    if (!channel.open(mappingName, inputEvent, outputEvent)) {
+        std::cerr << "error=shared-channel-open\n";
+        return 10;
+    }
+
+    auto* block = channel.block();
+    if (!block) return 11;
+
+    formats::VST2PluginModule module;
+    std::string error;
+    if (!module.openForProcessing(path, 48000.0, static_cast<std::int32_t>(ipc::kMaxAudioFrames), error)) {
+        block->header.errorCode = 100;
+        block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
+                                  std::memory_order_release);
+        channel.signalOutput();
+        std::cerr << "error=" << error << '\n';
+        return 12;
+    }
+
+    for (;;) {
+        if (!channel.waitForInput(std::chrono::seconds(10))) {
+            std::cerr << "error=input-timeout\n";
+            return 13;
+        }
+
+        const auto state = static_cast<ipc::AudioBlockState>(
+            block->header.state.load(std::memory_order_acquire));
+
+        if (state == ipc::AudioBlockState::Shutdown)
+            break;
+
+        if (state != ipc::AudioBlockState::InputReady) {
+            block->header.errorCode = 101;
+            block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
+                                      std::memory_order_release);
+            channel.signalOutput();
+            continue;
+        }
+
+        if (block->header.frames == 0 || block->header.frames > ipc::kMaxAudioFrames ||
+            block->header.inputChannels > ipc::kMaxAudioChannels ||
+            block->header.outputChannels > ipc::kMaxAudioChannels) {
+            block->header.errorCode = 102;
+            block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
+                                      std::memory_order_release);
+            channel.signalOutput();
+            continue;
+        }
+
+        block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Processing),
+                                  std::memory_order_release);
+
+        const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
+        const auto outCount = std::max<std::uint32_t>(1, block->header.outputChannels);
+
+        std::vector<float*> inputs(inCount);
+        std::vector<float*> outputs(outCount);
+        for (std::uint32_t ch = 0; ch < inCount; ++ch)
+            inputs[ch] = block->inputs[ch];
+        for (std::uint32_t ch = 0; ch < outCount; ++ch)
+            outputs[ch] = block->outputs[ch];
+
+        const bool ok = module.processReplacing(
+            inputs.data(), outputs.data(), static_cast<std::int32_t>(block->header.frames));
+
+        block->header.errorCode = ok ? 0u : 103u;
+        block->header.state.store(static_cast<std::uint32_t>(
+                                      ok ? ipc::AudioBlockState::OutputReady
+                                         : ipc::AudioBlockState::Error),
+                                  std::memory_order_release);
+        channel.signalOutput();
+    }
+
+    module.close();
+    return 0;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -65,11 +154,15 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 3 && std::wstring_view(argv[1]) == L"--probe-vst2-audio")
         return runVst2AudioProbe(argv[2]);
 
+    if (argc == 6 && std::wstring_view(argv[1]) == L"--serve-vst2-shm")
+        return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5]);
+
     std::cout << "125A PluginScaler Helper\n"
               << "protocol=" << pluginscaler::ipc::kProtocolMajor << "."
               << pluginscaler::ipc::kProtocolMinor << "\n"
               << "usage:\n"
               << "  PluginScalerHelper --probe-vst2 <plugin.dll>\n"
-              << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n";
+              << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n"
+              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event>\n";
     return 0;
 }

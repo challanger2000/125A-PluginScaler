@@ -1,5 +1,6 @@
 add_library(PluginScalerIPC STATIC
     Protocol.cpp
+    AudioSharedChannel.cpp
 )
 
 target_include_directories(PluginScalerIPC PUBLIC
