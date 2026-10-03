@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <magnification.h>
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +48,7 @@ struct ProxySettings {
     std::wstring manifest;
     int scalePercent{200};
     bool directEditor{false};
+    bool magEditor{false};
     bool sidecarLoaded{false};
 };
 
@@ -66,6 +68,7 @@ struct ProxyInstance {
     HWND editorWindow{nullptr};
     HWND editorSurrogate{nullptr};
     HWND editorSurface{nullptr};
+    HWND editorMagnifier{nullptr};
     HWND editorHost{nullptr};
     int scalePercent{200};
     std::vector<std::uint8_t> editorBitmap;
@@ -177,6 +180,7 @@ ProxySettings loadSettings() {
                 std::transform(mode.begin(), mode.end(), mode.begin(),
                                [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
                 settings.directEditor = (mode == L"direct" || mode == L"integrated");
+                settings.magEditor = (mode == L"mag" || mode == L"magnifier");
             }
 
             settings.sidecarLoaded = true;
@@ -201,6 +205,7 @@ ProxySettings loadSettings() {
         std::transform(mode.begin(), mode.end(), mode.begin(),
                        [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
         settings.directEditor = (mode == L"direct" || mode == L"integrated");
+        settings.magEditor = (mode == L"mag" || mode == L"magnifier");
     }
 
     if (settings.helper.empty() && !baseDir.empty())
@@ -436,6 +441,24 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
     return ok;
 }
 
+bool ensureMagnifierRuntime() {
+    static const bool initialized = MagInitialize() != FALSE;
+    return initialized;
+}
+
+bool updateMagnifierSource(ProxyInstance* inst) {
+    if (!inst || !inst->settings.magEditor ||
+        !inst->editorWindow || !IsWindow(inst->editorWindow) ||
+        !inst->editorMagnifier || !IsWindow(inst->editorMagnifier))
+        return false;
+
+    RECT source{};
+    if (!GetWindowRect(inst->editorWindow, &source))
+        return false;
+
+    return MagSetWindowSource(inst->editorMagnifier, source) != FALSE;
+}
+
 LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* inst = reinterpret_cast<ProxyInstance*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -452,6 +475,12 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_TIMER:
+        if (inst->settings.magEditor) {
+            (void)updateMagnifierSource(inst);
+            return 0;
+        }
+        break;
     case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
@@ -473,6 +502,11 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc{};
         GetClientRect(hwnd, &rc);
+
+        if (inst->settings.magEditor) {
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
 
         if (captureEditorBitmap(inst) && !inst->editorBitmap.empty()) {
             BITMAPINFO bmi{};
@@ -523,12 +557,17 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if (inst->settings.directEditor &&
+            if ((inst->settings.directEditor || inst->settings.magEditor) &&
                 inst->editorWindow && IsWindow(inst->editorWindow) &&
                 inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
                 ShowWindow(inst->editorWindow, SW_HIDE);
                 SetParent(inst->editorWindow, inst->editorSurrogate);
             }
+            if (inst->editorSurface && IsWindow(inst->editorSurface))
+                KillTimer(inst->editorSurface, 0x125A);
+            if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
+                DestroyWindow(inst->editorMagnifier);
+            inst->editorMagnifier = nullptr;
             if (inst->editorSurface && IsWindow(inst->editorSurface))
                 DestroyWindow(inst->editorSurface);
             inst->editorSurface = nullptr;
@@ -745,7 +784,85 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
             inst->editorSurface = nullptr;
+            inst->editorMagnifier = nullptr;
             inst->editorOpen = true;
+            return 1;
+        }
+
+        if (inst->settings.magEditor) {
+            if (!ensureScalerSurfaceClass() || !ensureMagnifierRuntime())
+                return 0;
+
+            RECT nativeRc{};
+            if (!GetClientRect(editor, &nativeRc))
+                return 0;
+            const int nativeWidth = nativeRc.right - nativeRc.left;
+            const int nativeHeight = nativeRc.bottom - nativeRc.top;
+            const int scaledWidth = nativeWidth * inst->scalePercent / 100;
+            const int scaledHeight = nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                scaledWidth <= 0 || scaledHeight <= 0)
+                return 0;
+
+            HWND surface = CreateWindowExW(
+                0, L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                0, 0, scaledWidth, scaledHeight,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface)
+                return 0;
+
+            SetLastError(0);
+            HWND previousParent = SetParent(editor, surface);
+            if (!previousParent && GetLastError() != 0) {
+                DestroyWindow(surface);
+                return 0;
+            }
+
+            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+            style |= WS_CHILD | WS_VISIBLE;
+            style &= ~WS_POPUP;
+            SetWindowLongPtrW(editor, GWL_STYLE, style);
+            SetWindowPos(editor, HWND_BOTTOM, 0, 0, nativeWidth, nativeHeight,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+
+            HWND mag = CreateWindowExW(
+                WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
+                WC_MAGNIFIER, L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, scaledWidth, scaledHeight,
+                surface, nullptr, GetModuleHandleW(nullptr), nullptr);
+            if (!mag) {
+                ShowWindow(editor, SW_HIDE);
+                SetParent(editor, surrogate);
+                DestroyWindow(surface);
+                return 0;
+            }
+
+            MAGTRANSFORM transform{};
+            const float factor = static_cast<float>(inst->scalePercent) / 100.0f;
+            transform.v[0][0] = factor;
+            transform.v[1][1] = factor;
+            transform.v[2][2] = 1.0f;
+            if (!MagSetWindowTransform(mag, &transform)) {
+                DestroyWindow(mag);
+                ShowWindow(editor, SW_HIDE);
+                SetParent(editor, surrogate);
+                DestroyWindow(surface);
+                return 0;
+            }
+
+            EnableWindow(mag, FALSE);
+
+            inst->editorSurface = surface;
+            inst->editorMagnifier = mag;
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
+            inst->editorOpen = true;
+
+            (void)updateMagnifierSource(inst);
+            SetTimer(surface, 0x125A, 30, nullptr);
             return 1;
         }
 
@@ -763,6 +880,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return 0;
 
         inst->editorSurface = surface;
+        inst->editorMagnifier = nullptr;
         inst->editorOpen = true;
         InvalidateRect(surface, nullptr, TRUE);
         UpdateWindow(surface);
@@ -773,13 +891,18 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if (inst->settings.directEditor &&
+        if ((inst->settings.directEditor || inst->settings.magEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             ShowWindow(inst->editorWindow, SW_HIDE);
             SetParent(inst->editorWindow, inst->editorSurrogate);
         }
 
+        if (inst->editorSurface && IsWindow(inst->editorSurface))
+            KillTimer(inst->editorSurface, 0x125A);
+        if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
+            DestroyWindow(inst->editorMagnifier);
+        inst->editorMagnifier = nullptr;
         if (inst->editorSurface && IsWindow(inst->editorSurface))
             DestroyWindow(inst->editorSurface);
         inst->editorSurface = nullptr;

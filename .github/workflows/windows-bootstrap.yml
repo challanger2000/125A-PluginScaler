@@ -311,8 +311,8 @@ jobs:
             -ProxyDll ".\PluginScalerVST2Proxy.dll" `
             -HelperExe ".\PluginScalerHelper-x86.exe" `
             -OutputDir ".\Pro53-Test" `
-            -Scale 100 `
-            -EditorMode Direct `
+            -Scale 150 `
+            -EditorMode Mag `
             -WrapperName "Pro-53-125A"
           "@ | Set-Content (Join-Path $kit "PRO53-QUICKSTART.txt") -Encoding UTF8
 

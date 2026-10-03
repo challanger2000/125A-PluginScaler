@@ -8,8 +8,8 @@ powershell -ExecutionPolicy Bypass -File tools/Create-VST2Wrapper.ps1 `
   -ProxyDll ".\PluginScalerVST2Proxy.dll" `
   -HelperExe ".\PluginScalerHelper-x86.exe" `
   -OutputDir ".\Pro53-Test" `
-  -Scale 100 `
-  -EditorMode Direct `
+  -Scale 150 `
+  -EditorMode Mag `
   -WrapperName "Pro-53-125A"
 ```
 

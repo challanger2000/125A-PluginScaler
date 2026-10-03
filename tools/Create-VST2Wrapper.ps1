@@ -14,7 +14,7 @@ param(
     [ValidateRange(100, 400)]
     [int]$Scale = 200,
 
-    [ValidateSet("Capture", "Direct")]
+    [ValidateSet("Capture", "Direct", "Mag")]
     [string]$EditorMode = "Capture",
 
     [string]$WrapperName
