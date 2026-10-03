@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <windows.h>
+#include <windowsx.h>
 
 using namespace pluginscaler::formats::vst2abi;
 
