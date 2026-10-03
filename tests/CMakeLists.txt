@@ -20,6 +20,12 @@ target_compile_features(MockVST2 PRIVATE cxx_std_20)
 pluginscaler_enable_warnings(MockVST2)
 set_target_properties(MockVST2 PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2")
 
+add_library(MockVST2Synth SHARED MockVST2Synth.cpp)
+target_include_directories(MockVST2Synth PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_features(MockVST2Synth PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2Synth)
+set_target_properties(MockVST2Synth PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2Synth")
+
 add_test(
     NAME PluginScaler.VST2Probe
     COMMAND PluginScalerHelper --probe-vst2 $<TARGET_FILE:MockVST2>
@@ -62,4 +68,9 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_include_directories(PluginScalerVST2ProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
     target_compile_features(PluginScalerVST2ProxyHost PRIVATE cxx_std_20)
     pluginscaler_enable_warnings(PluginScalerVST2ProxyHost)
+
+    add_executable(PluginScalerVST2SynthProxyHost VST2SynthProxyHost.cpp)
+    target_include_directories(PluginScalerVST2SynthProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2SynthProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2SynthProxyHost)
 endif()

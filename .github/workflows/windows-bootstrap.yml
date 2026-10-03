@@ -65,7 +65,7 @@ jobs:
       - name: Build x64 proxy and host harness
         run: >
           cmake --build build-x64 --config Release
-          --target PluginScalerVST2Proxy PluginScalerVST2ProxyHost PluginScalerBridgeClient
+          --target PluginScalerVST2Proxy PluginScalerVST2ProxyHost PluginScalerVST2SynthProxyHost PluginScalerBridgeClient
           --parallel
 
       - name: Verify PE architectures
@@ -136,4 +136,38 @@ jobs:
           }
           if ($joined -notmatch "torture=PASS") {
             throw "Proxy lifecycle torture marker missing"
+          }
+
+      - name: Run x64 proxy with x86 zero-input synth
+        shell: pwsh
+        run: |
+          $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $synth = Resolve-Path "build-x86\tests\Release\MockVST2Synth.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2Synth.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $synth $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Synth manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $output = & $synthHost $proxy $helper $synth $manifest
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Zero-input synth bridge failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          if ($joined -notmatch "synth-metadata=PASS") {
+            throw "Synth metadata marker missing"
+          }
+          if ($joined -notmatch "synth-note-on=PASS") {
+            throw "Synth note-on marker missing"
+          }
+          if ($joined -notmatch "synth-note-off=PASS") {
+            throw "Synth note-off marker missing"
+          }
+          if ($joined -notmatch "synth=PASS") {
+            throw "Synth bridge marker missing"
           }
