@@ -36,3 +36,66 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+
+  cross-bitness-vst2:
+    name: x64 client -> x86 VST2 helper
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Win32
+        run: >
+          cmake -S . -B build-x86
+          -A Win32
+          -DPLUGINSCALER_FETCH_VST3_SDK=OFF
+          -DPLUGINSCALER_BUILD_TESTS=ON
+
+      - name: Build Win32 helper and mock VST2
+        run: cmake --build build-x86 --config Release --parallel
+
+      - name: Configure x64
+        run: >
+          cmake -S . -B build-x64
+          -A x64
+          -DPLUGINSCALER_FETCH_VST3_SDK=OFF
+          -DPLUGINSCALER_BUILD_TESTS=ON
+
+      - name: Build x64 bridge client
+        run: cmake --build build-x64 --config Release --target PluginScalerBridgeClient --parallel
+
+      - name: Verify PE architectures
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found" }
+
+          $client = "build-x64\tests\Release\PluginScalerBridgeClient.exe"
+          $helper = "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = "build-x86\tests\Release\MockVST2.dll"
+
+          & $dumpbin.FullName /headers $client | Select-String "machine"
+          & $dumpbin.FullName /headers $helper | Select-String "machine"
+          & $dumpbin.FullName /headers $plugin | Select-String "machine"
+
+          $clientHeader = (& $dumpbin.FullName /headers $client | Out-String)
+          $helperHeader = (& $dumpbin.FullName /headers $helper | Out-String)
+          $pluginHeader = (& $dumpbin.FullName /headers $plugin | Out-String)
+
+          if ($clientHeader -notmatch "8664 machine") { throw "Bridge client is not x64" }
+          if ($helperHeader -notmatch "14C machine") { throw "Helper is not x86" }
+          if ($pluginHeader -notmatch "14C machine") { throw "Mock VST2 is not x86" }
+
+      - name: Run real x64-to-x86 audio bridge
+        shell: pwsh
+        run: |
+          $client = Resolve-Path "build-x64\tests\Release\PluginScalerBridgeClient.exe"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
+
+          & $client $helper $plugin
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cross-bitness VST2 bridge test failed with exit code $LASTEXITCODE"
+          }
