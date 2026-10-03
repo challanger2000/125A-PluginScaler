@@ -141,33 +141,36 @@ ProxySettings loadSettings() {
         auto configPath = modulePath;
         configPath.replace_extension(L".pluginscaler.ini");
 
-        std::wifstream in(configPath);
-        if (in) {
-            std::wstring line;
-            while (std::getline(in, line)) {
-                line = trimWide(line);
-                if (line.empty() || line[0] == L'#' || line[0] == L';')
-                    continue;
-                const auto eq = line.find(L'=');
-                if (eq == std::wstring::npos)
-                    continue;
-                const auto key = trimWide(line.substr(0, eq));
-                const auto value = trimWide(line.substr(eq + 1));
+        if (std::filesystem::exists(configPath)) {
+            const auto readIniValue = [&](const wchar_t* key) {
+                std::wstring buffer(32768, L'\0');
+                const DWORD written = GetPrivateProfileStringW(
+                    L"PluginScaler", key, L"",
+                    buffer.data(), static_cast<DWORD>(buffer.size()),
+                    configPath.c_str());
+                buffer.resize(written);
+                return trimWide(buffer);
+            };
 
-                if (key == L"helper")
-                    settings.helper = resolveSidecarPath(baseDir, value).wstring();
-                else if (key == L"target")
-                    settings.target = resolveSidecarPath(baseDir, value).wstring();
-                else if (key == L"manifest")
-                    settings.manifest = resolveSidecarPath(baseDir, value).wstring();
-                else if (key == L"scale") {
-                    try {
-                        settings.scalePercent = std::clamp(std::stoi(value), 100, 400);
-                    } catch (...) {
-                        settings.scalePercent = 200;
-                    }
+            const auto helperValue = readIniValue(L"helper");
+            const auto targetValue = readIniValue(L"target");
+            const auto manifestValue = readIniValue(L"manifest");
+            const auto scaleValue = readIniValue(L"scale");
+
+            if (!helperValue.empty())
+                settings.helper = resolveSidecarPath(baseDir, helperValue).wstring();
+            if (!targetValue.empty())
+                settings.target = resolveSidecarPath(baseDir, targetValue).wstring();
+            if (!manifestValue.empty())
+                settings.manifest = resolveSidecarPath(baseDir, manifestValue).wstring();
+            if (!scaleValue.empty()) {
+                try {
+                    settings.scalePercent = std::clamp(std::stoi(scaleValue), 100, 400);
+                } catch (...) {
+                    settings.scalePercent = 200;
                 }
             }
+
             settings.sidecarLoaded = true;
         }
     }

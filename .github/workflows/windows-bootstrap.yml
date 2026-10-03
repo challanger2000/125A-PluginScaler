@@ -213,6 +213,7 @@ jobs:
           }
 
           @"
+          [PluginScaler]
           helper=PluginScalerHelper-x86.exe
           target=$synth
           manifest=MockSynth.pluginscaler.txt
