@@ -14,13 +14,13 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
         delete effect;
         return 1;
     case EffGetEffectName:
-        if (ptr) std::strcpy(static_cast<char*>(ptr), "125A Mock VST2");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "125A Mock VST2");
         return 1;
     case EffGetVendorString:
-        if (ptr) std::strcpy(static_cast<char*>(ptr), "125A");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "125A");
         return 1;
     case EffGetProductString:
-        if (ptr) std::strcpy(static_cast<char*>(ptr), "MockVST2");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "MockVST2");
         return 1;
     case EffGetVendorVersion:
         return 1000;
