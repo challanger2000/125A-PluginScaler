@@ -233,6 +233,26 @@ int wmain(int argc, wchar_t** argv) {
                 GetBValue(mappedPixel) < 120;
             std::cout << "editor-mouse-map=" << (mappingOk ? "PASS" : "FAIL") << "\n";
             ok = ok && mappingOk;
+
+            if (ok) {
+                SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(100, 80));
+                SendMessageW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(120, 60));
+                SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(120, 60));
+                RedrawWindow(surface, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+                HDC dragDc = GetDC(surface);
+                const COLORREF dragPixel = GetPixel(dragDc, 280, 200);
+                ReleaseDC(surface, dragDc);
+
+                const bool dragOk =
+                    dragPixel != CLR_INVALID &&
+                    GetRValue(dragPixel) > 180 &&
+                    GetGValue(dragPixel) > 170 &&
+                    GetBValue(dragPixel) < 100;
+                std::cout << "editor-drag-1to1=" << (dragOk ? "PASS" : "FAIL") << "\n";
+                ok = ok && dragOk;
+            }
         }
     }
 

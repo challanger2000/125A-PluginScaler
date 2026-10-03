@@ -60,6 +60,11 @@ struct ProxyInstance {
     std::uint32_t editorBitmapWidth{0};
     std::uint32_t editorBitmapHeight{0};
     std::uint32_t editorBitmapStride{0};
+    bool dragActive{false};
+    int dragSurfaceStartX{0};
+    int dragSurfaceStartY{0};
+    int dragNativeStartX{0};
+    int dragNativeStartY{0};
     bool editorOpen{false};
 
     double sampleRate{48000.0};
@@ -269,12 +274,36 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
 
     const int scaledX = GET_X_LPARAM(lp);
     const int scaledY = GET_Y_LPARAM(lp);
-    const int nativeX = std::clamp(
-        scaledX * static_cast<int>(inst->editorBitmapWidth) / surfaceWidth,
-        0, static_cast<int>(inst->editorBitmapWidth) - 1);
-    const int nativeY = std::clamp(
-        scaledY * static_cast<int>(inst->editorBitmapHeight) / surfaceHeight,
-        0, static_cast<int>(inst->editorBitmapHeight) - 1);
+
+    const auto absoluteNativeX = [&] {
+        return std::clamp(
+            scaledX * static_cast<int>(inst->editorBitmapWidth) / surfaceWidth,
+            0, static_cast<int>(inst->editorBitmapWidth) - 1);
+    };
+    const auto absoluteNativeY = [&] {
+        return std::clamp(
+            scaledY * static_cast<int>(inst->editorBitmapHeight) / surfaceHeight,
+            0, static_cast<int>(inst->editorBitmapHeight) - 1);
+    };
+
+    int nativeX = absoluteNativeX();
+    int nativeY = absoluteNativeY();
+
+    if (message == WM_LBUTTONDOWN) {
+        inst->dragActive = true;
+        inst->dragSurfaceStartX = scaledX;
+        inst->dragSurfaceStartY = scaledY;
+        inst->dragNativeStartX = nativeX;
+        inst->dragNativeStartY = nativeY;
+    } else if ((message == WM_MOUSEMOVE || message == WM_LBUTTONUP) &&
+               inst->dragActive) {
+        nativeX = std::clamp(
+            inst->dragNativeStartX + (scaledX - inst->dragSurfaceStartX),
+            0, static_cast<int>(inst->editorBitmapWidth) - 1);
+        nativeY = std::clamp(
+            inst->dragNativeStartY + (scaledY - inst->dragSurfaceStartY),
+            0, static_cast<int>(inst->editorBitmapHeight) - 1);
+    }
 
     pluginscaler::ipc::EditorMousePayload mouse{};
     mouse.message = message;
@@ -283,8 +312,11 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
     mouse.keyFlags = static_cast<std::uint32_t>(wp);
 
     std::vector<std::uint8_t> ignored;
-    return controlCall(inst, pluginscaler::ipc::ControlCommand::SendEditorMouse,
-                       0, &mouse, sizeof(mouse), ignored);
+    const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::SendEditorMouse,
+                                0, &mouse, sizeof(mouse), ignored);
+    if (message == WM_LBUTTONUP)
+        inst->dragActive = false;
+    return ok;
 }
 
 LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -573,6 +605,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->editorSurrogate = surrogate;
         inst->editorSurface = surface;
         inst->editorHost = parent;
+        inst->dragActive = false;
         inst->editorOpen = true;
         InvalidateRect(surface, nullptr, TRUE);
         UpdateWindow(surface);
@@ -592,6 +625,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                                     0, nullptr, 0, ignored);
         inst->editorWindow = nullptr;
         inst->editorSurrogate = nullptr;
+        inst->dragActive = false;
         inst->editorOpen = false;
         return ok ? 1 : 0;
     }

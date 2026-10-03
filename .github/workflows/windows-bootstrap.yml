@@ -172,6 +172,9 @@ jobs:
           if ($joined -notmatch "editor-mouse-map=PASS") {
             throw "Scaled editor mouse mapping marker missing"
           }
+          if ($joined -notmatch "editor-drag-1to1=PASS") {
+            throw "Scaled editor native drag-delta marker missing"
+          }
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
           }
