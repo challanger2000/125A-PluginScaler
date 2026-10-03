@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace pluginscaler::formats {
 
@@ -23,6 +24,7 @@ struct VST2ProbeResult {
     std::int32_t numInputs{0};
     std::int32_t numOutputs{0};
     std::int32_t flags{0};
+    std::vector<float> parameterDefaults;
     std::string error;
 };
 
@@ -59,6 +61,8 @@ public:
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
+    bool setParameter(std::int32_t index, float value) noexcept;
+    float getParameter(std::int32_t index) const noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
 

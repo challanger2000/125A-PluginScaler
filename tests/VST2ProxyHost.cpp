@@ -29,7 +29,7 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     }
 }
 
-bool processAndCheck(AEffect* effect, VstInt32 frames, float seed, float expectedOffset = 0.0f) {
+bool processAndCheck(AEffect* effect, VstInt32 frames, float seed, float expectedOffset = 0.125f) {
     std::vector<float> inL(static_cast<std::size_t>(frames));
     std::vector<float> inR(static_cast<std::size_t>(frames));
     std::vector<float> outL(static_cast<std::size_t>(frames), 0.0f);
@@ -138,26 +138,37 @@ int wmain(int argc, wchar_t** argv) {
 
     bool ok = true;
 
-    // Repeated blocks at the same configuration.
+    // Repeated blocks at the same configuration, using the default parameter
+    // value recovered by the x86 pre-scan manifest.
     for (int n = 0; n < 8 && ok; ++n)
         ok = processAndCheck(effect, 64, static_cast<float>(n) * 0.01f);
 
-    // Verify a MIDI Note On crosses x64 -> x86 and affects the mock plugin.
+    // Verify set/getParameter crosses the bridge and changes audio.
+    if (ok) {
+        effect->setParameter(effect, 0, 0.25f);
+        const float cached = effect->getParameter(effect, 0);
+        ok = std::fabs(cached - 0.25f) < 0.00001f &&
+             processAndCheck(effect, 64, 0.15f, 0.25f);
+        std::cout << "parameter=" << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    // Verify a MIDI Note On crosses x64 -> x86 and combines with the
+    // parameter state already applied to the real 32-bit plugin.
     if (ok)
         ok = sendNoteOn(effect, 60, 100) &&
-             processAndCheck(effect, 64, 0.20f, 0.060f);
+             processAndCheck(effect, 64, 0.20f, 0.310f);
 
     // Restart before the remaining audio-only lifecycle checks so MIDI state resets.
     if (ok)
         ok = effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f) != 0 &&
              configure(effect, 44100.0f, 128) &&
              effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0 &&
-             processAndCheck(effect, 128, 0.25f);
+             processAndCheck(effect, 128, 0.25f, 0.25f);
 
 
     if (ok)
         ok = configure(effect, 96000.0f, 32) &&
-             processAndCheck(effect, 32, 0.5f);
+             processAndCheck(effect, 32, 0.5f, 0.25f);
 
     // Stop transport/plugin processing and restart the helper path.
     if (ok)
@@ -166,7 +177,7 @@ int wmain(int argc, wchar_t** argv) {
     if (ok)
         ok = configure(effect, 48000.0f, 64) &&
              effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0 &&
-             processAndCheck(effect, 64, 0.75f);
+             processAndCheck(effect, 64, 0.75f, 0.25f);
 
     effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
     effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);

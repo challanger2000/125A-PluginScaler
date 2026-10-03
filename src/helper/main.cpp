@@ -61,6 +61,8 @@ int writeVst2Manifest(const std::filesystem::path& path,
         << "inputs=" << result.numInputs << "\n"
         << "outputs=" << result.numOutputs << "\n"
         << "flags=" << result.flags << "\n";
+    for (std::size_t i = 0; i < result.parameterDefaults.size(); ++i)
+        out << "param." << i << "=" << result.parameterDefaults[i] << "\n";
     return out ? 0 : 22;
 }
 
@@ -105,6 +107,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
     formats::VST2PluginModule module;
     std::int32_t configuredBlockSize = 0;
     std::uint32_t configuredSampleRate = 0;
+    std::uint32_t appliedParameterGeneration = 0;
 
     for (;;) {
         if (!channel.waitForInput(std::chrono::seconds(10))) {
@@ -130,7 +133,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
             block->header.sampleRateHz == 0 ||
             block->header.inputChannels > ipc::kMaxAudioChannels ||
             block->header.outputChannels > ipc::kMaxAudioChannels ||
-            block->header.midiEventCount > ipc::kMaxMidiEvents) {
+            block->header.midiEventCount > ipc::kMaxMidiEvents ||
+            block->header.parameterCount > ipc::kMaxParameters) {
             block->header.errorCode = 102;
             block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
                                       std::memory_order_release);
@@ -160,6 +164,27 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
             configuredBlockSize = requestedBlockSize;
             configuredSampleRate = requestedSampleRate;
+            appliedParameterGeneration = 0;
+        }
+
+        if (block->header.parameterCount > 0 &&
+            appliedParameterGeneration != block->header.parameterGeneration) {
+            bool parameterOk = true;
+            for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
+                if (!module.setParameter(static_cast<std::int32_t>(i),
+                                         block->parameterValues[i])) {
+                    parameterOk = false;
+                    break;
+                }
+            }
+            if (!parameterOk) {
+                block->header.errorCode = 105;
+                block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Error),
+                                          std::memory_order_release);
+                channel.signalOutput();
+                continue;
+            }
+            appliedParameterGeneration = block->header.parameterGeneration;
         }
 
         if (block->header.midiEventCount > 0) {

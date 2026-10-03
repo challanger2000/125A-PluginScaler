@@ -6,7 +6,8 @@
 namespace pluginscaler::ipc {
 
 inline constexpr std::uint32_t kAudioSharedMagic = 0x41505341u; // "ASPA"
-inline constexpr std::uint32_t kAudioSharedVersion = 3;
+inline constexpr std::uint32_t kAudioSharedVersion = 4;
+inline constexpr std::uint32_t kMaxParameters = 2048;
 inline constexpr std::uint32_t kMaxMidiEvents = 256;
 inline constexpr std::uint32_t kMaxAudioChannels = 8;
 inline constexpr std::uint32_t kMaxAudioFrames = 2048;
@@ -31,7 +32,9 @@ struct alignas(64) AudioSharedHeader {
     std::atomic<std::uint32_t> state{static_cast<std::uint32_t>(AudioBlockState::Idle)};
     std::uint32_t errorCode{0};
     std::uint32_t midiEventCount{0};
-    std::uint8_t reserved[20]{};
+    std::uint32_t parameterCount{0};
+    std::uint32_t parameterGeneration{0};
+    std::uint8_t reserved[12]{};
 };
 
 struct MidiSharedEvent {
@@ -44,6 +47,7 @@ struct MidiSharedEvent {
 struct AudioSharedBlock {
     AudioSharedHeader header{};
     MidiSharedEvent midiEvents[kMaxMidiEvents]{};
+    float parameterValues[kMaxParameters]{};
     float inputs[kMaxAudioChannels][kMaxAudioFrames]{};
     float outputs[kMaxAudioChannels][kMaxAudioFrames]{};
 };

@@ -80,6 +80,34 @@ bool callDispatcherSafely(AEffect* effect,
 #endif
 }
 
+bool callSetParameterSafely(AEffect* effect, VstInt32 index, float value) noexcept {
+    if (!effect || !effect->setParameter) return false;
+#if defined(_MSC_VER)
+    __try {
+        effect->setParameter(effect, index, value);
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+#else
+    effect->setParameter(effect, index, value);
+    return true;
+#endif
+}
+
+float callGetParameterSafely(AEffect* effect, VstInt32 index) noexcept {
+    if (!effect || !effect->getParameter) return 0.0f;
+#if defined(_MSC_VER)
+    __try {
+        return effect->getParameter(effect, index);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return 0.0f;
+    }
+#else
+    return effect->getParameter(effect, index);
+#endif
+}
+
 bool callProcessReplacingSafely(AEffect* effect,
                                 float** inputs,
                                 float** outputs,
@@ -198,6 +226,12 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     result.numInputs = effect_->numInputs;
     result.numOutputs = effect_->numOutputs;
     result.flags = effect_->flags;
+    if (effect_->numParams > 0 && effect_->getParameter) {
+        result.parameterDefaults.resize(static_cast<std::size_t>(effect_->numParams));
+        for (VstInt32 i = 0; i < effect_->numParams; ++i)
+            result.parameterDefaults[static_cast<std::size_t>(i)] =
+                callGetParameterSafely(effect_, i);
+    }
     result.effectName = queryString(effect_, EffGetEffectName);
     result.vendor = queryString(effect_, EffGetVendorString);
     result.product = queryString(effect_, EffGetProductString);
@@ -273,6 +307,16 @@ bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
     VstIntPtr result = 0;
     return callDispatcherSafely(effect_, EffProcessEvents, 0, 0, list, 0.0f, &result) &&
            result != 0;
+}
+
+bool VST2PluginModule::setParameter(std::int32_t index, float value) noexcept {
+    if (!effect_ || index < 0 || index >= effect_->numParams) return false;
+    return callSetParameterSafely(effect_, index, value);
+}
+
+float VST2PluginModule::getParameter(std::int32_t index) const noexcept {
+    if (!effect_ || index < 0 || index >= effect_->numParams) return 0.0f;
+    return callGetParameterSafely(effect_, index);
 }
 
 std::int32_t VST2PluginModule::numInputs() const noexcept {

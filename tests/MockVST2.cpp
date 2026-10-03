@@ -15,6 +15,7 @@ struct MockState {
     bool mains{false};
     bool midiSeen{false};
     std::uint8_t lastMidiNote{0};
+    float parameters[16]{0.125f};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr value, void* ptr, float opt) {
@@ -85,9 +86,22 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs, 
                 : 0.0f;
             const float midiOffset =
                 (state && state->midiSeen) ? static_cast<float>(state->lastMidiNote) / 1000.0f : 0.0f;
-            outputs[ch][i] = in * 2.0f + midiOffset;
+            const float parameterOffset = state ? state->parameters[0] : 0.0f;
+            outputs[ch][i] = in * 2.0f + midiOffset + parameterOffset;
         }
     }
+}
+
+void __cdecl setParameter(AEffect* effect, VstInt32 index, float value) {
+    auto* state = static_cast<MockState*>(effect ? effect->object : nullptr);
+    if (state && index >= 0 && index < 16)
+        state->parameters[index] = value;
+}
+
+float __cdecl getParameter(AEffect* effect, VstInt32 index) {
+    auto* state = static_cast<MockState*>(effect ? effect->object : nullptr);
+    if (!state || index < 0 || index >= 16) return 0.0f;
+    return state->parameters[index];
 }
 
 } // namespace
@@ -100,6 +114,8 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->magic = kEffectMagic;
     effect->dispatcher = dispatch;
     effect->processReplacing = processReplacing;
+    effect->setParameter = setParameter;
+    effect->getParameter = getParameter;
     effect->numPrograms = 8;
     effect->numParams = 16;
     effect->numInputs = 2;

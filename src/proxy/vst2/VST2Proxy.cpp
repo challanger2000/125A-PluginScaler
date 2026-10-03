@@ -13,6 +13,7 @@
 #include <memory>
 #include <fstream>
 #include <sstream>
+#include <vector>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -32,6 +33,7 @@ struct ProxyManifest {
     VstInt32 numInputs{2};
     VstInt32 numOutputs{2};
     VstInt32 flags{1 << 4};
+    std::vector<float> parameterDefaults;
     bool valid{false};
 };
 
@@ -50,6 +52,8 @@ struct ProxyInstance {
     std::uint64_t sequence{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
+    std::vector<float> parameterValues;
+    std::uint32_t parameterGeneration{1};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -96,6 +100,12 @@ ProxyManifest loadManifest() {
             else if (key == "inputs") m.numInputs = static_cast<VstInt32>(std::stol(value));
             else if (key == "outputs") m.numOutputs = static_cast<VstInt32>(std::stol(value));
             else if (key == "flags") m.flags = static_cast<VstInt32>(std::stol(value));
+            else if (key.rfind("param.", 0) == 0) {
+                const auto index = static_cast<std::size_t>(std::stoul(key.substr(6)));
+                if (m.parameterDefaults.size() <= index)
+                    m.parameterDefaults.resize(index + 1, 0.0f);
+                m.parameterDefaults[index] = std::stof(value);
+            }
         } catch (...) {
             return ProxyManifest{};
         }
@@ -103,7 +113,10 @@ ProxyManifest loadManifest() {
 
     m.valid = formatOk &&
         m.numPrograms >= 0 && m.numParams >= 0 &&
-        m.numInputs >= 0 && m.numOutputs >= 0;
+        m.numInputs >= 0 && m.numOutputs >= 0 &&
+        m.numParams <= static_cast<VstInt32>(pluginscaler::ipc::kMaxParameters);
+    if (m.valid)
+        m.parameterDefaults.resize(static_cast<std::size_t>(m.numParams), 0.0f);
     return m;
 }
 
@@ -306,6 +319,13 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     for (std::uint32_t i = 0; i < inst->pendingMidiCount; ++i)
         block->midiEvents[i] = inst->pendingMidi[i];
 
+    block->header.parameterCount = static_cast<std::uint32_t>(
+        std::min<std::size_t>(inst->parameterValues.size(),
+                              pluginscaler::ipc::kMaxParameters));
+    block->header.parameterGeneration = inst->parameterGeneration;
+    for (std::uint32_t i = 0; i < block->header.parameterCount; ++i)
+        block->parameterValues[i] = inst->parameterValues[i];
+
     for (std::uint32_t ch = 0; ch < inChannels; ++ch) {
         if (inputs && inputs[ch])
             std::copy(inputs[ch], inputs[ch] + frames, block->inputs[ch]);
@@ -347,8 +367,25 @@ void __cdecl process(AEffect* effect, float** inputs, float** outputs, VstInt32 
     processReplacing(effect, inputs, outputs, frames);
 }
 
-void __cdecl setParameter(AEffect*, VstInt32, float) {}
-float __cdecl getParameter(AEffect*, VstInt32) { return 0.0f; }
+void __cdecl setParameter(AEffect* effect, VstInt32 index, float value) {
+    auto* inst = self(effect);
+    if (!inst || index < 0 ||
+        index >= static_cast<VstInt32>(inst->parameterValues.size()))
+        return;
+    inst->parameterValues[static_cast<std::size_t>(index)] =
+        std::clamp(value, 0.0f, 1.0f);
+    ++inst->parameterGeneration;
+    if (inst->parameterGeneration == 0)
+        inst->parameterGeneration = 1;
+}
+
+float __cdecl getParameter(AEffect* effect, VstInt32 index) {
+    auto* inst = self(effect);
+    if (!inst || index < 0 ||
+        index >= static_cast<VstInt32>(inst->parameterValues.size()))
+        return 0.0f;
+    return inst->parameterValues[static_cast<std::size_t>(index)];
+}
 
 } // namespace
 
@@ -361,6 +398,7 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     auto* inst = new ProxyInstance{};
     inst->host = host;
     inst->manifest = loadManifest();
+    inst->parameterValues = inst->manifest.parameterDefaults;
 
     inst->effect.magic = kEffectMagic;
     inst->effect.dispatcher = dispatcher;
