@@ -392,10 +392,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 const auto* p = static_cast<const std::uint8_t*>(bits);
                 if (pixelBytes < 4) return 0;
                 std::size_t score = 0;
-                const std::size_t step = (std::max<std::size_t>)(4, pixelBytes / 8192u);
+                const std::size_t totalPixels =
+                    static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+                const std::size_t pixelStep =
+                    (std::max<std::size_t>)(1, totalPixels / 8192u);
                 std::uint8_t lastR = 0, lastG = 0, lastB = 0;
                 bool haveLast = false;
-                for (std::size_t i = 0; i + 2 < pixelBytes; i += step) {
+                for (std::size_t pixel = 0; pixel < totalPixels; pixel += pixelStep) {
+                    const std::size_t i = pixel * 4u;
                     const std::uint8_t b = p[i + 0];
                     const std::uint8_t g = p[i + 1];
                     const std::uint8_t r = p[i + 2];
