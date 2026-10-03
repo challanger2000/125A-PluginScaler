@@ -303,7 +303,33 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 break;
 
             std::vector<std::uint8_t> reply;
-            {
+
+            if (req.command == ipc::ControlCommand::OpenEditor) {
+                if (!payload.empty()) {
+                    resp.status = ipc::ControlStatus::InvalidRequest;
+                } else {
+                    const LRESULT editorResult = SendMessageW(
+                        guiContext.surrogate, kEditorOpenMessage, 0, 0);
+                    HWND editor = reinterpret_cast<HWND>(editorResult);
+                    if (!editor || !IsWindow(editor)) {
+                        resp.status = ipc::ControlStatus::PluginError;
+                    } else {
+                        ipc::EditorOpenResult result{};
+                        result.surrogateWindow = static_cast<std::uint64_t>(
+                            reinterpret_cast<std::uintptr_t>(guiContext.surrogate));
+                        result.editorWindow = static_cast<std::uint64_t>(
+                            reinterpret_cast<std::uintptr_t>(editor));
+                        reply.resize(sizeof(result));
+                        std::memcpy(reply.data(), &result, sizeof(result));
+                    }
+                }
+            } else if (req.command == ipc::ControlCommand::CloseEditor) {
+                if (!SendMessageW(guiContext.surrogate,
+                                  kEditorCloseMessage, 0, 0))
+                    resp.status = ipc::ControlStatus::PluginError;
+            } else if (req.command == ipc::ControlCommand::Shutdown) {
+                controlStop.store(true, std::memory_order_release);
+            } else {
                 std::lock_guard<std::mutex> lock(moduleMutex);
                 switch (req.command) {
                 case ipc::ControlCommand::GetState: {
@@ -347,35 +373,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     }
                     break;
                 }
-                case ipc::ControlCommand::OpenEditor: {
-                    if (!payload.empty()) {
-                        resp.status = ipc::ControlStatus::InvalidRequest;
-                        break;
-                    }
-                    const LRESULT editorResult = SendMessageW(
-                        guiContext.surrogate, kEditorOpenMessage, 0, 0);
-                    HWND editor = reinterpret_cast<HWND>(editorResult);
-                    if (!editor || !IsWindow(editor)) {
-                        resp.status = ipc::ControlStatus::PluginError;
-                        break;
-                    }
-                    ipc::EditorOpenResult result{};
-                    result.surrogateWindow = static_cast<std::uint64_t>(
-                        reinterpret_cast<std::uintptr_t>(guiContext.surrogate));
-                    result.editorWindow = static_cast<std::uint64_t>(
-                        reinterpret_cast<std::uintptr_t>(editor));
-                    reply.resize(sizeof(result));
-                    std::memcpy(reply.data(), &result, sizeof(result));
-                    break;
-                }
-                case ipc::ControlCommand::CloseEditor:
-                    if (!SendMessageW(guiContext.surrogate,
-                                      kEditorCloseMessage, 0, 0))
-                        resp.status = ipc::ControlStatus::PluginError;
-                    break;
-                case ipc::ControlCommand::Shutdown:
-                    controlStop.store(true, std::memory_order_release);
-                    break;
                 default:
                     resp.status = ipc::ControlStatus::InvalidRequest;
                     break;
