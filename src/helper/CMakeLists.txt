@@ -5,6 +5,7 @@ add_executable(PluginScalerHelper
 target_link_libraries(PluginScalerHelper PRIVATE
     PluginScalerCore
     PluginScalerIPC
+    PluginScalerVST2Adapter
 )
 
 target_compile_features(PluginScalerHelper PRIVATE cxx_std_20)

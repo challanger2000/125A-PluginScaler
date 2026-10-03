@@ -1,5 +1,6 @@
 add_library(PluginScalerVST2Adapter STATIC
     VST2AdapterStub.cpp
+    VST2PluginModule.cpp
 )
 
 target_include_directories(PluginScalerVST2Adapter PUBLIC

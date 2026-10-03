@@ -1,0 +1,80 @@
+#pragma once
+
+// Minimal independently maintained VST2 interoperability ABI used only for
+// loading/hosting legacy binaries. No Steinberg VST2 SDK headers are shipped.
+
+#include <cstdint>
+
+namespace pluginscaler::formats::vst2abi {
+
+using VstInt32 = std::int32_t;
+using VstIntPtr = std::intptr_t;
+
+struct AEffect;
+
+using AudioMasterCallback = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
+using DispatcherProc = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
+using ProcessProc = void (__cdecl *)(AEffect*, float**, float**, VstInt32);
+using SetParameterProc = void (__cdecl *)(AEffect*, VstInt32, float);
+using GetParameterProc = float (__cdecl *)(AEffect*, VstInt32);
+using ProcessDoubleProc = void (__cdecl *)(AEffect*, double**, double**, VstInt32);
+using EntryProc = AEffect* (__cdecl *)(AudioMasterCallback);
+
+#pragma pack(push, 8)
+struct AEffect {
+    VstInt32 magic;
+    DispatcherProc dispatcher;
+    ProcessProc process;
+    SetParameterProc setParameter;
+    GetParameterProc getParameter;
+    VstInt32 numPrograms;
+    VstInt32 numParams;
+    VstInt32 numInputs;
+    VstInt32 numOutputs;
+    VstInt32 flags;
+    VstIntPtr reserved1;
+    VstIntPtr reserved2;
+    VstInt32 initialDelay;
+    VstInt32 realQualities;
+    VstInt32 offQualities;
+    float ioRatio;
+    void* object;
+    void* user;
+    VstInt32 uniqueId;
+    VstInt32 version;
+    ProcessProc processReplacing;
+    ProcessDoubleProc processDoubleReplacing;
+    char future[56];
+};
+#pragma pack(pop)
+
+inline constexpr VstInt32 kEffectMagic = 0x56737450; // VstP
+
+enum DispatcherOpcode : VstInt32 {
+    EffOpen = 0,
+    EffClose = 1,
+    EffGetProgram = 3,
+    EffSetSampleRate = 10,
+    EffSetBlockSize = 11,
+    EffMainsChanged = 12,
+    EffEditGetRect = 13,
+    EffEditOpen = 14,
+    EffEditClose = 15,
+    EffGetEffectName = 45,
+    EffGetVendorString = 47,
+    EffGetProductString = 48,
+    EffGetVendorVersion = 49,
+    EffCanDo = 51
+};
+
+enum AudioMasterOpcode : VstInt32 {
+    AudioMasterVersion = 1,
+    AudioMasterGetSampleRate = 16,
+    AudioMasterGetBlockSize = 17,
+    AudioMasterGetVendorString = 32,
+    AudioMasterGetProductString = 33,
+    AudioMasterGetVendorVersion = 34,
+    AudioMasterCanDo = 37
+};
+
+} // namespace pluginscaler::formats::vst2abi
