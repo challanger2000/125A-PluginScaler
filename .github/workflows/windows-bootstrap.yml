@@ -163,6 +163,9 @@ jobs:
           if ($joined -notmatch "synth-metadata=PASS") {
             throw "Synth metadata marker missing"
           }
+          if ($joined -notmatch "editor-scale=PASS") {
+            throw "Scaled editor render marker missing"
+          }
           if ($joined -notmatch "editor-open=PASS") {
             throw "Cross-process editor open marker missing"
           }

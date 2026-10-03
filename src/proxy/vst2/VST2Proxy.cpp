@@ -52,6 +52,13 @@ struct ProxyInstance {
     VstRect editorRect{};
     HWND editorWindow{nullptr};
     HWND editorSurrogate{nullptr};
+    HWND editorSurface{nullptr};
+    HWND editorHost{nullptr};
+    int scalePercent{200};
+    std::vector<std::uint8_t> editorBitmap;
+    std::uint32_t editorBitmapWidth{0};
+    std::uint32_t editorBitmapHeight{0};
+    std::uint32_t editorBitmapStride{0};
     bool editorOpen{false};
 
     double sampleRate{48000.0};
@@ -218,14 +225,107 @@ void refreshParametersFromHelper(ProxyInstance* inst) {
         inst->parameterGeneration = 1;
 }
 
+bool captureEditorBitmap(ProxyInstance* inst) {
+    if (!inst) return false;
+    std::vector<std::uint8_t> reply;
+    if (!controlCall(inst, pluginscaler::ipc::ControlCommand::CaptureEditor,
+                     0, nullptr, 0, reply) ||
+        reply.size() < sizeof(pluginscaler::ipc::EditorBitmapHeader))
+        return false;
+
+    pluginscaler::ipc::EditorBitmapHeader header{};
+    std::memcpy(&header, reply.data(), sizeof(header));
+    if (header.format != 1 || header.width == 0 || header.height == 0 ||
+        header.strideBytes < header.width * 4u)
+        return false;
+
+    const std::uint64_t pixels =
+        static_cast<std::uint64_t>(header.strideBytes) * header.height;
+    if (pixels > pluginscaler::ipc::kMaxControlPayload ||
+        sizeof(header) + pixels != reply.size())
+        return false;
+
+    inst->editorBitmap.assign(reply.begin() + sizeof(header), reply.end());
+    inst->editorBitmapWidth = header.width;
+    inst->editorBitmapHeight = header.height;
+    inst->editorBitmapStride = header.strideBytes;
+    return true;
+}
+
+LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* inst = reinterpret_cast<ProxyInstance*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        inst = static_cast<ProxyInstance*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(inst));
+    }
+
+    if (!inst)
+        return DefWindowProcW(hwnd, msg, wp, lp);
+
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+
+        if (captureEditorBitmap(inst) && !inst->editorBitmap.empty()) {
+            BITMAPINFO bmi{};
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = static_cast<LONG>(inst->editorBitmapWidth);
+            bmi.bmiHeader.biHeight = -static_cast<LONG>(inst->editorBitmapHeight);
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+            SetStretchBltMode(dc, HALFTONE);
+            StretchDIBits(dc,
+                          0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                          0, 0,
+                          static_cast<int>(inst->editorBitmapWidth),
+                          static_cast<int>(inst->editorBitmapHeight),
+                          inst->editorBitmap.data(),
+                          &bmi, DIB_RGB_COLORS, SRCCOPY);
+        } else {
+            FillRect(dc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
+bool ensureScalerSurfaceClass() {
+    static const wchar_t* kClassName = L"125A_PluginScaler_ScaledSurface";
+    static bool ready = false;
+    if (ready) return true;
+
+    WNDCLASSW wc{};
+    wc.lpfnWndProc = scalerSurfaceProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kClassName;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    ATOM atom = RegisterClassW(&wc);
+    if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        return false;
+    ready = true;
+    return true;
+}
+
 void stopBridge(ProxyInstance* inst) noexcept {
     if (!inst) return;
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if (inst->editorWindow && inst->editorSurrogate &&
-                IsWindow(inst->editorWindow) && IsWindow(inst->editorSurrogate))
-                SetParent(inst->editorWindow, inst->editorSurrogate);
+            if (inst->editorSurface && IsWindow(inst->editorSurface))
+                DestroyWindow(inst->editorSurface);
+            inst->editorSurface = nullptr;
             std::vector<std::uint8_t> ignored;
             (void)controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
                               0, nullptr, 0, ignored);
@@ -377,10 +477,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return 0;
         pluginscaler::ipc::EditorRectPayload remote{};
         std::memcpy(&remote, reply.data(), sizeof(remote));
-        inst->editorRect.left = static_cast<std::int16_t>(remote.left);
-        inst->editorRect.top = static_cast<std::int16_t>(remote.top);
-        inst->editorRect.right = static_cast<std::int16_t>(remote.right);
-        inst->editorRect.bottom = static_cast<std::int16_t>(remote.bottom);
+        const int nativeWidth = remote.right - remote.left;
+        const int nativeHeight = remote.bottom - remote.top;
+        const int scaledWidth = nativeWidth * inst->scalePercent / 100;
+        const int scaledHeight = nativeHeight * inst->scalePercent / 100;
+        inst->editorRect.left = 0;
+        inst->editorRect.top = 0;
+        inst->editorRect.right = static_cast<std::int16_t>(scaledWidth);
+        inst->editorRect.bottom = static_cast<std::int16_t>(scaledHeight);
         *static_cast<VstRect**>(ptr) = &inst->editorRect;
         return 1;
     }
@@ -400,25 +504,27 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         HWND surrogate = reinterpret_cast<HWND>(
             static_cast<std::uintptr_t>(result.surrogateWindow));
         HWND parent = static_cast<HWND>(ptr);
-        if (!editor || !surrogate || !IsWindow(editor) || !IsWindow(surrogate))
-            return 0;
-
-        LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-        style &= ~static_cast<LONG_PTR>(WS_POPUP);
-        style |= WS_CHILD;
-        SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-        if (!SetParent(editor, parent))
+        if (!editor || !surrogate || !IsWindow(editor) || !IsWindow(surrogate) ||
+            !ensureScalerSurfaceClass())
             return 0;
 
         const int width = inst->editorRect.right - inst->editorRect.left;
         const int height = inst->editorRect.bottom - inst->editorRect.top;
-        if (width > 0 && height > 0)
-            MoveWindow(editor, 0, 0, width, height, TRUE);
+        HWND surface = CreateWindowExW(
+            0, L"125A_PluginScaler_ScaledSurface", L"",
+            WS_CHILD | WS_VISIBLE,
+            0, 0, width, height,
+            parent, nullptr, GetModuleHandleW(nullptr), inst);
+        if (!surface)
+            return 0;
 
         inst->editorWindow = editor;
         inst->editorSurrogate = surrogate;
+        inst->editorSurface = surface;
+        inst->editorHost = parent;
         inst->editorOpen = true;
+        InvalidateRect(surface, nullptr, TRUE);
+        UpdateWindow(surface);
         return 1;
     }
 
@@ -426,9 +532,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if (inst->editorWindow && inst->editorSurrogate &&
-            IsWindow(inst->editorWindow) && IsWindow(inst->editorSurrogate))
-            SetParent(inst->editorWindow, inst->editorSurrogate);
+        if (inst->editorSurface && IsWindow(inst->editorSurface))
+            DestroyWindow(inst->editorSurface);
+        inst->editorSurface = nullptr;
 
         std::vector<std::uint8_t> ignored;
         const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
@@ -635,6 +741,13 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     inst->host = host;
     inst->manifest = loadManifest();
     inst->parameterValues = inst->manifest.parameterDefaults;
+    if (const auto scale = getenvWide(L"PLUGINSCALER_SCALE_PERCENT"); !scale.empty()) {
+        try {
+            inst->scalePercent = std::clamp(std::stoi(scale), 100, 400);
+        } catch (...) {
+            inst->scalePercent = 200;
+        }
+    }
 
     inst->effect.magic = kEffectMagic;
     inst->effect.dispatcher = dispatcher;

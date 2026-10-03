@@ -10,6 +10,40 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+    case WM_PRINT:
+    case WM_PRINTCLIENT: {
+        HDC dc = nullptr;
+        PAINTSTRUCT ps{};
+        bool paint = msg == WM_PAINT;
+        if (paint)
+            dc = BeginPaint(hwnd, &ps);
+        else
+            dc = reinterpret_cast<HDC>(wp);
+        if (dc) {
+            RECT rc{};
+            GetClientRect(hwnd, &rc);
+            HBRUSH background = CreateSolidBrush(RGB(24, 96, 208));
+            FillRect(dc, &rc, background);
+            DeleteObject(background);
+            RECT marker{20, 20, 80, 60};
+            HBRUSH accent = CreateSolidBrush(RGB(240, 64, 32));
+            FillRect(dc, &marker, accent);
+            DeleteObject(accent);
+        }
+        if (paint)
+            EndPaint(hwnd, &ps);
+        return 1;
+    }
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
 struct SynthState {
     float sampleRate{0.0f};
     VstInt32 blockSize{0};
@@ -57,7 +91,7 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
             static ATOM atom = 0;
             if (!atom) {
                 WNDCLASSW wc{};
-                wc.lpfnWndProc = DefWindowProcW;
+                wc.lpfnWndProc = mockEditorProc;
                 wc.hInstance = GetModuleHandleW(nullptr);
                 wc.lpszClassName = kClassName;
                 atom = RegisterClassW(&wc);

@@ -107,6 +107,11 @@ struct EditorGuiContext {
 inline constexpr UINT kEditorOpenMessage = WM_APP + 0x125;
 inline constexpr UINT kEditorCloseMessage = WM_APP + 0x126;
 inline constexpr UINT kEditorShutdownMessage = WM_APP + 0x127;
+inline constexpr UINT kEditorCaptureMessage = WM_APP + 0x128;
+
+struct EditorCaptureRequest {
+    std::vector<std::uint8_t>* bytes{nullptr};
+};
 
 BOOL CALLBACK firstChildProc(HWND hwnd, LPARAM param) {
     auto* result = reinterpret_cast<HWND*>(param);
@@ -148,6 +153,60 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         const bool ok = ctx->module->closeEditor();
         ctx->editor = nullptr;
         return ok ? 1 : 0;
+    }
+    case kEditorCaptureMessage: {
+        auto* request = reinterpret_cast<EditorCaptureRequest*>(lp);
+        if (!request || !request->bytes || !ctx->editor || !IsWindow(ctx->editor))
+            return 0;
+
+        RECT rc{};
+        if (!GetClientRect(ctx->editor, &rc))
+            return 0;
+        const int width = rc.right - rc.left;
+        const int height = rc.bottom - rc.top;
+        if (width <= 0 || height <= 0)
+            return 0;
+
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        HDC screen = GetDC(nullptr);
+        HDC mem = CreateCompatibleDC(screen);
+        void* bits = nullptr;
+        HBITMAP bitmap = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS,
+                                          &bits, nullptr, 0);
+        ReleaseDC(nullptr, screen);
+        if (!mem || !bitmap || !bits) {
+            if (bitmap) DeleteObject(bitmap);
+            if (mem) DeleteDC(mem);
+            return 0;
+        }
+
+        HGDIOBJ old = SelectObject(mem, bitmap);
+        const LRESULT printed = SendMessageW(
+            ctx->editor, WM_PRINT, reinterpret_cast<WPARAM>(mem),
+            PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
+        SelectObject(mem, old);
+
+        const std::size_t stride = static_cast<std::size_t>(width) * 4u;
+        const std::size_t pixelBytes = stride * static_cast<std::size_t>(height);
+        pluginscaler::ipc::EditorBitmapHeader header{};
+        header.width = static_cast<std::uint32_t>(width);
+        header.height = static_cast<std::uint32_t>(height);
+        header.strideBytes = static_cast<std::uint32_t>(stride);
+
+        request->bytes->resize(sizeof(header) + pixelBytes);
+        std::memcpy(request->bytes->data(), &header, sizeof(header));
+        std::memcpy(request->bytes->data() + sizeof(header), bits, pixelBytes);
+
+        DeleteObject(bitmap);
+        DeleteDC(mem);
+        return printed != 0 || pixelBytes > 0 ? 1 : 0;
     }
     case kEditorShutdownMessage:
         DestroyWindow(hwnd);
@@ -326,6 +385,13 @@ int runSharedVst2Server(const std::filesystem::path& path,
             } else if (req.command == ipc::ControlCommand::CloseEditor) {
                 if (!SendMessageW(guiContext.surrogate,
                                   kEditorCloseMessage, 0, 0))
+                    resp.status = ipc::ControlStatus::PluginError;
+            } else if (req.command == ipc::ControlCommand::CaptureEditor) {
+                EditorCaptureRequest capture{};
+                capture.bytes = &reply;
+                if (!SendMessageW(guiContext.surrogate,
+                                  kEditorCaptureMessage, 0,
+                                  reinterpret_cast<LPARAM>(&capture)))
                     resp.status = ipc::ControlStatus::PluginError;
             } else if (req.command == ipc::ControlCommand::Shutdown) {
                 controlStop.store(true, std::memory_order_release);

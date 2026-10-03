@@ -130,6 +130,7 @@ int wmain(int argc, wchar_t** argv) {
     SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
     SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
     SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
+    SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"200");
 
     HMODULE proxy = LoadLibraryW(argv[1]);
     if (!proxy) return 2;
@@ -162,11 +163,26 @@ int wmain(int argc, wchar_t** argv) {
         ok = editorHost != nullptr &&
              effect->dispatcher(effect, EffEditGetRect, 0, 0, &rect, 0.0f) != 0 &&
              rect != nullptr &&
-             (rect->right - rect->left) == 320 &&
-             (rect->bottom - rect->top) == 180 &&
+             (rect->right - rect->left) == 640 &&
+             (rect->bottom - rect->top) == 360 &&
              effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f) != 0;
         Sleep(50);
         ok = ok && childCount(editorHost) >= 1;
+
+        HWND surface = FindWindowExW(editorHost, nullptr,
+                                     L"125A_PluginScaler_ScaledSurface", nullptr);
+        if (ok && surface) {
+            HDC dc = GetDC(surface);
+            const COLORREF pixel = GetPixel(dc, 100, 80);
+            ReleaseDC(surface, dc);
+            ok = pixel != CLR_INVALID &&
+                 GetRValue(pixel) > 180 &&
+                 GetGValue(pixel) < 120 &&
+                 GetBValue(pixel) < 100;
+        } else {
+            ok = false;
+        }
+        std::cout << "editor-scale=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
     }
 
