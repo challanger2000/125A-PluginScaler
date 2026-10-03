@@ -15,6 +15,7 @@
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -116,6 +117,65 @@ struct EditorCaptureRequest {
     std::vector<std::uint8_t>* bytes{nullptr};
 };
 
+std::filesystem::path helperDirectory() {
+    std::array<wchar_t, 32768> path{};
+    const DWORD len = GetModuleFileNameW(nullptr, path.data(),
+                                         static_cast<DWORD>(path.size()));
+    if (len == 0 || len >= path.size())
+        return std::filesystem::current_path();
+    return std::filesystem::path(std::wstring(path.data(), len)).parent_path();
+}
+
+std::wstring windowText(HWND hwnd) {
+    std::array<wchar_t, 512> text{};
+    const int len = GetWindowTextW(hwnd, text.data(), static_cast<int>(text.size()));
+    return len > 0 ? std::wstring(text.data(), static_cast<std::size_t>(len)) : L"";
+}
+
+std::wstring windowClass(HWND hwnd) {
+    std::array<wchar_t, 512> text{};
+    const int len = GetClassNameW(hwnd, text.data(), static_cast<int>(text.size()));
+    return len > 0 ? std::wstring(text.data(), static_cast<std::size_t>(len)) : L"";
+}
+
+void appendEditorDiagnostic(const std::wstring& line) {
+    const auto path = helperDirectory() / L"PluginScaler-EditorDiagnostics.txt";
+    std::wofstream out(path, std::ios::app);
+    if (out)
+        out << line << L"\n";
+}
+
+bool saveCaptureBmp(const std::filesystem::path& path,
+                    int width, int height,
+                    const std::uint8_t* pixels,
+                    std::size_t pixelBytes) {
+    if (!pixels || width <= 0 || height <= 0)
+        return false;
+
+    BITMAPFILEHEADER fileHeader{};
+    BITMAPINFOHEADER infoHeader{};
+    infoHeader.biSize = sizeof(BITMAPINFOHEADER);
+    infoHeader.biWidth = width;
+    infoHeader.biHeight = -height;
+    infoHeader.biPlanes = 1;
+    infoHeader.biBitCount = 32;
+    infoHeader.biCompression = BI_RGB;
+    infoHeader.biSizeImage = static_cast<DWORD>(pixelBytes);
+
+    fileHeader.bfType = 0x4D42;
+    fileHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    fileHeader.bfSize = fileHeader.bfOffBits + static_cast<DWORD>(pixelBytes);
+
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+    out.write(reinterpret_cast<const char*>(&fileHeader), sizeof(fileHeader));
+    out.write(reinterpret_cast<const char*>(&infoHeader), sizeof(infoHeader));
+    out.write(reinterpret_cast<const char*>(pixels),
+              static_cast<std::streamsize>(pixelBytes));
+    return static_cast<bool>(out);
+}
+
+
 struct EditorChildCandidate {
     HWND hwnd{nullptr};
     LONG area{0};
@@ -213,6 +273,42 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         ctx->editor = child;
+
+        {
+            std::wstringstream ss;
+            RECT er{};
+            GetClientRect(child, &er);
+            ss << L"OPEN primary hwnd=0x" << std::hex
+               << reinterpret_cast<std::uintptr_t>(child) << std::dec
+               << L" class='" << windowClass(child)
+               << L"' title='" << windowText(child)
+               << L"' size=" << (er.right-er.left) << L"x" << (er.bottom-er.top)
+               << L" style=0x" << std::hex
+               << static_cast<unsigned long>(GetWindowLongPtrW(child, GWL_STYLE))
+               << L" ex=0x"
+               << static_cast<unsigned long>(GetWindowLongPtrW(child, GWL_EXSTYLE));
+            appendEditorDiagnostic(ss.str());
+
+            std::vector<HWND> diagnosticChildren;
+            EnumChildWindows(hwnd, collectChildProc,
+                             reinterpret_cast<LPARAM>(&diagnosticChildren));
+            for (HWND w : diagnosticChildren) {
+                RECT cr{};
+                GetClientRect(w, &cr);
+                std::wstringstream cs;
+                cs << L"CHILD hwnd=0x" << std::hex
+                   << reinterpret_cast<std::uintptr_t>(w) << std::dec
+                   << L" class='" << windowClass(w)
+                   << L"' title='" << windowText(w)
+                   << L"' size=" << (cr.right-cr.left) << L"x" << (cr.bottom-cr.top)
+                   << L" style=0x" << std::hex
+                   << static_cast<unsigned long>(GetWindowLongPtrW(w, GWL_STYLE))
+                   << L" ex=0x"
+                   << static_cast<unsigned long>(GetWindowLongPtrW(w, GWL_EXSTYLE));
+                appendEditorDiagnostic(cs.str());
+            }
+        }
+
         SetTimer(hwnd, kEditorIdleTimer, 30, nullptr);
         return reinterpret_cast<LRESULT>(child);
     }
@@ -316,12 +412,34 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
             std::size_t localBestScore = 0;
             std::vector<std::uint8_t> localBest;
+            std::wstring localBestMethod = L"none";
+
+            const auto dumpMethod = [&](const wchar_t* method, std::size_t score) {
+                std::wstringstream ss;
+                ss << L"CAPTURE hwnd=0x" << std::hex
+                   << reinterpret_cast<std::uintptr_t>(captureWindow) << std::dec
+                   << L" class='" << windowClass(captureWindow)
+                   << L"' size=" << width << L"x" << height
+                   << L" method=" << method << L" score=" << score;
+                appendEditorDiagnostic(ss.str());
+
+                std::wstringstream name;
+                name << L"PluginScaler-Capture-"
+                     << std::hex << reinterpret_cast<std::uintptr_t>(captureWindow)
+                     << L"-" << method << L".bmp";
+                saveCaptureBmp(helperDirectory() / name.str(),
+                               width, height,
+                               static_cast<const std::uint8_t*>(bits),
+                               pixelBytes);
+            };
 
             clearBits();
             if (PrintWindow(captureWindow, mem, PW_CLIENTONLY | 0x00000002)) {
                 const auto score = scorePixels();
+                dumpMethod(L"PrintWindow", score);
                 if (score > localBestScore) {
                     localBestScore = score;
+                    localBestMethod = L"PrintWindow";
                     localBest.assign(static_cast<const std::uint8_t*>(bits),
                                      static_cast<const std::uint8_t*>(bits) + pixelBytes);
                 }
@@ -332,8 +450,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                          PRF_CLIENT | PRF_CHILDREN | PRF_ERASEBKGND);
             {
                 const auto score = scorePixels();
+                dumpMethod(L"WM_PRINT", score);
                 if (score > localBestScore) {
                     localBestScore = score;
+                    localBestMethod = L"WM_PRINT";
                     localBest.assign(static_cast<const std::uint8_t*>(bits),
                                      static_cast<const std::uint8_t*>(bits) + pixelBytes);
                 }
@@ -344,8 +464,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             if (source) {
                 if (BitBlt(mem, 0, 0, width, height, source, 0, 0, SRCCOPY)) {
                     const auto score = scorePixels();
+                    dumpMethod(L"BitBlt", score);
                     if (score > localBestScore) {
                         localBestScore = score;
+                        localBestMethod = L"BitBlt";
                         localBest.assign(static_cast<const std::uint8_t*>(bits),
                                          static_cast<const std::uint8_t*>(bits) + pixelBytes);
                     }
@@ -362,6 +484,13 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 best.width = width;
                 best.height = height;
                 best.pixels = std::move(localBest);
+
+                std::wstringstream ss;
+                ss << L"BEST hwnd=0x" << std::hex
+                   << reinterpret_cast<std::uintptr_t>(captureWindow) << std::dec
+                   << L" method=" << localBestMethod
+                   << L" score=" << localBestScore;
+                appendEditorDiagnostic(ss.str());
             }
         }
 
