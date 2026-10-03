@@ -108,12 +108,12 @@ jobs:
       - name: Run x64 VST2 proxy through x86 helper
         shell: pwsh
         run: |
-          $host = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxyHostExe = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
           $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
           $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
           $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
 
-          & $host $proxy $helper $plugin
+          & $proxyHostExe $proxy $helper $plugin
           if ($LASTEXITCODE -ne 0) {
             throw "End-to-end x64 VST2 proxy bridge failed with exit code $LASTEXITCODE"
           }
