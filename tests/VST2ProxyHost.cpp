@@ -87,13 +87,14 @@ bool configure(AEffect* effect, float sampleRate, VstInt32 blockSize) {
 } // namespace
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 4) {
-        std::cerr << "usage: VST2ProxyHost <proxy.dll> <x86-helper.exe> <x86-plugin.dll>\n";
+    if (argc != 5) {
+        std::cerr << "usage: VST2ProxyHost <proxy.dll> <x86-helper.exe> <x86-plugin.dll> <manifest.txt>\n";
         return 1;
     }
 
     SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
     SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
+    SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
 
     HMODULE proxy = LoadLibraryW(argv[1]);
     if (!proxy) return 2;
@@ -109,6 +110,21 @@ int wmain(int argc, wchar_t** argv) {
         !effect->processReplacing) {
         FreeLibrary(proxy);
         return 4;
+    }
+
+    bool metadataOk =
+        effect->numPrograms == 8 &&
+        effect->numParams == 16 &&
+        effect->numInputs == 2 &&
+        effect->numOutputs == 2 &&
+        effect->uniqueId == 0x31323541 &&
+        effect->version == 1000 &&
+        (effect->flags & (1 << 8)) != 0;
+    std::cout << "metadata=" << (metadataOk ? "PASS" : "FAIL") << "\n";
+    if (!metadataOk) {
+        effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
+        FreeLibrary(proxy);
+        return 7;
     }
 
     effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f);

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,12 +31,37 @@ int runVst2Probe(const std::filesystem::path& path) {
         << "programs=" << result.numPrograms << '\n'
         << "params=" << result.numParams << '\n'
         << "inputs=" << result.numInputs << '\n'
-        << "outputs=" << result.numOutputs << '\n';
+        << "outputs=" << result.numOutputs << '\n'
+        << "flags=" << result.flags << '\n';
 
     if (!result.error.empty())
         std::cout << "error=" << result.error << '\n';
 
     return (result.loaded && result.opened && result.closed) ? 0 : 2;
+}
+
+int writeVst2Manifest(const std::filesystem::path& path,
+                      const std::filesystem::path& manifestPath) {
+    pluginscaler::formats::VST2PluginModule module;
+    const auto result = module.probe(path);
+    if (!(result.loaded && result.opened && result.closed))
+        return 20;
+
+    std::ofstream out(manifestPath, std::ios::binary | std::ios::trunc);
+    if (!out) return 21;
+
+    out << "format=125A-PluginScaler-VST2-Manifest-1\n"
+        << "effect=" << result.effectName << "\n"
+        << "vendor=" << result.vendor << "\n"
+        << "product=" << result.product << "\n"
+        << "uniqueId=" << result.uniqueId << "\n"
+        << "version=" << result.version << "\n"
+        << "programs=" << result.numPrograms << "\n"
+        << "params=" << result.numParams << "\n"
+        << "inputs=" << result.numInputs << "\n"
+        << "outputs=" << result.numOutputs << "\n"
+        << "flags=" << result.flags << "\n";
+    return out ? 0 : 22;
 }
 
 int runVst2AudioProbe(const std::filesystem::path& path) {
@@ -193,6 +219,9 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 3 && std::wstring_view(argv[1]) == L"--probe-vst2-audio")
         return runVst2AudioProbe(argv[2]);
 
+    if (argc == 4 && std::wstring_view(argv[1]) == L"--write-vst2-manifest")
+        return writeVst2Manifest(argv[2], argv[3]);
+
     if (argc == 6 && std::wstring_view(argv[1]) == L"--serve-vst2-shm")
         return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5]);
 
@@ -202,6 +231,7 @@ int wmain(int argc, wchar_t** argv) {
               << "usage:\n"
               << "  PluginScalerHelper --probe-vst2 <plugin.dll>\n"
               << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n"
+              << "  PluginScalerHelper --write-vst2-manifest <plugin.dll> <manifest.txt>\n"
               << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event>\n";
     return 0;
 }

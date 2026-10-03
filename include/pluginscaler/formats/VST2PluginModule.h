@@ -22,6 +22,7 @@ struct VST2ProbeResult {
     std::int32_t numParams{0};
     std::int32_t numInputs{0};
     std::int32_t numOutputs{0};
+    std::int32_t flags{0};
     std::string error;
 };
 

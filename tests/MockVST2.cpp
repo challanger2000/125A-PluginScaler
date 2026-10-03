@@ -104,6 +104,7 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numParams = 16;
     effect->numInputs = 2;
     effect->numOutputs = 2;
+    effect->flags = (1 << 4) | (1 << 8);
     effect->object = new MockState{};
     effect->uniqueId = 0x31323541;
     effect->version = 1000;

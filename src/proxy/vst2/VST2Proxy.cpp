@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <fstream>
+#include <sstream>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -19,9 +21,24 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+struct ProxyManifest {
+    std::string effectName{"125A PluginScaler"};
+    std::string vendor{"125A"};
+    std::string product{"PluginScaler VST2 Proxy"};
+    VstInt32 uniqueId{0x31535041};
+    VstInt32 version{100};
+    VstInt32 numPrograms{1};
+    VstInt32 numParams{0};
+    VstInt32 numInputs{2};
+    VstInt32 numOutputs{2};
+    VstInt32 flags{1 << 4};
+    bool valid{false};
+};
+
 struct ProxyInstance {
     AEffect effect{};
     AudioMasterCallback host{nullptr};
+    ProxyManifest manifest{};
 
     pluginscaler::ipc::AudioSharedChannel channel;
     PROCESS_INFORMATION helperProcess{};
@@ -50,6 +67,44 @@ std::wstring getenvWide(const wchar_t* name) {
 
 std::wstring quote(const std::wstring& s) {
     return L"\"" + s + L"\"";
+}
+
+ProxyManifest loadManifest() {
+    ProxyManifest m;
+    const auto path = getenvWide(L"PLUGINSCALER_TARGET_MANIFEST");
+    if (path.empty()) return m;
+
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
+    if (!in) return m;
+
+    std::string line;
+    bool formatOk = false;
+    while (std::getline(in, line)) {
+        const auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+        const auto key = line.substr(0, pos);
+        const auto value = line.substr(pos + 1);
+        try {
+            if (key == "format") formatOk = (value == "125A-PluginScaler-VST2-Manifest-1");
+            else if (key == "effect") m.effectName = value;
+            else if (key == "vendor") m.vendor = value;
+            else if (key == "product") m.product = value;
+            else if (key == "uniqueId") m.uniqueId = static_cast<VstInt32>(std::stol(value));
+            else if (key == "version") m.version = static_cast<VstInt32>(std::stol(value));
+            else if (key == "programs") m.numPrograms = static_cast<VstInt32>(std::stol(value));
+            else if (key == "params") m.numParams = static_cast<VstInt32>(std::stol(value));
+            else if (key == "inputs") m.numInputs = static_cast<VstInt32>(std::stol(value));
+            else if (key == "outputs") m.numOutputs = static_cast<VstInt32>(std::stol(value));
+            else if (key == "flags") m.flags = static_cast<VstInt32>(std::stol(value));
+        } catch (...) {
+            return ProxyManifest{};
+        }
+    }
+
+    m.valid = formatOk &&
+        m.numPrograms >= 0 && m.numParams >= 0 &&
+        m.numInputs >= 0 && m.numOutputs >= 0;
+    return m;
 }
 
 ProxyInstance* self(AEffect* effect) noexcept {
@@ -163,19 +218,19 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32,
         return 1;
 
     case EffGetEffectName:
-        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "125A PluginScaler");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, inst->manifest.effectName.c_str());
         return 1;
 
     case EffGetVendorString:
-        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "125A");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, inst->manifest.vendor.c_str());
         return 1;
 
     case EffGetProductString:
-        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, "PluginScaler VST2 Proxy");
+        if (ptr) strcpy_s(static_cast<char*>(ptr), 256, inst->manifest.product.c_str());
         return 1;
 
     case EffGetVendorVersion:
-        return 100;
+        return inst->manifest.version;
 
     case EffProcessEvents: {
         if (!ptr) return 0;
@@ -305,20 +360,21 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
 
     auto* inst = new ProxyInstance{};
     inst->host = host;
+    inst->manifest = loadManifest();
 
     inst->effect.magic = kEffectMagic;
     inst->effect.dispatcher = dispatcher;
     inst->effect.process = process;
     inst->effect.setParameter = setParameter;
     inst->effect.getParameter = getParameter;
-    inst->effect.numPrograms = 1;
-    inst->effect.numParams = 0;
-    inst->effect.numInputs = 2;
-    inst->effect.numOutputs = 2;
-    inst->effect.flags = 1 << 4; // effFlagsCanReplacing
+    inst->effect.numPrograms = inst->manifest.numPrograms;
+    inst->effect.numParams = inst->manifest.numParams;
+    inst->effect.numInputs = inst->manifest.numInputs;
+    inst->effect.numOutputs = inst->manifest.numOutputs;
+    inst->effect.flags = inst->manifest.flags;
     inst->effect.object = inst;
-    inst->effect.uniqueId = 0x31535041; // "1SPA"
-    inst->effect.version = 100;
+    inst->effect.uniqueId = inst->manifest.uniqueId;
+    inst->effect.version = inst->manifest.version;
     inst->effect.processReplacing = processReplacing;
 
     return &inst->effect;

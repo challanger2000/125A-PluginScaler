@@ -112,12 +112,22 @@ jobs:
           $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
           $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
           $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2.pluginscaler.txt"
 
-          $output = & $proxyHostExe $proxy $helper $plugin
+          & $helper --write-vst2-manifest $plugin $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "VST2 manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $output = & $proxyHostExe $proxy $helper $plugin $manifest
           $output | Write-Host
           if ($LASTEXITCODE -ne 0) {
             throw "End-to-end x64 VST2 proxy bridge failed with exit code $LASTEXITCODE"
           }
-          if (($output | Out-String) -notmatch "torture=PASS") {
+          $joined = ($output | Out-String)
+          if ($joined -notmatch "metadata=PASS") {
+            throw "Proxy metadata marker missing"
+          }
+          if ($joined -notmatch "torture=PASS") {
             throw "Proxy lifecycle torture marker missing"
           }

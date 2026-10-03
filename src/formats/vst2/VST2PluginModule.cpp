@@ -197,6 +197,7 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     result.numParams = effect_->numParams;
     result.numInputs = effect_->numInputs;
     result.numOutputs = effect_->numOutputs;
+    result.flags = effect_->flags;
     result.effectName = queryString(effect_, EffGetEffectName);
     result.vendor = queryString(effect_, EffGetVendorString);
     result.product = queryString(effect_, EffGetProductString);
