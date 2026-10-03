@@ -27,3 +27,11 @@ add_test(
 set_tests_properties(PluginScaler.VST2Probe PROPERTIES
     PASS_REGULAR_EXPRESSION "loaded=1;opened=1;closed=1;entry=VSTPluginMain;effect=125A Mock VST2"
 )
+
+add_test(
+    NAME PluginScaler.VST2AudioProbe
+    COMMAND PluginScalerHelper --probe-vst2-audio $<TARGET_FILE:MockVST2>
+)
+set_tests_properties(PluginScaler.VST2AudioProbe PROPERTIES
+    PASS_REGULAR_EXPRESSION "configured=1;mainsOn=1;processed=1;mainsOff=1;closed=1;outL=0.0200;outR=0.0400"
+)

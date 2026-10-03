@@ -3,8 +3,10 @@
 #include <windows.h>
 
 #include <array>
+#include <cmath>
 #include <cstring>
-#include <utility>
+#include <string>
+#include <vector>
 
 namespace pluginscaler::formats {
 namespace {
@@ -16,9 +18,9 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, v
     case AudioMasterVersion:
         return 2400;
     case AudioMasterGetSampleRate:
-        return 44100;
+        return 48000;
     case AudioMasterGetBlockSize:
-        return 512;
+        return 64;
     case AudioMasterGetVendorVersion:
         return 1000;
     case AudioMasterGetVendorString:
@@ -39,7 +41,6 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, v
         return 0;
     }
 }
-
 
 AEffect* callEntrySafely(EntryProc entry, AudioMasterCallback host, bool& exception) noexcept {
     exception = false;
@@ -78,11 +79,31 @@ bool callDispatcherSafely(AEffect* effect,
 #endif
 }
 
+bool callProcessReplacingSafely(AEffect* effect,
+                                float** inputs,
+                                float** outputs,
+                                VstInt32 frames) noexcept {
+    if (!effect || !effect->processReplacing) return false;
+#if defined(_MSC_VER)
+    __try {
+        effect->processReplacing(effect, inputs, outputs, frames);
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+#else
+    effect->processReplacing(effect, inputs, outputs, frames);
+    return true;
+#endif
+}
+
 std::string queryString(AEffect* effect, VstInt32 opcode) {
     if (!effect || !effect->dispatcher) return {};
     std::array<char, 256> buffer{};
-    const auto ok = effect->dispatcher(effect, opcode, 0, 0, buffer.data(), 0.0f);
-    if (!ok) return {};
+    VstIntPtr ignored = 0;
+    if (!callDispatcherSafely(effect, opcode, 0, 0, buffer.data(), 0.0f, &ignored))
+        return {};
+    if (!ignored) return {};
     buffer.back() = '\0';
     return std::string(buffer.data());
 }
@@ -97,82 +118,186 @@ VST2PluginModule::~VST2PluginModule() {
     close();
 }
 
-VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
+bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::string& error) {
     close();
 
-    VST2ProbeResult result;
     if (path.empty()) {
-        result.error = "empty plugin path";
-        return result;
+        error = "empty plugin path";
+        return false;
     }
 
     HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!module) {
-        result.error = win32Error("LoadLibraryExW failed");
-        return result;
+        error = win32Error("LoadLibraryExW failed");
+        return false;
     }
     module_ = module;
 
     EntryProc entry = reinterpret_cast<EntryProc>(GetProcAddress(module, "VSTPluginMain"));
-    if (entry) {
-        result.entryPoint = "VSTPluginMain";
-    } else {
+    if (!entry)
         entry = reinterpret_cast<EntryProc>(GetProcAddress(module, "main"));
-        if (entry) result.entryPoint = "main";
-    }
 
     if (!entry) {
-        result.error = "VST2 entry point not found";
+        error = "VST2 entry point not found";
         close();
-        return result;
+        return false;
     }
 
     bool entryException = false;
     AEffect* effect = callEntrySafely(entry, hostCallback, entryException);
     if (entryException) {
-        result.error = "exception while creating VST2 instance";
+        error = "exception while creating VST2 instance";
         close();
-        return result;
+        return false;
     }
-
     if (!effect) {
-        result.error = "VST2 entry point returned null";
+        error = "VST2 entry point returned null";
         close();
-        return result;
+        return false;
     }
     effect_ = effect;
 
     if (effect->magic != kEffectMagic) {
-        result.error = "invalid AEffect magic";
+        error = "invalid AEffect magic";
         close();
-        return result;
+        return false;
     }
     if (!effect->dispatcher) {
-        result.error = "AEffect dispatcher is null";
+        error = "AEffect dispatcher is null";
         close();
+        return false;
+    }
+
+    if (!callDispatcherSafely(effect, EffOpen, 0, 0, nullptr, 0.0f)) {
+        error = "exception during effOpen";
+        close();
+        return false;
+    }
+
+    effOpenCalled_ = true;
+    return true;
+}
+
+VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
+    VST2ProbeResult result;
+    std::string error;
+    if (!loadAndOpen(path, error)) {
+        result.error = std::move(error);
         return result;
     }
 
     result.loaded = true;
-    result.uniqueId = effect->uniqueId;
-    result.version = effect->version;
-    result.numPrograms = effect->numPrograms;
-    result.numParams = effect->numParams;
-    result.numInputs = effect->numInputs;
-    result.numOutputs = effect->numOutputs;
+    result.opened = true;
+    result.entryPoint =
+        GetProcAddress(static_cast<HMODULE>(module_), "VSTPluginMain") ? "VSTPluginMain" : "main";
+    result.uniqueId = effect_->uniqueId;
+    result.version = effect_->version;
+    result.numPrograms = effect_->numPrograms;
+    result.numParams = effect_->numParams;
+    result.numInputs = effect_->numInputs;
+    result.numOutputs = effect_->numOutputs;
+    result.effectName = queryString(effect_, EffGetEffectName);
+    result.vendor = queryString(effect_, EffGetVendorString);
+    result.product = queryString(effect_, EffGetProductString);
 
-    if (!callDispatcherSafely(effect, EffOpen, 0, 0, nullptr, 0.0f)) {
-        result.error = "exception during effOpen";
-        close();
+    close();
+    result.closed = true;
+    return result;
+}
+
+VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& path,
+                                                 double sampleRate,
+                                                 std::int32_t blockSize) {
+    VST2AudioProbeResult result;
+    std::string error;
+    if (!loadAndOpen(path, error)) {
+        result.error = std::move(error);
         return result;
     }
-    effOpenCalled_ = true;
 
+    result.loaded = true;
     result.opened = true;
-    result.effectName = queryString(effect, EffGetEffectName);
-    result.vendor = queryString(effect, EffGetVendorString);
-    result.product = queryString(effect, EffGetProductString);
 
+    if (blockSize <= 0 || sampleRate <= 0.0) {
+        result.error = "invalid audio configuration";
+        close();
+        result.closed = true;
+        return result;
+    }
+
+    if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
+                              static_cast<float>(sampleRate)) ||
+        !callDispatcherSafely(effect_, EffSetBlockSize, 0,
+                              static_cast<VstIntPtr>(blockSize), nullptr, 0.0f)) {
+        result.error = "exception while configuring VST2 audio";
+        close();
+        result.closed = true;
+        return result;
+    }
+    result.configured = true;
+
+    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
+        result.error = "exception during mains-on";
+        close();
+        result.closed = true;
+        return result;
+    }
+    mainsOn_ = true;
+    result.mainsOn = true;
+
+    if (!effect_->processReplacing) {
+        result.error = "processReplacing not available";
+        close();
+        result.closed = true;
+        return result;
+    }
+
+    const auto inputsCount = std::max<std::int32_t>(1, effect_->numInputs);
+    const auto outputsCount = std::max<std::int32_t>(1, effect_->numOutputs);
+
+    std::vector<std::vector<float>> inputStorage(
+        static_cast<std::size_t>(inputsCount),
+        std::vector<float>(static_cast<std::size_t>(blockSize), 0.0f));
+    std::vector<std::vector<float>> outputStorage(
+        static_cast<std::size_t>(outputsCount),
+        std::vector<float>(static_cast<std::size_t>(blockSize), 0.0f));
+
+    for (std::int32_t ch = 0; ch < inputsCount; ++ch) {
+        for (std::int32_t i = 0; i < blockSize; ++i) {
+            inputStorage[static_cast<std::size_t>(ch)][static_cast<std::size_t>(i)] =
+                static_cast<float>((i + 1) * (ch + 1)) / 100.0f;
+        }
+    }
+
+    std::vector<float*> inputs(static_cast<std::size_t>(inputsCount));
+    std::vector<float*> outputs(static_cast<std::size_t>(outputsCount));
+    for (std::int32_t ch = 0; ch < inputsCount; ++ch)
+        inputs[static_cast<std::size_t>(ch)] = inputStorage[static_cast<std::size_t>(ch)].data();
+    for (std::int32_t ch = 0; ch < outputsCount; ++ch)
+        outputs[static_cast<std::size_t>(ch)] = outputStorage[static_cast<std::size_t>(ch)].data();
+
+    if (!callProcessReplacingSafely(effect_, inputs.data(), outputs.data(), blockSize)) {
+        result.error = "exception during processReplacing";
+        close();
+        result.closed = true;
+        return result;
+    }
+
+    result.processed = true;
+    result.firstOutputLeft = outputStorage[0][0];
+    result.firstOutputRight =
+        outputStorage[static_cast<std::size_t>(std::min<std::int32_t>(1, outputsCount - 1))][0];
+
+    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 0, nullptr, 0.0f)) {
+        result.error = "exception during mains-off";
+        mainsOn_ = false;
+        close();
+        result.closed = true;
+        return result;
+    }
+
+    mainsOn_ = false;
+    result.mainsOff = true;
     close();
     result.closed = true;
     return result;
@@ -182,9 +307,12 @@ void VST2PluginModule::close() noexcept {
     auto* effect = effect_;
     effect_ = nullptr;
 
-    if (effect && effOpenCalled_ && effect->dispatcher) {
+    if (effect && mainsOn_ && effect->dispatcher)
+        (void)callDispatcherSafely(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
+    mainsOn_ = false;
+
+    if (effect && effOpenCalled_ && effect->dispatcher)
         (void)callDispatcherSafely(effect, EffClose, 0, 0, nullptr, 0.0f);
-    }
     effOpenCalled_ = false;
 
     if (module_) {

@@ -2,6 +2,7 @@
 
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -24,6 +25,19 @@ struct VST2ProbeResult {
     std::string error;
 };
 
+struct VST2AudioProbeResult {
+    bool loaded{false};
+    bool opened{false};
+    bool configured{false};
+    bool mainsOn{false};
+    bool processed{false};
+    bool mainsOff{false};
+    bool closed{false};
+    float firstOutputLeft{0.0f};
+    float firstOutputRight{0.0f};
+    std::string error;
+};
+
 class VST2PluginModule {
 public:
     VST2PluginModule() = default;
@@ -33,12 +47,17 @@ public:
     VST2PluginModule& operator=(const VST2PluginModule&) = delete;
 
     VST2ProbeResult probe(const std::filesystem::path& path);
+    VST2AudioProbeResult probeAudio(const std::filesystem::path& path,
+                                    double sampleRate = 48000.0,
+                                    std::int32_t blockSize = 64);
     void close() noexcept;
 
 private:
+    bool loadAndOpen(const std::filesystem::path& path, std::string& error);
     void* module_{nullptr};
     vst2abi::AEffect* effect_{nullptr};
     bool effOpenCalled_{false};
+    bool mainsOn_{false};
 };
 
 } // namespace pluginscaler::formats
