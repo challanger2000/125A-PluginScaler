@@ -23,15 +23,13 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, v
         return 1000;
     case AudioMasterGetVendorString:
         if (ptr) {
-            std::strncpy(static_cast<char*>(ptr), "125A", 63);
-            static_cast<char*>(ptr)[63] = '\0';
+            strcpy_s(static_cast<char*>(ptr), 64, "125A");
             return 1;
         }
         return 0;
     case AudioMasterGetProductString:
         if (ptr) {
-            std::strncpy(static_cast<char*>(ptr), "125A PluginScaler", 63);
-            static_cast<char*>(ptr)[63] = '\0';
+            strcpy_s(static_cast<char*>(ptr), 64, "125A PluginScaler");
             return 1;
         }
         return 0;
@@ -40,6 +38,44 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, v
     default:
         return 0;
     }
+}
+
+
+AEffect* callEntrySafely(EntryProc entry, AudioMasterCallback host, bool& exception) noexcept {
+    exception = false;
+#if defined(_MSC_VER)
+    __try {
+        return entry(host);
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        exception = true;
+        return nullptr;
+    }
+#else
+    return entry(host);
+#endif
+}
+
+bool callDispatcherSafely(AEffect* effect,
+                          VstInt32 opcode,
+                          VstInt32 index,
+                          VstIntPtr value,
+                          void* ptr,
+                          float opt,
+                          VstIntPtr* result = nullptr) noexcept {
+#if defined(_MSC_VER)
+    __try {
+        const auto r = effect->dispatcher(effect, opcode, index, value, ptr, opt);
+        if (result) *result = r;
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        if (result) *result = 0;
+        return false;
+    }
+#else
+    const auto r = effect->dispatcher(effect, opcode, index, value, ptr, opt);
+    if (result) *result = r;
+    return true;
+#endif
 }
 
 std::string queryString(AEffect* effect, VstInt32 opcode) {
@@ -91,18 +127,13 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
         return result;
     }
 
-    AEffect* effect = nullptr;
-#if defined(_MSC_VER)
-    __try {
-        effect = entry(hostCallback);
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
+    bool entryException = false;
+    AEffect* effect = callEntrySafely(entry, hostCallback, entryException);
+    if (entryException) {
         result.error = "exception while creating VST2 instance";
         close();
         return result;
     }
-#else
-    effect = entry(hostCallback);
-#endif
 
     if (!effect) {
         result.error = "VST2 entry point returned null";
@@ -130,19 +161,12 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     result.numInputs = effect->numInputs;
     result.numOutputs = effect->numOutputs;
 
-#if defined(_MSC_VER)
-    __try {
-        effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f);
-        effOpenCalled_ = true;
-    } __except(EXCEPTION_EXECUTE_HANDLER) {
+    if (!callDispatcherSafely(effect, EffOpen, 0, 0, nullptr, 0.0f)) {
         result.error = "exception during effOpen";
         close();
         return result;
     }
-#else
-    effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f);
     effOpenCalled_ = true;
-#endif
 
     result.opened = true;
     result.effectName = queryString(effect, EffGetEffectName);
@@ -159,15 +183,7 @@ void VST2PluginModule::close() noexcept {
     effect_ = nullptr;
 
     if (effect && effOpenCalled_ && effect->dispatcher) {
-#if defined(_MSC_VER)
-        __try {
-            effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
-        } __except(EXCEPTION_EXECUTE_HANDLER) {
-            // Probe teardown must not throw into the helper.
-        }
-#else
-        effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
-#endif
+        (void)callDispatcherSafely(effect, EffClose, 0, 0, nullptr, 0.0f);
     }
     effOpenCalled_ = false;
 
