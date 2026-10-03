@@ -310,7 +310,7 @@ bool ensureScalerSurfaceClass() {
     wc.lpfnWndProc = scalerSurfaceProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = kClassName;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     ATOM atom = RegisterClassW(&wc);
     if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
         return false;
