@@ -27,6 +27,7 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring mapName = L"Local\\125A_PluginScaler_Test_Map_" + suffix;
     const std::wstring inEvent = L"Local\\125A_PluginScaler_Test_In_" + suffix;
     const std::wstring outEvent = L"Local\\125A_PluginScaler_Test_Out_" + suffix;
+    const std::wstring controlPipeName = L"\\\\.\\pipe\\125A_PluginScaler_Test_Control_" + suffix;
 
     pluginscaler::ipc::AudioSharedChannel channel;
     if (!channel.create(mapName, inEvent, outEvent)) return 2;
@@ -36,7 +37,8 @@ int wmain(int argc, wchar_t** argv) {
         quote(plugin.wstring()) + L" " +
         quote(mapName) + L" " +
         quote(inEvent) + L" " +
-        quote(outEvent);
+        quote(outEvent) + L" " +
+        quote(controlPipeName);
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);

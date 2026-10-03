@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/ControlProtocol.h"
@@ -204,7 +205,7 @@ void refreshParametersFromHelper(ProxyInstance* inst) {
         return;
 
     const auto count = reply.size() / sizeof(float);
-    const auto copyCount = std::min(count, inst->parameterValues.size());
+    const auto copyCount = (std::min)(count, inst->parameterValues.size());
     const auto* values = reinterpret_cast<const float*>(reply.data());
     for (std::size_t i = 0; i < copyCount; ++i)
         inst->parameterValues[i] = values[i];
