@@ -169,13 +169,6 @@ std::vector<HWND> editorCaptureCandidates(const EditorGuiContext* ctx) {
     return windows;
 }
 
-BOOL CALLBACK collectChildProc(HWND hwnd, LPARAM param) {
-    auto* windows = reinterpret_cast<std::vector<HWND>*>(param);
-    if (windows && IsWindow(hwnd))
-        windows->push_back(hwnd);
-    return TRUE;
-}
-
 LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* ctx = reinterpret_cast<EditorGuiContext*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
