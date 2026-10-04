@@ -133,12 +133,14 @@ int wmain(int argc, wchar_t** argv) {
         SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
         SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
         SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
-        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"200");
+        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"100");
+        SetEnvironmentVariableW(L"PLUGINSCALER_EDITOR_MODE", L"Direct");
     } else {
         SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", nullptr);
         SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", nullptr);
         SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", nullptr);
         SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_EDITOR_MODE", nullptr);
     }
 
     HMODULE proxy = LoadLibraryW(argv[1]);
@@ -175,7 +177,7 @@ int wmain(int argc, wchar_t** argv) {
         const int rectWidth = rect ? (rect->right - rect->left) : 0;
         const int rectHeight = rect ? (rect->bottom - rect->top) : 0;
         const auto openResult =
-            (editorHost && rectResult && rectWidth == 640 && rectHeight == 360)
+            (editorHost && rectResult && rectWidth == 320 && rectHeight == 180)
                 ? effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f)
                 : 0;
 
@@ -185,14 +187,14 @@ int wmain(int argc, wchar_t** argv) {
 
         const int children = childCount(editorHost);
         HWND surface = FindWindowExW(editorHost, nullptr,
-                                     L"125A_PluginScaler_ScaledSurface", nullptr);
+                                     L"125A_MockVST2SynthEditor", nullptr);
 
         COLORREF pixel = CLR_INVALID;
         if (surface) {
             RedrawWindow(surface, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             HDC dc = GetDC(surface);
-            pixel = GetPixel(dc, 100, 80);
+            pixel = GetPixel(dc, 50, 40);
             ReleaseDC(surface, dc);
         }
 
@@ -212,8 +214,8 @@ int wmain(int argc, wchar_t** argv) {
         ok = editorHost != nullptr &&
              rectResult != 0 &&
              rect != nullptr &&
-             rectWidth == 640 &&
-             rectHeight == 360 &&
+             rectWidth == 320 &&
+             rectHeight == 180 &&
              openResult != 0 &&
              children >= 1 &&
              surface != nullptr &&
@@ -222,17 +224,17 @@ int wmain(int argc, wchar_t** argv) {
              GetGValue(pixel) < 120 &&
              GetBValue(pixel) < 100;
 
-        std::cout << "editor-scale=" << (ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
 
         if (ok && surface) {
-            SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(100, 80));
-            SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(100, 80));
+            SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
+            SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40));
             RedrawWindow(surface, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
             HDC dc = GetDC(surface);
-            const COLORREF mappedPixel = GetPixel(dc, 100, 80);
+            const COLORREF mappedPixel = GetPixel(dc, 50, 40);
             ReleaseDC(surface, dc);
 
             const bool mappingOk =
@@ -240,18 +242,18 @@ int wmain(int argc, wchar_t** argv) {
                 GetRValue(mappedPixel) < 100 &&
                 GetGValue(mappedPixel) > 170 &&
                 GetBValue(mappedPixel) < 120;
-            std::cout << "editor-mouse-map=" << (mappingOk ? "PASS" : "FAIL") << "\n";
+            std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << "\n";
             ok = ok && mappingOk;
 
             if (ok) {
-                SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(100, 80));
-                SendMessageW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(120, 60));
-                SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(120, 60));
+                SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
+                SendMessageW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(70, 20));
+                SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20));
                 RedrawWindow(surface, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
                 HDC dragDc = GetDC(surface);
-                const COLORREF dragPixel = GetPixel(dragDc, 280, 200);
+                const COLORREF dragPixel = GetPixel(dragDc, 140, 100);
                 ReleaseDC(surface, dragDc);
 
                 const bool dragOk =
@@ -259,7 +261,7 @@ int wmain(int argc, wchar_t** argv) {
                     GetRValue(dragPixel) > 180 &&
                     GetGValue(dragPixel) > 170 &&
                     GetBValue(dragPixel) < 100;
-                std::cout << "editor-drag-1to1=" << (dragOk ? "PASS" : "FAIL") << "\n";
+                std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << "\n";
                 ok = ok && dragOk;
             }
         }
