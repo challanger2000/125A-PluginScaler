@@ -39,7 +39,7 @@ HWND createHost() {
 BOOL CALLBACK findEditorProc(HWND hwnd, LPARAM lp) {
     wchar_t cls[256]{};
     GetClassNameW(hwnd,cls,256);
-    if(std::wstring_view(cls)==L"125A_MockLegacyGdiEditor"){
+    if(std::wstring_view(cls)==L"125A_PluginScaler_ScaledSurface"){
         *reinterpret_cast<HWND*>(lp)=hwnd;
         return FALSE;
     }
@@ -87,17 +87,17 @@ int wmain(int argc, wchar_t** argv) {
     HWND editor=nullptr;
     EnumChildWindows(host,findEditorProc,reinterpret_cast<LPARAM>(&editor));
     ok=ok && editor!=nullptr;
-    std::cout<<"gdi-editor="<<(editor?1:0)<<"\n";
+    std::cout<<"gdi-surface="<<(editor?1:0)<<"\n";
 
     if(editor){
         RECT rc{};
         GetClientRect(editor,&rc);
         const int ew=rc.right-rc.left, eh=rc.bottom-rc.top;
-        std::cout<<"gdi-editor-size="<<ew<<"x"<<eh<<"\n";
+        std::cout<<"gdi-surface-size="<<ew<<"x"<<eh<<"\n";
         ok=ok && ew==1143 && eh==537;
 
         HDC dc=GetDC(editor);
-        COLORREF keyBefore=GetPixel(dc, 150, 450); // native (100,300) at 150%
+        COLORREF keyBefore=GetPixel(dc, 150, 450); // native (100,300) shown at 150%
         ReleaseDC(editor,dc);
         const bool scaledVisual=approx(keyBefore,224,224,224,65);
         std::cout<<"gdi-scaled-visual="<<(scaledVisual?"PASS":"FAIL")<<"\n";
