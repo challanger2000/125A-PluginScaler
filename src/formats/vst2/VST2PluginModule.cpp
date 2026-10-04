@@ -416,8 +416,10 @@ bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
         dst[i] = pointers[static_cast<std::size_t>(i)];
 
     VstIntPtr result = 0;
-    return callDispatcherSafely(effect_, EffProcessEvents, 0, 0, list, 0.0f, &result) &&
-           result != 0;
+    // effProcessEvents delivers MIDI/events to the plugin. Some legacy VST2
+    // instruments consume the events but return 0 from their dispatcher.
+    // Only an actual dispatcher fault is a bridge failure.
+    return callDispatcherSafely(effect_, EffProcessEvents, 0, 0, list, 0.0f, &result);
 }
 
 bool VST2PluginModule::setParameter(std::int32_t index, float value) noexcept {
