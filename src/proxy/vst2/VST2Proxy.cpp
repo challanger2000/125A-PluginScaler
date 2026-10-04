@@ -54,6 +54,7 @@ struct ProxyManifest {
     VstInt32 midiInputChannels{0};
     bool receivesVstEvents{false};
     bool receivesVstMidiEvents{false};
+    bool wantsMidi{false};
     std::vector<float> parameterDefaults;
     bool valid{false};
 };
@@ -295,6 +296,7 @@ ProxyManifest loadManifest(const std::wstring& manifestPath) {
             else if (key == "midiInputs") m.midiInputChannels = static_cast<VstInt32>(std::stol(value));
             else if (key == "receiveVstEvents") m.receivesVstEvents = (std::stol(value) != 0);
             else if (key == "receiveVstMidiEvent") m.receivesVstMidiEvents = (std::stol(value) != 0);
+            else if (key == "wantMidi") m.wantsMidi = (std::stol(value) != 0);
             else if (key.rfind("param.", 0) == 0) {
                 const auto index = static_cast<std::size_t>(std::stoul(key.substr(6)));
                 if (m.parameterDefaults.size() <= index)
@@ -987,6 +989,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     switch (opcode) {
     case EffOpen:
+        if (inst->host &&
+            (inst->manifest.wantsMidi ||
+             inst->manifest.receivesVstEvents ||
+             inst->manifest.receivesVstMidiEvents ||
+             inst->manifest.plugCategory == PlugCategSynth ||
+             (inst->manifest.flags & kEffectFlagIsSynth))) {
+            (void)inst->host(effect, AudioMasterWantMidi, 0, 1, nullptr, 0.0f);
+        }
         return 1;
 
     case EffClose:
@@ -1417,7 +1427,8 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffGetNumMidiInputChannels:
         if (inst->manifest.midiInputChannels > 0)
             return inst->manifest.midiInputChannels;
-        if (inst->manifest.receivesVstEvents || inst->manifest.receivesVstMidiEvents ||
+        if (inst->manifest.wantsMidi ||
+            inst->manifest.receivesVstEvents || inst->manifest.receivesVstMidiEvents ||
             inst->manifest.plugCategory == PlugCategSynth ||
             (inst->manifest.flags & kEffectFlagIsSynth))
             return 16;
@@ -1429,12 +1440,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffCanDo:
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0)
-            return (inst->manifest.receivesVstEvents ||
+            return (inst->manifest.wantsMidi ||
+                    inst->manifest.receivesVstEvents ||
                     inst->manifest.receivesVstMidiEvents ||
                     inst->manifest.plugCategory == PlugCategSynth ||
                     (inst->manifest.flags & kEffectFlagIsSynth)) ? 1 : 0;
         if (std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
-            return (inst->manifest.receivesVstMidiEvents ||
+            return (inst->manifest.wantsMidi ||
+                    inst->manifest.receivesVstMidiEvents ||
                     inst->manifest.receivesVstEvents ||
                     inst->manifest.plugCategory == PlugCategSynth ||
                     (inst->manifest.flags & kEffectFlagIsSynth)) ? 1 : 0;
@@ -1611,7 +1624,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     inst->effect.numInputs = inst->manifest.numInputs;
     inst->effect.numOutputs = inst->manifest.numOutputs;
     inst->effect.flags = inst->manifest.flags;
-    if (inst->manifest.plugCategory == PlugCategSynth)
+    if (inst->manifest.plugCategory == PlugCategSynth ||
+        inst->manifest.wantsMidi ||
+        inst->manifest.receivesVstEvents ||
+        inst->manifest.receivesVstMidiEvents)
         inst->effect.flags |= kEffectFlagIsSynth;
     inst->effect.object = inst;
     inst->effect.uniqueId = inst->manifest.uniqueId;
