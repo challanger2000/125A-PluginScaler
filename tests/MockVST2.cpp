@@ -63,6 +63,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
                 if (status == 0x90u && velocity > 0) {
                     state->midiSeen = true;
                     state->lastMidiNote = static_cast<std::uint8_t>(midi->midiData[1]);
+                } else if (status == 0x80u || (status == 0x90u && velocity == 0)) {
+                    const auto note = static_cast<std::uint8_t>(midi->midiData[1]);
+                    if (state->midiSeen && state->lastMidiNote == note)
+                        state->midiSeen = false;
                 }
             }
             return 1;
