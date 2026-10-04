@@ -1036,6 +1036,17 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         ctx->editor = child;
+
+        // Re-opened legacy editors do not always receive a second spontaneous
+        // paint after their HWND is recreated. Publish one normal paint now so
+        // the SetDIBits hook can seed a fresh native framebuffer for every
+        // editor-open cycle. This stays on the GUI thread and avoids all
+        // PrintWindow/WM_PRINT/BitBlt fallback capture.
+        if (ctx->gdiScalePercent > 0 && IsWindow(child)) {
+            InvalidateRect(child, nullptr, FALSE);
+            UpdateWindow(child);
+        }
+
         if (ctx->gdiScalePercent > 100) {
             g_gdiEditorWindow.store(child, std::memory_order_relaxed);
 
