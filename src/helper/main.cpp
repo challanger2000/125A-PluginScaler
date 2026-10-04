@@ -254,20 +254,37 @@ int WINAPI scaledSetDIBitsToDevice(
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
+    const auto dibWidth = std::abs(bmi->bmiHeader.biWidth);
+    const auto dibHeight = std::abs(bmi->bmiHeader.biHeight);
+
+    // Safety first: SetDIBitsToDevice may be called with only a subset of
+    // scanlines during interactive redraws. In that case the supplied bits
+    // pointer does not necessarily describe a complete height-sized buffer.
+    // Stretching the full image can read beyond the valid source region.
+    // Until partial-update semantics are handled explicitly, pass those calls
+    // straight through to GDI unchanged.
+    const bool fullFrame =
+        startScan == 0 &&
+        scanLines == height &&
+        dibWidth >= static_cast<LONG>(width) &&
+        dibHeight >= static_cast<LONG>(height);
+
+    if (!fullFrame)
+        return original(hdc, xDest, yDest, width, height,
+                        xSrc, ySrc, startScan, scanLines,
+                        bits, bmi, colorUse);
+
     const int scaledX = MulDiv(xDest, scale, 100);
     const int scaledY = MulDiv(yDest, scale, 100);
     const int scaledW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
     const int scaledH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
 
-    // Pro-53's editor uses a 32-bit software DIB as its final GUI blit.
-    // Stretch only the destination; keep the plugin's source bitmap untouched.
-    const int srcW = static_cast<int>(width);
-    const int srcH = static_cast<int>(height);
-    SetStretchBltMode(hdc, HALFTONE);
+    // Full-frame Pro-53 GUI blit only.
+    SetStretchBltMode(hdc, COLORONCOLOR);
     const int result = StretchDIBits(
         hdc,
         scaledX, scaledY, scaledW, scaledH,
-        xSrc, ySrc, srcW, srcH,
+        xSrc, ySrc, static_cast<int>(width), static_cast<int>(height),
         bits, bmi, colorUse, SRCCOPY);
     return result == GDI_ERROR ? 0 : result;
 }
