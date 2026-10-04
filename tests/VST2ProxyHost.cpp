@@ -59,12 +59,13 @@ bool processAndCheck(AEffect* effect, VstInt32 frames, float seed, float expecte
     return true;
 }
 
-bool sendNoteOn(AEffect* effect, std::uint8_t note, std::uint8_t velocity) {
+bool sendMidi(AEffect* effect, std::uint8_t status, std::uint8_t note,
+              std::uint8_t velocity) {
     VstMidiEvent midi{};
     midi.type = kVstMidiType;
     midi.byteSize = sizeof(VstMidiEvent);
     midi.deltaFrames = 7;
-    midi.midiData[0] = static_cast<char>(0x90);
+    midi.midiData[0] = static_cast<char>(status);
     midi.midiData[1] = static_cast<char>(note);
     midi.midiData[2] = static_cast<char>(velocity);
 
@@ -77,6 +78,14 @@ bool sendNoteOn(AEffect* effect, std::uint8_t note, std::uint8_t velocity) {
     list.events[0] = reinterpret_cast<VstEvent*>(&midi);
 
     return effect->dispatcher(effect, EffProcessEvents, 0, 0, &list, 0.0f) != 0;
+}
+
+bool sendNoteOn(AEffect* effect, std::uint8_t note, std::uint8_t velocity) {
+    return sendMidi(effect, 0x90u, note, velocity);
+}
+
+bool sendNoteOff(AEffect* effect, std::uint8_t note) {
+    return sendMidi(effect, 0x80u, note, 0);
 }
 
 bool configure(AEffect* effect, float sampleRate, VstInt32 blockSize) {
@@ -158,7 +167,14 @@ int wmain(int argc, wchar_t** argv) {
         ok = sendNoteOn(effect, 60, 100) &&
              processAndCheck(effect, 64, 0.20f, 0.310f);
 
-    // Restart before the remaining audio-only lifecycle checks so MIDI state resets.
+    // Explicitly release the MIDI note. effMainsChanged(false) suspends
+    // processing but does not imply that a VST2 instrument forgets note state.
+    if (ok)
+        ok = sendNoteOff(effect, 60) &&
+             processAndCheck(effect, 64, 0.22f, 0.25f);
+
+    // Exercise mains-off -> configuration change -> mains-on without
+    // destroying/reloading the bridged plugin instance.
     if (ok)
         ok = effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f) != 0 &&
              configure(effect, 44100.0f, 128) &&
