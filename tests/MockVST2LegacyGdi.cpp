@@ -77,6 +77,15 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_LBUTTONDOWN: {
+        // Deliberately exercise the same USER32 imports used by legacy
+        // editors such as Pro-53. The helper patches these IAT entries in
+        // GDI mode, so the mock must actually import them.
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        ScreenToClient(hwnd, &cursor);
+        POINT roundTrip = cursor;
+        ClientToScreen(hwnd, &roundTrip);
+
         const int x = GET_X_LPARAM(lp);
         const int y = GET_Y_LPARAM(lp);
         SetCapture(hwnd);
