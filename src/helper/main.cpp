@@ -633,13 +633,15 @@ LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
         state->surfaceStart = {x, y};
         state->nativeStart = {nativeX, nativeY};
     } else if (msg == WM_MOUSEMOVE && state->leftDrag) {
-        // Keep drag deltas 1:1 in physical pixels; only the initial hit-test
-        // is scaled back to the native editor coordinate system.
-        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
-        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
+        nativeX = state->nativeStart.x +
+                  MulDiv(x - state->surfaceStart.x, 100, state->scale);
+        nativeY = state->nativeStart.y +
+                  MulDiv(y - state->surfaceStart.y, 100, state->scale);
     } else if (msg == WM_LBUTTONUP && state->leftDrag) {
-        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
-        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
+        nativeX = state->nativeStart.x +
+                  MulDiv(x - state->surfaceStart.x, 100, state->scale);
+        nativeY = state->nativeStart.y +
+                  MulDiv(y - state->surfaceStart.y, 100, state->scale);
         state->leftDrag = false;
     }
 
@@ -693,6 +695,29 @@ LRESULT CALLBACK gdiScaledEditorProc(
 
     const WNDPROC original = state->original;
     const LRESULT result = CallWindowProcA(original, hwnd, msg, wp, lp);
+
+    // Pro-53 frequently repaints only tiny dirty rectangles after mouse input.
+    // The legacy SetDIBitsToDevice source-rectangle semantics do not map
+    // cleanly to our scaled StretchDIBits path, which can leave keys/knobs
+    // visually frozen even when the control itself reacted. Request a full
+    // editor repaint after real mouse interaction so the already-proven
+    // 762x358 -> 1143x537 full-frame path refreshes the visible state.
+    switch (msg) {
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MOUSEMOVE:
+        if (state->leftDrag || msg != WM_MOUSEMOVE) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateWindow(hwnd);
+        }
+        break;
+    default:
+        break;
+    }
 
     if (msg == WM_NCDESTROY) {
         RemovePropA(hwnd, "125A.PluginScaler.GdiMouseScale");
