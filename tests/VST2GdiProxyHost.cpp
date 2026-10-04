@@ -69,6 +69,18 @@ int scaledCoord(int native, int scale) {
     return native * scale / 100;
 }
 
+void pumpMessagesFor(DWORD milliseconds) {
+    const ULONGLONG deadline = GetTickCount64() + milliseconds;
+    MSG msg{};
+    while (GetTickCount64() < deadline) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        Sleep(10);
+    }
+}
+
 bool runScale(EntryProc entry, int scale) {
     const std::wstring scaleText=std::to_wstring(scale);
     SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT",scaleText.c_str());
@@ -99,7 +111,10 @@ bool runScale(EntryProc entry, int scale) {
         UpdateWindow(host);
 
         const auto openOk=effect->dispatcher(effect,EffEditOpen,0,0,host,0.0f);
-        Sleep(120);
+        // The legacy GDI path intentionally gives old editors a quiet
+        // startup grace period before capture. Keep pumping the host message
+        // queue so the surface timer can begin capture after that grace.
+        pumpMessagesFor(2300);
 
         HWND surface=nullptr;
         EnumChildWindows(host,findSurfaceProc,reinterpret_cast<LPARAM>(&surface));
