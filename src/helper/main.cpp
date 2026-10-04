@@ -1573,6 +1573,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                      static_cast<WPARAM>(mouse.keyFlags), coords);
                     }
                 }
+            } else if (req.command == ipc::ControlCommand::SetMains) {
+                std::lock_guard<std::mutex> lock(moduleMutex);
+                if (!module.setMains(req.arg0 != 0))
+                    resp.status = ipc::ControlStatus::PluginError;
             } else if (req.command == ipc::ControlCommand::Shutdown) {
                 controlStop.store(true, std::memory_order_release);
             } else {
@@ -1693,34 +1697,33 @@ int runSharedVst2Server(const std::filesystem::path& path,
             const auto requestedSampleRate = block->header.sampleRateHz;
             if (configuredBlockSize != requestedBlockSize ||
                 configuredSampleRate != requestedSampleRate) {
-                module.close();
-
-                std::string error;
-                if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
-                                              requestedBlockSize, error)) {
-                    std::cerr << "error=" << error << '\n';
+                if (!module.reconfigureProcessing(
+                        static_cast<double>(requestedSampleRate),
+                        requestedBlockSize)) {
+                    std::cerr << "error=vst2-reconfigure\n";
                     ok = false;
                 } else {
-                    if (guiContext.gdiScalePercent > 100) {
-                        (void)patchSetDIBitsImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchScreenToClientImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchClientToScreenImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                    }
                     configuredBlockSize = requestedBlockSize;
                     configuredSampleRate = requestedSampleRate;
-                    appliedParameterGeneration = 0;
-                    if (!persistedChunk.empty())
-                        ok = module.setChunk(persistedChunkIndex,
-                                             persistedChunk.data(),
-                                             persistedChunk.size());
                 }
             }
+
+            formats::vst2abi::VstTimeInfo hostTime{};
+            hostTime.samplePos = block->hostTime.samplePos;
+            hostTime.sampleRate = block->hostTime.sampleRate;
+            hostTime.nanoSeconds = block->hostTime.nanoSeconds;
+            hostTime.ppqPos = block->hostTime.ppqPos;
+            hostTime.tempo = block->hostTime.tempo;
+            hostTime.barStartPos = block->hostTime.barStartPos;
+            hostTime.cycleStartPos = block->hostTime.cycleStartPos;
+            hostTime.cycleEndPos = block->hostTime.cycleEndPos;
+            hostTime.timeSigNumerator = block->hostTime.timeSigNumerator;
+            hostTime.timeSigDenominator = block->hostTime.timeSigDenominator;
+            hostTime.smpteOffset = block->hostTime.smpteOffset;
+            hostTime.smpteFrameRate = block->hostTime.smpteFrameRate;
+            hostTime.samplesToNextClock = block->hostTime.samplesToNextClock;
+            hostTime.flags = block->hostTime.flags;
+            module.setHostTimeInfo(hostTime);
 
             if (ok && block->header.parameterCount > 0 &&
                 appliedParameterGeneration != block->header.parameterGeneration) {
