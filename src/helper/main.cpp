@@ -6,6 +6,7 @@
 #include "pluginscaler/ipc/ControlProtocol.h"
 
 #include <windows.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <array>
