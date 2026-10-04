@@ -163,17 +163,17 @@ jobs:
           if ($joined -notmatch "synth-metadata=PASS") {
             throw "Synth metadata marker missing"
           }
-          if ($joined -notmatch "editor-scale=PASS") {
-            throw "Scaled editor render marker missing"
+          if ($joined -notmatch "editor-direct=PASS") {
+            throw "Native direct editor marker missing"
           }
           if ($joined -notmatch "editor-open=PASS") {
             throw "Cross-process editor open marker missing"
           }
-          if ($joined -notmatch "editor-mouse-map=PASS") {
-            throw "Scaled editor mouse mapping marker missing"
+          if ($joined -notmatch "editor-native-mouse=PASS") {
+            throw "Native editor mouse marker missing"
           }
-          if ($joined -notmatch "editor-drag-1to1=PASS") {
-            throw "Scaled editor native drag-delta marker missing"
+          if ($joined -notmatch "editor-native-drag=PASS") {
+            throw "Native editor drag marker missing"
           }
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
@@ -257,7 +257,8 @@ jobs:
           helper=PluginScalerHelper-x86.exe
           target=$synth
           manifest=MockSynth.pluginscaler.txt
-          scale=200
+          scale=100
+          editor=Direct
           "@ | Set-Content -Path $config -Encoding Unicode
 
           $output = & $synthHost $proxy $helper $synth $manifest --sidecar
@@ -269,9 +270,9 @@ jobs:
           $joined = ($output | Out-String)
           foreach ($marker in @(
             "synth-metadata=PASS",
-            "editor-scale=PASS",
-            "editor-mouse-map=PASS",
-            "editor-drag-1to1=PASS",
+            "editor-direct=PASS",
+            "editor-native-mouse=PASS",
+            "editor-native-drag=PASS",
             "editor-close=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
@@ -297,8 +298,8 @@ jobs:
             -ProxyDll $sourceProxy `
             -HelperExe $sourceHelper `
             -OutputDir $outDir `
-            -Scale 200 `
-            -EditorMode Capture `
+            -Scale 100 `
+            -EditorMode Direct `
             -WrapperName "MockSynth-125A"
 
           if ($LASTEXITCODE -ne 0) {
@@ -318,9 +319,9 @@ jobs:
           $joined = ($output | Out-String)
           foreach ($marker in @(
             "synth-metadata=PASS",
-            "editor-scale=PASS",
-            "editor-mouse-map=PASS",
-            "editor-drag-1to1=PASS",
+            "editor-direct=PASS",
+            "editor-native-mouse=PASS",
+            "editor-native-drag=PASS",
             "editor-close=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
