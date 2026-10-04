@@ -105,12 +105,18 @@ enum DispatcherOpcode : VstInt32 {
     EffGetChunk = 23,
     EffSetChunk = 24,
     EffProcessEvents = 25,
+    EffGetPlugCategory = 35,
     EffGetEffectName = 45,
     EffGetVendorString = 47,
     EffGetProductString = 48,
     EffGetVendorVersion = 49,
-    EffCanDo = 51
+    EffCanDo = 51,
+    EffGetVstVersion = 58
 };
+
+inline constexpr VstInt32 kPlugCategUnknown = 0;
+inline constexpr VstInt32 kPlugCategEffect = 1;
+inline constexpr VstInt32 kPlugCategSynth = 2;
 
 enum AudioMasterOpcode : VstInt32 {
     AudioMasterVersion = 1,
