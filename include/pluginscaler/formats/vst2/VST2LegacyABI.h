@@ -111,7 +111,9 @@ enum DispatcherOpcode : VstInt32 {
     EffGetProductString = 48,
     EffGetVendorVersion = 49,
     EffCanDo = 51,
-    EffGetVstVersion = 58
+    EffGetVstVersion = 58,
+    EffGetNumMidiInputChannels = 78,
+    EffGetNumMidiOutputChannels = 79
 };
 
 inline constexpr VstInt32 kPlugCategUnknown = 0;
