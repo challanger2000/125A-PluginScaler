@@ -713,8 +713,12 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
             ReleaseCapture();
         if (sent) {
+            // Do not synchronously transfer and repaint a full legacy
+            // framebuffer for every mouse-move message. The 30 fps surface
+            // timer will coalesce drag repaints, keeping interaction responsive.
             InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateWindow(hwnd);
+            if (msg != WM_MOUSEMOVE)
+                UpdateWindow(hwnd);
         }
         return sent ? 0 : DefWindowProcW(hwnd, msg, wp, lp);
     }
@@ -1348,6 +1352,10 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffCanDo:
+        if (!ptr) return 0;
+        if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
+            return 1;
         return 0;
 
     default:
