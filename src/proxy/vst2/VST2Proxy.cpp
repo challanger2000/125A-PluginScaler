@@ -1099,9 +1099,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             // Give very old GDI editors time to finish their own startup
             // painting before the wrapper starts asking for frames.
             // The surface is available immediately, but capture begins only
-            // after a quiet 2-second grace period. 100 ms polling is enough
+            // after a quiet 5-second grace period. 100 ms polling is enough
             // for GUI work and avoids hammering the 32-bit editor.
-            inst->gdiCaptureNotBefore = GetTickCount64() + 2000ULL;
+            inst->gdiCaptureNotBefore = GetTickCount64() + 5000ULL;
             SetTimer(surface, 0x125A, 100, nullptr);
             InvalidateRect(surface, nullptr, FALSE);
             UpdateWindow(surface);
