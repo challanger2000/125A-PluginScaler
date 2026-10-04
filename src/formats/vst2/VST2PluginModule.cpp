@@ -8,20 +8,40 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <mutex>
+#include <unordered_map>
 
 namespace pluginscaler::formats {
 namespace {
 
 using namespace vst2abi;
 
-VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, void* ptr, float) {
+std::mutex g_hostModuleMutex;
+std::unordered_map<AEffect*, VST2PluginModule*> g_hostModules;
+thread_local VST2PluginModule* g_constructingModule = nullptr;
+
+VST2PluginModule* moduleForHostCallback(AEffect* effect) {
+    if (!effect)
+        return g_constructingModule;
+    std::lock_guard<std::mutex> lock(g_hostModuleMutex);
+    const auto it = g_hostModules.find(effect);
+    return it != g_hostModules.end() ? it->second : nullptr;
+}
+
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
+                               VstIntPtr value, void* ptr, float) {
+    auto* module = moduleForHostCallback(effect);
     switch (opcode) {
     case AudioMasterVersion:
         return 2400;
+    case AudioMasterGetTime:
+        return module
+            ? reinterpret_cast<VstIntPtr>(&module->timeInfo_)
+            : 0;
     case AudioMasterGetSampleRate:
-        return 48000;
+        return module ? static_cast<VstIntPtr>(module->sampleRate_) : 48000;
     case AudioMasterGetBlockSize:
-        return 64;
+        return module ? static_cast<VstIntPtr>(module->blockSize_) : 512;
     case AudioMasterGetVendorVersion:
         return 1000;
     case AudioMasterGetVendorString:
@@ -37,8 +57,15 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, v
         }
         return 0;
     case AudioMasterCanDo:
+        if (!ptr) return 0;
+        if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
+            return 1;
         return 0;
     default:
+        (void)value;
         return 0;
     }
 }
@@ -173,7 +200,9 @@ bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::strin
     }
 
     bool entryException = false;
+    g_constructingModule = this;
     AEffect* effect = callEntrySafely(entry, hostCallback, entryException);
+    g_constructingModule = nullptr;
     if (entryException) {
         error = "exception while creating VST2 instance";
         close();
@@ -185,6 +214,10 @@ bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::strin
         return false;
     }
     effect_ = effect;
+    {
+        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
+        g_hostModules[effect_] = this;
+    }
 
     if (effect->magic != kEffectMagic) {
         error = "invalid AEffect magic";
@@ -253,10 +286,15 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
     if (!loadAndOpen(path, error))
         return false;
 
+    sampleRate_ = sampleRate;
+    blockSize_ = blockSize;
+    timeInfo_ = {};
+    timeInfo_.sampleRate = sampleRate_;
+
     if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
-                              static_cast<float>(sampleRate)) ||
+                              static_cast<float>(sampleRate_)) ||
         !callDispatcherSafely(effect_, EffSetBlockSize, 0,
-                              static_cast<VstIntPtr>(blockSize), nullptr, 0.0f)) {
+                              static_cast<VstIntPtr>(blockSize_), nullptr, 0.0f)) {
         error = "exception while configuring VST2 audio";
         close();
         return false;
@@ -276,6 +314,46 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
 
     mainsOn_ = true;
     return true;
+}
+
+bool VST2PluginModule::setMains(bool active) noexcept {
+    if (!effect_ || !effect_->dispatcher)
+        return false;
+    if (mainsOn_ == active)
+        return true;
+    if (!callDispatcherSafely(effect_, EffMainsChanged, 0,
+                              active ? 1 : 0, nullptr, 0.0f))
+        return false;
+    mainsOn_ = active;
+    return true;
+}
+
+bool VST2PluginModule::reconfigureProcessing(double sampleRate,
+                                             std::int32_t blockSize) noexcept {
+    if (!effect_ || !effect_->dispatcher || sampleRate <= 0.0 || blockSize <= 0)
+        return false;
+
+    const bool wasOn = mainsOn_;
+    if (wasOn && !setMains(false))
+        return false;
+
+    sampleRate_ = sampleRate;
+    blockSize_ = blockSize;
+    timeInfo_.sampleRate = sampleRate_;
+
+    if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
+                              static_cast<float>(sampleRate_)) ||
+        !callDispatcherSafely(effect_, EffSetBlockSize, 0,
+                              static_cast<VstIntPtr>(blockSize_), nullptr, 0.0f))
+        return false;
+
+    return !wasOn || setMains(true);
+}
+
+void VST2PluginModule::setHostTimeInfo(const VstTimeInfo& info) noexcept {
+    timeInfo_ = info;
+    if (timeInfo_.sampleRate <= 0.0)
+        timeInfo_.sampleRate = sampleRate_;
 }
 
 bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {
@@ -459,6 +537,11 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
 void VST2PluginModule::close() noexcept {
     auto* effect = effect_;
     effect_ = nullptr;
+
+    if (effect) {
+        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
+        g_hostModules.erase(effect);
+    }
 
     if (effect && mainsOn_ && effect->dispatcher)
         (void)callDispatcherSafely(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
