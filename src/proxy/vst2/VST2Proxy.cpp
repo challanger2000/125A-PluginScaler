@@ -993,7 +993,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!ptr || !startBridge(inst)) return 0;
         std::vector<std::uint8_t> reply;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                         0u,
+                         inst->settings.gdiEditor ? 100 : 0,
                          nullptr, 0, reply) ||
             reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
             return 0;
