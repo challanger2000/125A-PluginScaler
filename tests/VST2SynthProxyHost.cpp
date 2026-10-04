@@ -165,6 +165,29 @@ int wmain(int argc, wchar_t** argv) {
         (effect->flags & (1 << 8)) != 0;
     std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << "\n";
 
+    const auto category = effect->dispatcher(
+        effect, EffGetPlugCategory, 0, 0, nullptr, 0.0f);
+    const auto vstVersion = effect->dispatcher(
+        effect, EffGetVstVersion, 0, 0, nullptr, 0.0f);
+    const auto midiInputs = effect->dispatcher(
+        effect, EffGetNumMidiInputChannels, 0, 0, nullptr, 0.0f);
+    const char canEvents[] = "receiveVstEvents";
+    const char canMidi[] = "receiveVstMidiEvent";
+    const auto canReceiveEvents = effect->dispatcher(
+        effect, EffCanDo, 0, 0, const_cast<char*>(canEvents), 0.0f);
+    const auto canReceiveMidi = effect->dispatcher(
+        effect, EffCanDo, 0, 0, const_cast<char*>(canMidi), 0.0f);
+
+    const bool midiContract =
+        category == kPlugCategSynth &&
+        vstVersion >= 2400 &&
+        midiInputs > 0 &&
+        canReceiveEvents > 0 &&
+        canReceiveMidi > 0;
+    std::cout << "synth-midi-contract="
+              << (midiContract ? "PASS" : "FAIL") << "\n";
+    ok = ok && midiContract;
+
     HWND editorHost = nullptr;
     if (ok) {
         editorHost = createHostWindow();
