@@ -49,9 +49,43 @@ struct VstEvents {
     VstIntPtr reserved;
     VstEvent* events[2];
 };
+
+struct VstTimeInfo {
+    double samplePos;
+    double sampleRate;
+    double nanoSeconds;
+    double ppqPos;
+    double tempo;
+    double barStartPos;
+    double cycleStartPos;
+    double cycleEndPos;
+    VstInt32 timeSigNumerator;
+    VstInt32 timeSigDenominator;
+    VstInt32 smpteOffset;
+    VstInt32 smpteFrameRate;
+    VstInt32 samplesToNextClock;
+    VstInt32 flags;
+};
 #pragma pack(pop)
 
 inline constexpr VstInt32 kVstMidiType = 1;
+
+enum VstTimeInfoFlags : VstInt32 {
+    VstTransportChanged = 1 << 0,
+    VstTransportPlaying = 1 << 1,
+    VstTransportCycleActive = 1 << 2,
+    VstTransportRecording = 1 << 3,
+    VstAutomationWriting = 1 << 6,
+    VstAutomationReading = 1 << 7,
+    VstNanosValid = 1 << 8,
+    VstPpqPosValid = 1 << 9,
+    VstTempoValid = 1 << 10,
+    VstBarsValid = 1 << 11,
+    VstCyclePosValid = 1 << 12,
+    VstTimeSigValid = 1 << 13,
+    VstSmpteValid = 1 << 14,
+    VstClockValid = 1 << 15
+};
 
 using AudioMasterCallback = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
 using DispatcherProc = VstIntPtr (__cdecl *)(AEffect*, VstInt32, VstInt32, VstIntPtr, void*, float);
@@ -105,15 +139,33 @@ enum DispatcherOpcode : VstInt32 {
     EffGetChunk = 23,
     EffSetChunk = 24,
     EffProcessEvents = 25,
+    EffGetPlugCategory = 35,
     EffGetEffectName = 45,
     EffGetVendorString = 47,
     EffGetProductString = 48,
     EffGetVendorVersion = 49,
-    EffCanDo = 51
+    EffCanDo = 51,
+    EffGetVstVersion = 58,
+    EffGetNumMidiInputChannels = 78,
+    EffGetNumMidiOutputChannels = 79
 };
 
+enum VstPlugCategory : VstInt32 {
+    PlugCategUnknown = 0,
+    PlugCategEffect = 1,
+    PlugCategSynth = 2
+};
+
+inline constexpr VstInt32 kEffectFlagHasEditor = 1 << 0;
+inline constexpr VstInt32 kEffectFlagCanReplacing = 1 << 4;
+inline constexpr VstInt32 kEffectFlagProgramChunks = 1 << 5;
+inline constexpr VstInt32 kEffectFlagIsSynth = 1 << 8;
+
 enum AudioMasterOpcode : VstInt32 {
+    AudioMasterAutomate = 0,
     AudioMasterVersion = 1,
+    AudioMasterGetTime = 7,
+    AudioMasterProcessEvents = 8,
     AudioMasterGetSampleRate = 16,
     AudioMasterGetBlockSize = 17,
     AudioMasterGetVendorString = 32,
