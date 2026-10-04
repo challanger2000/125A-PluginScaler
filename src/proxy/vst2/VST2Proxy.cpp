@@ -713,12 +713,8 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
             ReleaseCapture();
         if (sent) {
-            // Do not synchronously transfer and repaint a full legacy
-            // framebuffer for every mouse-move message. The 30 fps surface
-            // timer will coalesce drag repaints, keeping interaction responsive.
             InvalidateRect(hwnd, nullptr, FALSE);
-            if (msg != WM_MOUSEMOVE)
-                UpdateWindow(hwnd);
+            UpdateWindow(hwnd);
         }
         return sent ? 0 : DefWindowProcW(hwnd, msg, wp, lp);
     }
