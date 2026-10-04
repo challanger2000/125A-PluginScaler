@@ -779,6 +779,8 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     default:
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
+
+    return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 bool ensureScalerSurfaceClass() {

@@ -471,7 +471,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
 
     if (!ctx)
-        return DefWindowProcA(hwnd, msg, wp, lp);
+        return DefWindowProcW(hwnd, msg, wp, lp);
 
     switch (msg) {
     case kEditorOpenMessage: {
@@ -758,8 +758,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         PostQuitMessage(0);
         return 0;
     default:
-        return DefWindowProcA(hwnd, msg, wp, lp);
+        return DefWindowProcW(hwnd, msg, wp, lp);
     }
+
+    return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 int runSharedVst2Server(const std::filesystem::path& path,
