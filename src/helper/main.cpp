@@ -723,18 +723,6 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 appendEditorDiagnostic(L"GDI-SCALE SetDIBitsToDevice hook failed");
                 return 0;
             }
-            if (!patchScreenToClientImport(
-                    ctx->module->nativeModuleHandle(),
-                    ctx->gdiScalePercent)) {
-                appendEditorDiagnostic(L"GDI-SCALE ScreenToClient hook failed");
-                return 0;
-            }
-            if (!patchClientToScreenImport(
-                    ctx->module->nativeModuleHandle(),
-                    ctx->gdiScalePercent)) {
-                appendEditorDiagnostic(L"GDI-SCALE ClientToScreen hook failed");
-                return 0;
-            }
         }
 
         if (!ctx->module->openEditor(hwnd))
@@ -1367,12 +1355,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 } else {
                     if (guiContext.gdiScalePercent > 100) {
                         (void)patchSetDIBitsImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchScreenToClientImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchClientToScreenImport(
                             module.nativeModuleHandle(),
                             guiContext.gdiScalePercent);
                     }
