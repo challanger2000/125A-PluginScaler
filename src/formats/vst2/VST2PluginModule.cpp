@@ -42,6 +42,10 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
     switch (opcode) {
     case AudioMasterVersion:
         return 2400;
+    case AudioMasterWantMidi:
+        if (module)
+            module->noteWantMidiRequest();
+        return 1;
     case AudioMasterGetTime:
         return module
             ? reinterpret_cast<VstIntPtr>(module->hostTimeInfo())
@@ -184,6 +188,7 @@ VST2PluginModule::~VST2PluginModule() {
 
 bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::string& error) {
     close();
+    wantsMidi_ = false;
 
     if (path.empty()) {
         error = "empty plugin path";
@@ -285,6 +290,7 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     };
     result.receivesVstEvents = queryCanDo("receiveVstEvents");
     result.receivesVstMidiEvents = queryCanDo("receiveVstMidiEvent");
+    result.wantsMidi = wantsMidi_;
 
     if (effect_->numParams > 0 && effect_->getParameter) {
         result.parameterDefaults.resize(static_cast<std::size_t>(effect_->numParams));
