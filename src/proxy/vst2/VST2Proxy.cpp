@@ -1330,8 +1330,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         auto** eventPtrs = reinterpret_cast<VstEvent**>(
             reinterpret_cast<std::uint8_t*>(events) + offsetof(VstEvents, events));
 
-        std::uint32_t written = 0;
-        for (std::uint32_t i = 0; i < count; ++i) {
+        std::uint32_t written = inst->pendingMidiCount;
+        for (std::uint32_t i = 0;
+             i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
             auto* ev = eventPtrs[i];
             if (!ev || ev->type != kVstMidiType ||
                 ev->byteSize < static_cast<VstInt32>(sizeof(VstMidiEvent)))
@@ -1346,6 +1347,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->pendingMidiCount = written;
         return 1;
     }
+
+    case EffGetPlugCategory:
+        return (inst->manifest.flags & (1 << 8))
+            ? kPlugCategSynth
+            : kPlugCategEffect;
+
+    case EffGetVstVersion:
+        return 2400;
 
     case EffCanDo:
         if (!ptr) return 0;
