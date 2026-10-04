@@ -701,7 +701,7 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         const bool sent = forwardScaledMouse(inst, msg, wp, lp);
         if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
             ReleaseCapture();
-        if (sent) {
+        if (sent && !inst->settings.gdiEditor) {
             InvalidateRect(hwnd, nullptr, FALSE);
             UpdateWindow(hwnd);
         }
@@ -714,6 +714,12 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         GetClientRect(hwnd, &rc);
 
         if (inst->settings.magEditor) {
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        if (inst->settings.gdiEditor) {
+            // Input-only overlay. Do not paint over the real GDI-scaled editor.
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -1034,6 +1040,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         }
 
         if (inst->settings.gdiEditor) {
+            if (!ensureScalerSurfaceClass())
+                return 0;
+
             RECT rc{};
             if (!GetClientRect(editor, &rc))
                 return 0;
@@ -1055,13 +1064,35 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             style &= ~WS_POPUP;
             SetWindowLongPtrW(editor, GWL_STYLE, style);
 
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
+            SetWindowPos(editor, HWND_BOTTOM, 0, 0, width, height,
                          SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
             RedrawWindow(editor, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
-            inst->editorSurface = nullptr;
+            // Transparent, input-only child above the real editor.
+            HWND surface = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_NOACTIVATE,
+                L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, width, height,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface) {
+                ShowWindow(editor, SW_HIDE);
+                SetParent(editor, surrogate);
+                return 0;
+            }
+
+            // Nearly transparent but still hit-testable. The actual plugin
+            // remains visually underneath and continues painting normally.
+            SetLayeredWindowAttributes(surface, 0, 1, LWA_ALPHA);
+            SetWindowPos(surface, HWND_TOP, 0, 0, width, height,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+            inst->editorSurface = surface;
             inst->editorMagnifier = nullptr;
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
             inst->editorOpen = true;
             return 1;
         }

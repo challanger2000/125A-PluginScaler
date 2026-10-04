@@ -511,14 +511,6 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
         ctx->editor = child;
 
-        if (ctx->gdiScalePercent > 100 &&
-            !installGdiMouseScaling(child, ctx->gdiScalePercent)) {
-            appendEditorDiagnostic(L"GDI-SCALE mouse subclass failed");
-            ctx->module->closeEditor();
-            ctx->editor = nullptr;
-            return 0;
-        }
-
         {
             std::wstringstream ss;
             RECT er{};
@@ -969,6 +961,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         const LPARAM coords = MAKELPARAM(
                             static_cast<short>(mouse.x),
                             static_cast<short>(mouse.y));
+                        if (message == WM_LBUTTONDOWN ||
+                            message == WM_RBUTTONDOWN) {
+                            SetFocus(guiContext.editor);
+                        }
                         SendMessageW(guiContext.editor, message,
                                      static_cast<WPARAM>(mouse.keyFlags), coords);
                     }
