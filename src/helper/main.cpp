@@ -393,11 +393,47 @@ int WINAPI scaledSetDIBitsToDevice(
                << L" scans=" << startScan << L"+" << scanLines
                << L" bits=" << (bits ? 1 : 0)
                << L" bmi=" << (bmi ? 1 : 0);
+
             if (bmi) {
-                ss << L" dib=" << std::abs(bmi->bmiHeader.biWidth)
-                   << L"x" << std::abs(bmi->bmiHeader.biHeight)
-                   << L" bpp=" << bmi->bmiHeader.biBitCount
-                   << L" comp=" << bmi->bmiHeader.biCompression;
+                const auto& hdr = bmi->bmiHeader;
+                const int dibW = std::abs(hdr.biWidth);
+                const int dibH = std::abs(hdr.biHeight);
+                ss << L" dib=" << dibW
+                   << L"x" << dibH
+                   << L" bpp=" << hdr.biBitCount
+                   << L" comp=" << hdr.biCompression;
+
+                if (bits && hdr.biCompression == BI_RGB &&
+                    (hdr.biBitCount == 24 || hdr.biBitCount == 32) &&
+                    dibW > 0 && dibH > 0) {
+                    const std::size_t stride =
+                        ((static_cast<std::size_t>(dibW) * hdr.biBitCount + 31u) / 32u) * 4u;
+                    const auto* raw = static_cast<const std::uint8_t*>(bits);
+                    const std::size_t total = static_cast<std::size_t>(dibW) * dibH;
+                    const std::size_t step = (std::max<std::size_t>)(1, total / 4096u);
+                    std::size_t nonBlack = 0;
+                    std::uint32_t hash = 2166136261u;
+                    std::uint8_t minV = 255, maxV = 0;
+
+                    for (std::size_t px = 0; px < total; px += step) {
+                        const std::size_t y = px / static_cast<std::size_t>(dibW);
+                        const std::size_t x = px % static_cast<std::size_t>(dibW);
+                        const auto* p = raw + y * stride +
+                            x * static_cast<std::size_t>(hdr.biBitCount / 8);
+                        const std::uint8_t b = p[0], g = p[1], r = p[2];
+                        const std::uint8_t v = (std::max)({r, g, b});
+                        minV = (std::min)(minV, v);
+                        maxV = (std::max)(maxV, v);
+                        if (v > 8) ++nonBlack;
+                        hash ^= b; hash *= 16777619u;
+                        hash ^= g; hash *= 16777619u;
+                        hash ^= r; hash *= 16777619u;
+                    }
+                    ss << L" sampledNonBlack=" << nonBlack
+                       << L" min=" << static_cast<unsigned>(minV)
+                       << L" max=" << static_cast<unsigned>(maxV)
+                       << L" hash=0x" << std::hex << hash << std::dec;
+                }
             }
             appendEditorDiagnostic(ss.str());
         }
