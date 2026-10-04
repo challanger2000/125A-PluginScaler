@@ -794,7 +794,7 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if ((inst->settings.directEditor || inst->settings.magEditor) &&
+            if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor) &&
                 inst->editorWindow && IsWindow(inst->editorWindow) &&
                 inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
                 ShowWindow(inst->editorWindow, SW_HIDE);
@@ -1042,21 +1042,44 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 scaledWidth <= 0 || scaledHeight <= 0)
                 return 0;
 
-            // Preserve the working x86 editor hierarchy. Keep it visible for
-            // composition, but park the helper window off-screen.
-            SetWindowPos(surrogate, HWND_BOTTOM, -10000, -10000,
-                         nativeWidth, nativeHeight,
-                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            ShowWindow(editor, SW_SHOWNA);
-            UpdateWindow(editor);
+            // Reuse the proven Direct-mode topology: the real x86 editor is
+            // embedded in the DAW at its native size. The Graphics surface is
+            // only a scaled live view placed above it.
+            SetLastError(0);
+            HWND previousParent = SetParent(editor, parent);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+
+            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+            style |= WS_CHILD | WS_VISIBLE;
+            style &= ~WS_POPUP;
+            SetWindowLongPtrW(editor, GWL_STYLE, style);
+            SetWindowPos(editor, HWND_BOTTOM, 0, 0, nativeWidth, nativeHeight,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            RedrawWindow(editor, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+            // Capture the actual plugin HWND, not the surrogate or desktop.
+            if (!startGraphicsCapture(inst, editor)) {
+                ShowWindow(editor, SW_HIDE);
+                SetParent(editor, surrogate);
+                return 0;
+            }
 
             HWND surface = CreateWindowExW(
                 0, L"125A_PluginScaler_ScaledSurface", L"",
                 WS_CHILD | WS_VISIBLE,
                 0, 0, scaledWidth, scaledHeight,
                 parent, nullptr, GetModuleHandleW(nullptr), inst);
-            if (!surface)
+            if (!surface) {
+                stopGraphicsCapture(inst);
+                ShowWindow(editor, SW_HIDE);
+                SetParent(editor, surrogate);
                 return 0;
+            }
+
+            SetWindowPos(surface, HWND_TOP, 0, 0, scaledWidth, scaledHeight,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
             inst->editorSurface = surface;
             inst->editorMagnifier = nullptr;
@@ -1064,13 +1087,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
             inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
             inst->editorOpen = true;
-
-            if (!startGraphicsCapture(inst, surrogate)) {
-                DestroyWindow(surface);
-                inst->editorSurface = nullptr;
-                inst->editorOpen = false;
-                return 0;
-            }
 
             SetTimer(surface, 0x125A, 33, nullptr);
             return 1;
@@ -1178,7 +1194,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if ((inst->settings.directEditor || inst->settings.magEditor) &&
+        if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             ShowWindow(inst->editorWindow, SW_HIDE);
