@@ -759,7 +759,9 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
 
-        if (captureEditorBitmap(inst) && !inst->editorBitmap.empty()) {
+        const bool haveFrame = captureEditorBitmap(inst) &&
+                               !inst->editorBitmap.empty();
+        if (haveFrame) {
             BITMAPINFO bmi{};
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
             bmi.bmiHeader.biWidth = static_cast<LONG>(inst->editorBitmapWidth);
@@ -776,7 +778,11 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                           inst->editorBitmap.data(),
                           &bmi, DIB_RGB_COLORS, SRCCOPY);
         } else {
-            FillRect(dc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+            // In GDI-TV mode, a missing native frame is an initialization
+            // state, not a reason to hammer the legacy editor with fallback
+            // PrintWindow/WM_PRINT capture attempts on every paint. Keep the
+            // wrapper surface quiet while the helper waits for a real DIB.
+            FillRect(dc, &rc, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         }
         EndPaint(hwnd, &ps);
         return 0;
