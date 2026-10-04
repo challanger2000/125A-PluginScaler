@@ -267,6 +267,25 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     result.numInputs = effect_->numInputs;
     result.numOutputs = effect_->numOutputs;
     result.flags = effect_->flags;
+
+    VstIntPtr category = 0;
+    if (callDispatcherSafely(effect_, EffGetPlugCategory, 0, 0, nullptr, 0.0f, &category))
+        result.plugCategory = static_cast<std::int32_t>(category);
+
+    VstIntPtr midiInputs = 0;
+    if (callDispatcherSafely(effect_, EffGetNumMidiInputChannels, 0, 0, nullptr, 0.0f, &midiInputs) &&
+        midiInputs > 0)
+        result.midiInputChannels = static_cast<std::int32_t>(midiInputs);
+
+    const auto queryCanDo = [&](const char* capability) {
+        VstIntPtr value = 0;
+        return callDispatcherSafely(effect_, EffCanDo, 0, 0,
+                                    const_cast<char*>(capability), 0.0f, &value) &&
+               value > 0;
+    };
+    result.receivesVstEvents = queryCanDo("receiveVstEvents");
+    result.receivesVstMidiEvents = queryCanDo("receiveVstMidiEvent");
+
     if (effect_->numParams > 0 && effect_->getParameter) {
         result.parameterDefaults.resize(static_cast<std::size_t>(effect_->numParams));
         for (VstInt32 i = 0; i < effect_->numParams; ++i)
