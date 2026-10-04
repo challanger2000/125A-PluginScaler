@@ -278,42 +278,6 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
     return true;
 }
 
-bool VST2PluginModule::reconfigureProcessing(double sampleRate,
-                                                   std::int32_t blockSize,
-                                                   std::string& error) noexcept {
-    if (!effect_ || !effect_->dispatcher || sampleRate <= 0.0 || blockSize <= 0) {
-        error = "invalid VST2 reconfiguration";
-        return false;
-    }
-
-    // Keep the DLL, AEffect and editor HWND alive. Unloading/reloading a VST2
-    // while its editor is open invalidates the native editor window and races
-    // the wrapper framebuffer capture.
-    if (mainsOn_) {
-        if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 0, nullptr, 0.0f)) {
-            error = "exception during mains-off reconfiguration";
-            return false;
-        }
-        mainsOn_ = false;
-    }
-
-    if (!callDispatcherSafely(effect_, EffSetSampleRate, 0, 0, nullptr,
-                              static_cast<float>(sampleRate)) ||
-        !callDispatcherSafely(effect_, EffSetBlockSize, 0,
-                              static_cast<VstIntPtr>(blockSize), nullptr, 0.0f)) {
-        error = "exception while reconfiguring VST2 audio";
-        return false;
-    }
-
-    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
-        error = "exception during mains-on reconfiguration";
-        return false;
-    }
-
-    mainsOn_ = true;
-    return true;
-}
-
 bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {
     if (!effect_ || !mainsOn_ || frames <= 0) return false;
     return callProcessReplacingSafely(effect_, inputs, outputs, frames);
