@@ -45,7 +45,11 @@ int runVst2Probe(const std::filesystem::path& path) {
         << "params=" << result.numParams << '\n'
         << "inputs=" << result.numInputs << '\n'
         << "outputs=" << result.numOutputs << '\n'
-        << "flags=" << result.flags << '\n';
+        << "flags=" << result.flags << '\n'
+        << "category=" << result.plugCategory << '\n'
+        << "midiInputs=" << result.midiInputChannels << '\n'
+        << "receiveVstEvents=" << (result.receivesVstEvents ? 1 : 0) << '\n'
+        << "receiveVstMidiEvent=" << (result.receivesVstMidiEvents ? 1 : 0) << '\n';
 
     if (!result.error.empty())
         std::cout << "error=" << result.error << '\n';
@@ -73,7 +77,11 @@ int writeVst2Manifest(const std::filesystem::path& path,
         << "params=" << result.numParams << "\n"
         << "inputs=" << result.numInputs << "\n"
         << "outputs=" << result.numOutputs << "\n"
-        << "flags=" << result.flags << "\n";
+        << "flags=" << result.flags << "\n"
+        << "category=" << result.plugCategory << "\n"
+        << "midiInputs=" << result.midiInputChannels << "\n"
+        << "receiveVstEvents=" << (result.receivesVstEvents ? 1 : 0) << "\n"
+        << "receiveVstMidiEvent=" << (result.receivesVstMidiEvents ? 1 : 0) << "\n";
     for (std::size_t i = 0; i < result.parameterDefaults.size(); ++i)
         out << "param." << i << "=" << result.parameterDefaults[i] << "\n";
     return out ? 0 : 22;
