@@ -285,6 +285,35 @@ void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
         }
     }
 
+    // Do not publish a transient all-black initialization frame.
+    // Some legacy editors paint a black/empty DIB first and the real GUI on
+    // the following blit. In that case the wrapper should simply wait for
+    // the next useful native frame instead of treating black as valid content.
+    std::size_t sampledNonBlack = 0;
+    std::uint8_t sampledMax = 0;
+    {
+        const std::size_t total =
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+        const std::size_t step = (std::max<std::size_t>)(1, total / 4096u);
+        for (std::size_t px = 0; px < total; px += step) {
+            const std::size_t i = px * 4u;
+            if (i + 2 >= frame.size())
+                break;
+            const std::uint8_t b = frame[i + 0];
+            const std::uint8_t g = frame[i + 1];
+            const std::uint8_t r = frame[i + 2];
+            const std::uint8_t v = (std::max)({r, g, b});
+            sampledMax = (std::max)(sampledMax, v);
+            if (v > 8)
+                ++sampledNonBlack;
+        }
+    }
+
+    if (sampledNonBlack == 0 && sampledMax <= 8) {
+        appendEditorDiagnostic(L"GDI FRAME ignored transient black frame");
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
     g_gdiFramePixels = std::move(frame);
     g_gdiFrameWidth = static_cast<std::uint32_t>(width);
