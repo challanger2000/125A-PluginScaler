@@ -118,14 +118,21 @@ bool runScale(EntryProc entry, int scale) {
 
         HWND surface=nullptr;
         EnumChildWindows(host,findSurfaceProc,reinterpret_cast<LPARAM>(&surface));
-        ok=ok && openOk!=0 && surface!=nullptr;
+        const bool opened = openOk != 0;
+        const bool haveSurface = surface != nullptr;
+        std::cout<<"gdi-open-"<<scale<<"-"<<cycle<<"="<<(opened?"PASS":"FAIL")<<"\n";
+        std::cout<<"gdi-surface-"<<scale<<"-"<<cycle<<"="<<(haveSurface?"PASS":"FAIL")<<"\n";
+        ok=ok && opened && haveSurface;
 
         if(surface) {
             RECT rc{};
             GetClientRect(surface,&rc);
             const int sw=rc.right-rc.left;
             const int sh=rc.bottom-rc.top;
-            ok=ok && sw==expectedWidth && sh==expectedHeight;
+            const bool sizeOk = sw==expectedWidth && sh==expectedHeight;
+            std::cout<<"gdi-size-"<<scale<<"-"<<cycle<<"="
+                     <<(sizeOk?"PASS":"FAIL")<<" actual="<<sw<<"x"<<sh<<"\n";
+            ok=ok && sizeOk;
 
             const int keyX=scaledCoord(100,scale);
             const int keyY=scaledCoord(300,scale);
@@ -134,6 +141,11 @@ bool runScale(EntryProc entry, int scale) {
             const COLORREF keyBefore=GetPixel(dc,keyX,keyY);
             ReleaseDC(surface,dc);
             const bool scaledVisual=approx(keyBefore,224,224,224,65);
+            std::cout<<"gdi-visual-"<<scale<<"-"<<cycle<<"="
+                     <<(scaledVisual?"PASS":"FAIL")
+                     <<" rgb="<<(int)GetRValue(keyBefore)<<","
+                     <<(int)GetGValue(keyBefore)<<","
+                     <<(int)GetBValue(keyBefore)<<"\n";
             ok=ok && scaledVisual;
 
             SendMessageW(surface,WM_LBUTTONDOWN,MK_LBUTTON,MAKELPARAM(keyX,keyY));
@@ -142,6 +154,11 @@ bool runScale(EntryProc entry, int scale) {
             const COLORREF keyDown=GetPixel(dc,keyX,keyY);
             ReleaseDC(surface,dc);
             const bool clickMapped=approx(keyDown,0,204,0,70);
+            std::cout<<"gdi-click-"<<scale<<"-"<<cycle<<"="
+                     <<(clickMapped?"PASS":"FAIL")
+                     <<" rgb="<<(int)GetRValue(keyDown)<<","
+                     <<(int)GetGValue(keyDown)<<","
+                     <<(int)GetBValue(keyDown)<<"\n";
             ok=ok && clickMapped;
             SendMessageW(surface,WM_LBUTTONUP,0,MAKELPARAM(keyX,keyY));
 
@@ -161,6 +178,8 @@ bool runScale(EntryProc entry, int scale) {
             const COLORREF knobPixel=GetPixel(dc,knobX,knobEndY);
             ReleaseDC(surface,dc);
             const bool dragRedraw=knobPixel!=CLR_INVALID;
+            std::cout<<"gdi-drag-"<<scale<<"-"<<cycle<<"="
+                     <<(dragRedraw?"PASS":"FAIL")<<"\n";
             ok=ok && dragRedraw;
 
             std::cout<<"gdi-cycle-"<<scale<<"-"<<cycle
@@ -171,6 +190,10 @@ bool runScale(EntryProc entry, int scale) {
             effect,EffEditClose,0,0,nullptr,0.0f);
         Sleep(30);
         const bool closed=closeOk!=0 && childCount(host)==0;
+        std::cout<<"gdi-close-"<<scale<<"-"<<cycle<<"="
+                 <<(closed?"PASS":"FAIL")
+                 <<" closeRet="<<closeOk
+                 <<" children="<<childCount(host)<<"\n";
         ok=ok && closed;
         DestroyWindow(host);
     }
