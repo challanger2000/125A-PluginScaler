@@ -128,10 +128,18 @@ struct ProxyInstance {
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
     std::vector<float> parameterValues;
-    std::uint32_t parameterGeneration{1};
+    std::uint32_t parameterGeneration{0};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
+
+void appendMidiDiagnostic(const std::wstring& line) {
+    const auto modulePath = proxyModulePath();
+    const auto dir = modulePath.empty() ? std::filesystem::current_path()
+                                        : modulePath.parent_path();
+    std::wofstream out(dir / L"PluginScaler-MidiDiagnostics.txt", std::ios::app);
+    if (out) out << line << L"\n";
+}
 
 std::wstring getenvWide(const wchar_t* name) {
     const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
@@ -1412,6 +1420,19 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 dst.data[b] = static_cast<std::uint8_t>(midi->midiData[b]);
         }
         inst->pendingMidiCount = written;
+        {
+            std::wstringstream ss;
+            ss << L"proxy effProcessEvents received=" << events->numEvents
+               << L" queued=" << written;
+            if (written > 0) {
+                const auto& m = inst->pendingMidi[written - 1];
+                ss << L" last=" << static_cast<unsigned>(m.data[0])
+                   << L"," << static_cast<unsigned>(m.data[1])
+                   << L"," << static_cast<unsigned>(m.data[2])
+                   << L" delta=" << m.deltaFrames;
+            }
+            appendMidiDiagnostic(ss.str());
+        }
         return 1;
     }
 
