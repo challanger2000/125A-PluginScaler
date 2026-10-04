@@ -360,8 +360,6 @@ struct GdiMouseScaleState {
     POINT nativeStart{};
 };
 
-const wchar_t* kGdiMouseScaleProp = L"125A.PluginScaler.GdiMouseScale";
-
 LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
     if (!state || state->scale <= 100)
         return lp;
@@ -395,13 +393,15 @@ LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
 LRESULT CALLBACK gdiScaledEditorProc(
     HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* state = reinterpret_cast<GdiMouseScaleState*>(
-        GetPropW(hwnd, kGdiMouseScaleProp));
+        GetPropA(hwnd, "125A.PluginScaler.GdiMouseScale"));
     if (!state || !state->original)
-        return DefWindowProcW(hwnd, msg, wp, lp);
+        return DefWindowProcA(hwnd, msg, wp, lp);
 
     switch (msg) {
-    case WM_MOUSEMOVE:
     case WM_LBUTTONDOWN:
+        SetFocus(hwnd);
+        [[fallthrough]];
+    case WM_MOUSEMOVE:
     case WM_LBUTTONUP:
     case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
@@ -417,10 +417,10 @@ LRESULT CALLBACK gdiScaledEditorProc(
     }
 
     const WNDPROC original = state->original;
-    const LRESULT result = CallWindowProcW(original, hwnd, msg, wp, lp);
+    const LRESULT result = CallWindowProcA(original, hwnd, msg, wp, lp);
 
     if (msg == WM_NCDESTROY) {
-        RemovePropW(hwnd, kGdiMouseScaleProp);
+        RemovePropA(hwnd, "125A.PluginScaler.GdiMouseScale");
         delete state;
     }
     return result;
@@ -429,7 +429,7 @@ LRESULT CALLBACK gdiScaledEditorProc(
 bool installGdiMouseScaling(HWND editor, int scalePercent) {
     if (!editor || !IsWindow(editor) || scalePercent <= 100)
         return scalePercent <= 100;
-    if (GetPropW(editor, kGdiMouseScaleProp))
+    if (GetPropA(editor, "125A.PluginScaler.GdiMouseScale"))
         return true;
 
     auto* state = new (std::nothrow) GdiMouseScaleState{};
@@ -439,7 +439,7 @@ bool installGdiMouseScaling(HWND editor, int scalePercent) {
 
     SetLastError(0);
     const auto previous = reinterpret_cast<WNDPROC>(
-        SetWindowLongPtrW(
+        SetWindowLongPtrA(
             editor, GWLP_WNDPROC,
             reinterpret_cast<LONG_PTR>(&gdiScaledEditorProc)));
     if (!previous && GetLastError() != 0) {
@@ -448,8 +448,8 @@ bool installGdiMouseScaling(HWND editor, int scalePercent) {
     }
 
     state->original = previous;
-    if (!SetPropW(editor, kGdiMouseScaleProp, state)) {
-        SetWindowLongPtrW(
+    if (!SetPropA(editor, "125A.PluginScaler.GdiMouseScale", state)) {
+        SetWindowLongPtrA(
             editor, GWLP_WNDPROC,
             reinterpret_cast<LONG_PTR>(previous));
         delete state;
@@ -471,7 +471,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
 
     if (!ctx)
-        return DefWindowProcW(hwnd, msg, wp, lp);
+        return DefWindowProcA(hwnd, msg, wp, lp);
 
     switch (msg) {
     case kEditorOpenMessage: {
@@ -766,7 +766,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         PostQuitMessage(0);
         return 0;
     default:
-        return DefWindowProcW(hwnd, msg, wp, lp);
+        return DefWindowProcA(hwnd, msg, wp, lp);
     }
 }
 
