@@ -245,6 +245,8 @@ std::vector<std::uint8_t> g_gdiFramePixels;
 std::uint32_t g_gdiFrameWidth{0};
 std::uint32_t g_gdiFrameHeight{0};
 std::uint32_t g_gdiFrameStride{0};
+std::atomic<unsigned> g_gdiBlitDiagCount{0};
+std::atomic<unsigned> g_gdiCaptureDiagCount{0};
 
 void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
     if (!bits || !bmi)
@@ -380,6 +382,26 @@ int WINAPI scaledSetDIBitsToDevice(
         return 0;
 
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
+
+    {
+        const unsigned n = g_gdiBlitDiagCount.fetch_add(1, std::memory_order_relaxed);
+        if (n < 48) {
+            std::wstringstream ss;
+            ss << L"GDI BLIT #" << n
+               << L" dst=(" << xDest << L"," << yDest << L"," << width << L"x" << height << L")"
+               << L" src=(" << xSrc << L"," << ySrc << L")"
+               << L" scans=" << startScan << L"+" << scanLines
+               << L" bits=" << (bits ? 1 : 0)
+               << L" bmi=" << (bmi ? 1 : 0);
+            if (bmi) {
+                ss << L" dib=" << std::abs(bmi->bmiHeader.biWidth)
+                   << L"x" << std::abs(bmi->bmiHeader.biHeight)
+                   << L" bpp=" << bmi->bmiHeader.biBitCount
+                   << L" comp=" << bmi->bmiHeader.biCompression;
+            }
+            appendEditorDiagnostic(ss.str());
+        }
+    }
 
     // TV-style scaler source: keep a native BGRA copy of the plugin's own DIB.
     // This avoids PrintWindow/BitBlt entirely for legacy plugins such as Pro-53.
@@ -858,6 +880,8 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g_gdiFrameWidth = 0;
             g_gdiFrameHeight = 0;
             g_gdiFrameStride = 0;
+            g_gdiBlitDiagCount.store(0, std::memory_order_relaxed);
+            g_gdiCaptureDiagCount.store(0, std::memory_order_relaxed);
         }
         if (ctx->editor && IsWindow(ctx->editor))
             return reinterpret_cast<LRESULT>(ctx->editor);
@@ -1032,6 +1056,16 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 
         {
             std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
+            const unsigned n = g_gdiCaptureDiagCount.fetch_add(1, std::memory_order_relaxed);
+            if (n < 24) {
+                std::wstringstream ss;
+                ss << L"CAPTURE REQUEST #" << n
+                   << L" native=" << (!g_gdiFramePixels.empty() ? 1 : 0)
+                   << L" size=" << g_gdiFrameWidth << L"x" << g_gdiFrameHeight
+                   << L" stride=" << g_gdiFrameStride
+                   << L" bytes=" << g_gdiFramePixels.size();
+                appendEditorDiagnostic(ss.str());
+            }
             if (!g_gdiFramePixels.empty() &&
                 g_gdiFrameWidth > 0 && g_gdiFrameHeight > 0 &&
                 g_gdiFrameStride >= g_gdiFrameWidth * 4u) {
