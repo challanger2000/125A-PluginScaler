@@ -23,9 +23,17 @@ thread_local VST2PluginModule* g_constructingModule = nullptr;
 VST2PluginModule* moduleForHostCallback(AEffect* effect) {
     if (!effect)
         return g_constructingModule;
-    std::lock_guard<std::mutex> lock(g_hostModuleMutex);
-    const auto it = g_hostModules.find(effect);
-    return it != g_hostModules.end() ? it->second : nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
+        const auto it = g_hostModules.find(effect);
+        if (it != g_hostModules.end())
+            return it->second;
+    }
+
+    // Some VST2 plugins call the host with their non-null AEffect from inside
+    // VSTPluginMain(), before we can register that pointer in g_hostModules.
+    return g_constructingModule;
 }
 
 VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
