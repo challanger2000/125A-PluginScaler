@@ -455,11 +455,17 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
         inst->dragNativeStartY = nativeY;
     } else if ((message == WM_MOUSEMOVE || message == WM_LBUTTONUP) &&
                inst->dragActive) {
+        const int nativeDeltaX =
+            (scaledX - inst->dragSurfaceStartX) *
+            static_cast<int>(inst->editorBitmapWidth) / surfaceWidth;
+        const int nativeDeltaY =
+            (scaledY - inst->dragSurfaceStartY) *
+            static_cast<int>(inst->editorBitmapHeight) / surfaceHeight;
         nativeX = std::clamp(
-            inst->dragNativeStartX + (scaledX - inst->dragSurfaceStartX),
+            inst->dragNativeStartX + nativeDeltaX,
             0, static_cast<int>(inst->editorBitmapWidth) - 1);
         nativeY = std::clamp(
-            inst->dragNativeStartY + (scaledY - inst->dragSurfaceStartY),
+            inst->dragNativeStartY + nativeDeltaY,
             0, static_cast<int>(inst->editorBitmapHeight) - 1);
     }
 
@@ -686,7 +692,7 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             (void)updateMagnifierSource(inst);
             return 0;
         }
-        if (inst->settings.graphicsEditor) {
+        if (inst->settings.graphicsEditor || inst->settings.gdiEditor) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -701,7 +707,7 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         const bool sent = forwardScaledMouse(inst, msg, wp, lp);
         if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
             ReleaseCapture();
-        if (sent && !inst->settings.gdiEditor) {
+        if (sent) {
             InvalidateRect(hwnd, nullptr, FALSE);
             UpdateWindow(hwnd);
         }
@@ -719,380 +725,48 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         if (inst->settings.gdiEditor) {
-            // Input-only overlay. Do not paint over the real GDI-scaled editor.
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
+            if (!ensureScalerSurfaceClass())
+                return 0;
 
-        if (inst->settings.graphicsEditor && inst->graphicsCapture) {
-            std::vector<std::uint8_t> pixels;
-            std::uint32_t width = 0;
-            std::uint32_t height = 0;
-            {
-                std::lock_guard<std::mutex> lock(inst->graphicsCapture->mutex);
-                pixels = inst->graphicsCapture->pixels;
-                width = inst->graphicsCapture->width;
-                height = inst->graphicsCapture->height;
-            }
-            if (!pixels.empty() && width > 0 && height > 0) {
-                BITMAPINFO bmi{};
-                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-                bmi.bmiHeader.biWidth = static_cast<LONG>(width);
-                bmi.bmiHeader.biHeight = -static_cast<LONG>(height);
-                bmi.bmiHeader.biPlanes = 1;
-                bmi.bmiHeader.biBitCount = 32;
-                bmi.bmiHeader.biCompression = BI_RGB;
-                SetStretchBltMode(dc, HALFTONE);
-                StretchDIBits(dc,
-                              0, 0, rc.right - rc.left, rc.bottom - rc.top,
-                              0, 0, static_cast<int>(width), static_cast<int>(height),
-                              pixels.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
-            } else {
-                FillRect(dc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-            }
-            EndPaint(hwnd, &ps);
-            return 0;
-        }
+            // TV-style architecture: leave the real x86 plugin editor entirely
+            // in its native coordinate system inside the helper surrogate.
+            // Studio One sees only our scaled x64 surface.
+            RECT nativeRc{};
+            if (!GetClientRect(editor, &nativeRc))
+                return 0;
+            const int nativeWidth = nativeRc.right - nativeRc.left;
+            const int nativeHeight = nativeRc.bottom - nativeRc.top;
+            const int scaledWidth =
+                nativeWidth * inst->scalePercent / 100;
+            const int scaledHeight =
+                nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                scaledWidth <= 0 || scaledHeight <= 0)
+                return 0;
 
-        if (captureEditorBitmap(inst) && !inst->editorBitmap.empty()) {
-            BITMAPINFO bmi{};
-            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-            bmi.bmiHeader.biWidth = static_cast<LONG>(inst->editorBitmapWidth);
-            bmi.bmiHeader.biHeight = -static_cast<LONG>(inst->editorBitmapHeight);
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-            SetStretchBltMode(dc, HALFTONE);
-            StretchDIBits(dc,
-                          0, 0, rc.right - rc.left, rc.bottom - rc.top,
-                          0, 0,
-                          static_cast<int>(inst->editorBitmapWidth),
-                          static_cast<int>(inst->editorBitmapHeight),
-                          inst->editorBitmap.data(),
-                          &bmi, DIB_RGB_COLORS, SRCCOPY);
-        } else {
-            FillRect(dc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-        }
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    default:
-        return DefWindowProcW(hwnd, msg, wp, lp);
-    }
+            HWND surface = CreateWindowExW(
+                0, L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, scaledWidth, scaledHeight,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface)
+                return 0;
 
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-bool ensureScalerSurfaceClass() {
-    static const wchar_t* kClassName = L"125A_PluginScaler_ScaledSurface";
-    static bool ready = false;
-    if (ready) return true;
-
-    WNDCLASSW wc{};
-    wc.lpfnWndProc = scalerSurfaceProc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = kClassName;
-    wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    ATOM atom = RegisterClassW(&wc);
-    if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-        return false;
-    ready = true;
-    return true;
-}
-
-void stopBridge(ProxyInstance* inst) noexcept {
-    if (!inst) return;
-
-    if (inst->bridgeStarted) {
-        if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
-                inst->editorWindow && IsWindow(inst->editorWindow) &&
-                inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
-                ShowWindow(inst->editorWindow, SW_HIDE);
-                SetParent(inst->editorWindow, inst->editorSurrogate);
-            }
-            stopGraphicsCapture(inst);
-            if (inst->editorSurface && IsWindow(inst->editorSurface))
-                KillTimer(inst->editorSurface, 0x125A);
-            if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
-                DestroyWindow(inst->editorMagnifier);
+            inst->editorSurface = surface;
             inst->editorMagnifier = nullptr;
-            if (inst->editorSurface && IsWindow(inst->editorSurface))
-                DestroyWindow(inst->editorSurface);
-            inst->editorSurface = nullptr;
-            std::vector<std::uint8_t> ignored;
-            (void)controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
-                              0, nullptr, 0, ignored);
-            inst->editorWindow = nullptr;
-            inst->editorSurrogate = nullptr;
-            inst->editorOpen = false;
-        }
-        if (inst->controlPipe != INVALID_HANDLE_VALUE) {
-            std::vector<std::uint8_t> ignored;
-            (void)controlCall(inst, pluginscaler::ipc::ControlCommand::Shutdown,
-                              0, nullptr, 0, ignored);
-            CloseHandle(inst->controlPipe);
-            inst->controlPipe = INVALID_HANDLE_VALUE;
-        }
-
-        if (auto* block = inst->channel.block()) {
-            block->header.state.store(
-                static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::Shutdown),
-                std::memory_order_release);
-            inst->channel.signalInput();
-        }
-
-        if (inst->helperProcess.hProcess) {
-            const DWORD wait = WaitForSingleObject(inst->helperProcess.hProcess, 1500);
-            if (wait == WAIT_TIMEOUT)
-                TerminateProcess(inst->helperProcess.hProcess, 1);
-            CloseHandle(inst->helperProcess.hProcess);
-        }
-        if (inst->helperProcess.hThread)
-            CloseHandle(inst->helperProcess.hThread);
-
-        inst->helperProcess = {};
-        inst->channel.close();
-        inst->bridgeStarted = false;
-    }
-}
-
-bool startBridge(ProxyInstance* inst) {
-    if (!inst) return false;
-    if (inst->bridgeStarted) return true;
-
-    const std::wstring& helper = inst->settings.helper;
-    const std::wstring& target = inst->settings.target;
-    if (helper.empty() || target.empty())
-        return false;
-
-    const auto id = g_instanceCounter.fetch_add(1, std::memory_order_relaxed);
-    const std::wstring suffix =
-        std::to_wstring(GetCurrentProcessId()) + L"_" + std::to_wstring(id);
-
-    const std::wstring mapName = L"Local\\125A_PluginScaler_Proxy_Map_" + suffix;
-    const std::wstring inEvent = L"Local\\125A_PluginScaler_Proxy_In_" + suffix;
-    const std::wstring outEvent = L"Local\\125A_PluginScaler_Proxy_Out_" + suffix;
-    const std::wstring controlPipeName = L"\\\\.\\pipe\\125A_PluginScaler_Control_" + suffix;
-
-    if (!inst->channel.create(mapName, inEvent, outEvent))
-        return false;
-
-    std::wstring command =
-        quote(helper) + L" --serve-vst2-shm " +
-        quote(target) + L" " +
-        quote(mapName) + L" " +
-        quote(inEvent) + L" " +
-        quote(outEvent) + L" " +
-        quote(controlPipeName);
-
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-
-    if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        inst->channel.close();
-        return false;
-    }
-
-    HANDLE control = INVALID_HANDLE_VALUE;
-    for (int attempt = 0; attempt < 100 && control == INVALID_HANDLE_VALUE; ++attempt) {
-        control = CreateFileW(controlPipeName.c_str(),
-                              GENERIC_READ | GENERIC_WRITE,
-                              0, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (control != INVALID_HANDLE_VALUE)
-            break;
-        if (GetLastError() != ERROR_PIPE_BUSY &&
-            GetLastError() != ERROR_FILE_NOT_FOUND)
-            break;
-        WaitNamedPipeW(controlPipeName.c_str(), 20);
-        Sleep(10);
-    }
-
-    if (control == INVALID_HANDLE_VALUE) {
-        TerminateProcess(pi.hProcess, 2);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        inst->channel.close();
-        return false;
-    }
-
-    inst->controlPipe = control;
-    inst->helperProcess = pi;
-    inst->bridgeStarted = true;
-
-    if (!inst->stateChunk.empty()) {
-        std::vector<std::uint8_t> ignored;
-        if (controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
-                        0, inst->stateChunk.data(),
-                        static_cast<std::uint32_t>(inst->stateChunk.size()), ignored))
-            refreshParametersFromHelper(inst);
-    }
-
-    return true;
-}
-
-VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
-                             VstIntPtr value, void* ptr, float opt) {
-    auto* inst = self(effect);
-    if (!inst) return 0;
-
-    switch (opcode) {
-    case EffOpen:
-        return 1;
-
-    case EffClose:
-        stopBridge(inst);
-        delete inst;
-        return 1;
-
-    case EffSetSampleRate:
-        inst->sampleRate = opt > 0.0f ? static_cast<double>(opt) : 48000.0;
-        return 1;
-
-    case EffSetBlockSize:
-        inst->blockSize = value > 0 ? static_cast<VstInt32>(value) : 512;
-        return 1;
-
-    case EffMainsChanged:
-        inst->mainsOn = value != 0;
-        if (inst->mainsOn)
-            return startBridge(inst) ? 1 : 0;
-        stopBridge(inst);
-        return 1;
-
-    case EffEditGetRect: {
-        if (!ptr || !startBridge(inst)) return 0;
-        std::vector<std::uint8_t> reply;
-        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::GetEditorRect,
-                         0, nullptr, 0, reply) ||
-            reply.size() != sizeof(pluginscaler::ipc::EditorRectPayload))
-            return 0;
-        pluginscaler::ipc::EditorRectPayload remote{};
-        std::memcpy(&remote, reply.data(), sizeof(remote));
-        const int nativeWidth = remote.right - remote.left;
-        const int nativeHeight = remote.bottom - remote.top;
-        const int effectiveScale = inst->settings.directEditor ? 100 : inst->scalePercent;
-        const int scaledWidth = nativeWidth * effectiveScale / 100;
-        const int scaledHeight = nativeHeight * effectiveScale / 100;
-        inst->editorRect.left = 0;
-        inst->editorRect.top = 0;
-        inst->editorRect.right = static_cast<std::int16_t>(scaledWidth);
-        inst->editorRect.bottom = static_cast<std::int16_t>(scaledHeight);
-        *static_cast<VstRect**>(ptr) = &inst->editorRect;
-        return 1;
-    }
-
-    case EffEditOpen: {
-        if (!ptr || !startBridge(inst)) return 0;
-        std::vector<std::uint8_t> reply;
-        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                         inst->settings.gdiEditor
-                             ? static_cast<std::uint32_t>(inst->scalePercent)
-                             : 0u,
-                         nullptr, 0, reply) ||
-            reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
-            return 0;
-
-        pluginscaler::ipc::EditorOpenResult result{};
-        std::memcpy(&result, reply.data(), sizeof(result));
-        HWND editor = reinterpret_cast<HWND>(
-            static_cast<std::uintptr_t>(result.editorWindow));
-        HWND surrogate = reinterpret_cast<HWND>(
-            static_cast<std::uintptr_t>(result.surrogateWindow));
-        HWND parent = static_cast<HWND>(ptr);
-        if (!editor || !surrogate || !IsWindow(editor) || !IsWindow(surrogate) ||
-            !parent || !IsWindow(parent))
-            return 0;
-
-        inst->editorWindow = editor;
-        inst->editorSurrogate = surrogate;
-        inst->editorHost = parent;
-        inst->dragActive = false;
-
-        if (inst->settings.directEditor) {
-            RECT rc{};
-            if (!GetClientRect(editor, &rc))
-                return 0;
-            const int width = rc.right - rc.left;
-            const int height = rc.bottom - rc.top;
-            if (width <= 0 || height <= 0)
-                return 0;
-
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
-                return 0;
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-
-            inst->editorSurface = nullptr;
-            inst->editorMagnifier = nullptr;
+            inst->editorBitmapWidth =
+                static_cast<std::uint32_t>(nativeWidth);
+            inst->editorBitmapHeight =
+                static_cast<std::uint32_t>(nativeHeight);
+            inst->editorBitmapStride =
+                static_cast<std::uint32_t>(nativeWidth * 4);
             inst->editorOpen = true;
-            return 1;
-        }
 
-        if (inst->settings.gdiEditor) {
-            RECT rc{};
-            if (!GetClientRect(editor, &rc))
-                return 0;
-            const int editorWidth = rc.right - rc.left;
-            const int editorHeight = rc.bottom - rc.top;
-            const int expectedWidth =
-                inst->editorRect.right - inst->editorRect.left;
-            const int expectedHeight =
-                inst->editorRect.bottom - inst->editorRect.top;
-
-            // New helper builds create the legacy HWND at its final scaled
-            // dimensions before the first paint. Keep compatibility with an
-            // older helper by scaling only when the returned HWND is still
-            // smaller than the already-scaled VST editor rect.
-            const bool helperAlreadyScaled =
-                editorWidth == expectedWidth &&
-                editorHeight == expectedHeight;
-            const int width = helperAlreadyScaled
-                ? editorWidth
-                : editorWidth * inst->scalePercent / 100;
-            const int height = helperAlreadyScaled
-                ? editorHeight
-                : editorHeight * inst->scalePercent / 100;
-            if (editorWidth <= 0 || editorHeight <= 0 ||
-                width <= 0 || height <= 0)
-                return 0;
-
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
-                return 0;
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-
-            // Experimental GDI mode is image-only for now. Do not place a
-            // proxy input surface above the editor: synchronous cross-process
-            // mouse forwarding can deadlock legacy plugin UI threads.
-            inst->editorSurface = nullptr;
-            inst->editorMagnifier = nullptr;
-            inst->editorBitmapWidth = static_cast<std::uint32_t>(editorWidth);
-            inst->editorBitmapHeight = static_cast<std::uint32_t>(editorHeight);
-            inst->editorBitmapStride = static_cast<std::uint32_t>(editorWidth * 4);
-            inst->editorOpen = true;
+            // Capture/render the native editor at ~30 fps. The source editor
+            // itself never changes size.
+            SetTimer(surface, 0x125A, 33, nullptr);
+            InvalidateRect(surface, nullptr, FALSE);
+            UpdateWindow(surface);
             return 1;
         }
 
