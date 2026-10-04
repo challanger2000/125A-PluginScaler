@@ -826,7 +826,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             // DPI-style virtualization for the legacy editor: establish the
             // scaled parent geometry before effEditOpen and resize the direct
             // child in the CBT create callback, before its first visible paint.
-            VstRect nativeRect{};
+            pluginscaler::formats::vst2abi::VstRect nativeRect{};
             if (ctx->module->editorRect(nativeRect)) {
                 const int nativeWidth = nativeRect.right - nativeRect.left;
                 const int nativeHeight = nativeRect.bottom - nativeRect.top;
