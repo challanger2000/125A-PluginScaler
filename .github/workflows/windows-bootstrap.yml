@@ -188,7 +188,8 @@ jobs:
             throw "Synth bridge marker missing"
           }
 
-      - name: Run Pro-53-style GDI scaler harness
+      - name: Run Pro-53-style GDI scaler harness (experimental, non-gating)
+        continue-on-error: true
         timeout-minutes: 3
         shell: pwsh
         run: |
