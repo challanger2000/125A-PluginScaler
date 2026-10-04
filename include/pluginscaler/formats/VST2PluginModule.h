@@ -59,6 +59,10 @@ public:
                            double sampleRate,
                            std::int32_t blockSize,
                            std::string& error);
+    bool reconfigureProcessing(double sampleRate,
+                               std::int32_t blockSize) noexcept;
+    bool setMains(bool active) noexcept;
+    void setHostTimeInfo(const vst2abi::VstTimeInfo& info) noexcept;
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -83,6 +87,9 @@ private:
     vst2abi::AEffect* effect_{nullptr};
     bool effOpenCalled_{false};
     bool mainsOn_{false};
+    double sampleRate_{48000.0};
+    std::int32_t blockSize_{512};
+    vst2abi::VstTimeInfo timeInfo_{};
 };
 
 } // namespace pluginscaler::formats
