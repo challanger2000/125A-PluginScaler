@@ -268,10 +268,13 @@ BOOL WINAPI scaledScreenToClient(HWND hwnd, LPPOINT point) {
         static std::atomic<unsigned> diagCount{0};
         const unsigned n = diagCount.fetch_add(1, std::memory_order_relaxed);
         if (n < 32) {
+            POINT unscaledClient = before;
+            (void)original(hwnd, &unscaledClient);
+
             std::wstringstream ss;
             ss << L"INPUT ScreenToClient #" << n
-               << L" before=(" << before.x << L"," << before.y << L")"
-               << L" client=(" << original(hwnd, &before), before.x << L"," << before.y << L")"
+               << L" screen=(" << before.x << L"," << before.y << L")"
+               << L" client=(" << unscaledClient.x << L"," << unscaledClient.y << L")"
                << L" mapped=(" << point->x << L"," << point->y << L")";
             appendEditorDiagnostic(ss.str());
         }
