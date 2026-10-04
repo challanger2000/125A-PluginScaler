@@ -288,44 +288,44 @@ int WINAPI scaledSetDIBitsToDevice(
         return 0;
 
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
-    if (scale <= 100 || !bits || !bmi || width == 0 || height == 0)
+    if (scale <= 100 || !hdc)
         return original(hdc, xDest, yDest, width, height,
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
-    const auto dibWidth = std::abs(bmi->bmiHeader.biWidth);
-    const auto dibHeight = std::abs(bmi->bmiHeader.biHeight);
-
-    // Safety first: SetDIBitsToDevice may be called with only a subset of
-    // scanlines during interactive redraws. In that case the supplied bits
-    // pointer does not necessarily describe a complete height-sized buffer.
-    // Stretching the full image can read beyond the valid source region.
-    // Until partial-update semantics are handled explicitly, pass those calls
-    // straight through to GDI unchanged.
-    const bool fullFrame =
-        startScan == 0 &&
-        scanLines == height &&
-        dibWidth >= static_cast<LONG>(width) &&
-        dibHeight >= static_cast<LONG>(height);
-
-    if (!fullFrame)
+    // Scale the destination coordinate space instead of rebuilding the DIB.
+    // This preserves SetDIBitsToDevice's native handling of partial scan-line
+    // updates and avoids reading beyond buffers supplied for those updates.
+    const int saved = SaveDC(hdc);
+    if (saved == 0)
         return original(hdc, xDest, yDest, width, height,
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
-    const int scaledX = MulDiv(xDest, scale, 100);
-    const int scaledY = MulDiv(yDest, scale, 100);
-    const int scaledW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
-    const int scaledH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
+    int result = 0;
+    if (SetGraphicsMode(hdc, GM_ADVANCED)) {
+        const FLOAT factor = static_cast<FLOAT>(scale) / 100.0f;
+        XFORM scaleTransform{};
+        scaleTransform.eM11 = factor;
+        scaleTransform.eM22 = factor;
 
-    // Full-frame Pro-53 GUI blit only.
-    SetStretchBltMode(hdc, COLORONCOLOR);
-    const int result = StretchDIBits(
-        hdc,
-        scaledX, scaledY, scaledW, scaledH,
-        xSrc, ySrc, static_cast<int>(width), static_cast<int>(height),
-        bits, bmi, colorUse, SRCCOPY);
-    return result == GDI_ERROR ? 0 : result;
+        if (ModifyWorldTransform(hdc, &scaleTransform, MWT_LEFTMULTIPLY)) {
+            result = original(hdc, xDest, yDest, width, height,
+                              xSrc, ySrc, startScan, scanLines,
+                              bits, bmi, colorUse);
+        } else {
+            result = original(hdc, xDest, yDest, width, height,
+                              xSrc, ySrc, startScan, scanLines,
+                              bits, bmi, colorUse);
+        }
+    } else {
+        result = original(hdc, xDest, yDest, width, height,
+                          xSrc, ySrc, startScan, scanLines,
+                          bits, bmi, colorUse);
+    }
+
+    RestoreDC(hdc, saved);
+    return result;
 }
 
 bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
