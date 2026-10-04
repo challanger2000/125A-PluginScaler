@@ -238,6 +238,28 @@ using SetDIBitsToDeviceFn = int (WINAPI*)(
     const VOID*, const BITMAPINFO*, UINT);
 
 std::atomic<int> g_gdiScalePercent{100};
+std::atomic<HWND> g_gdiEditorWindow{nullptr};
+
+using ScreenToClientFn = BOOL (WINAPI*)(HWND, LPPOINT);
+
+BOOL WINAPI scaledScreenToClient(HWND hwnd, LPPOINT point) {
+    static const auto original = reinterpret_cast<ScreenToClientFn>(
+        GetProcAddress(GetModuleHandleW(L"user32.dll"), "ScreenToClient"));
+    if (!original)
+        return FALSE;
+
+    const BOOL ok = original(hwnd, point);
+    if (!ok || !point)
+        return ok;
+
+    const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
+    const HWND editor = g_gdiEditorWindow.load(std::memory_order_relaxed);
+    if (scale > 100 && editor && hwnd == editor) {
+        point->x = MulDiv(point->x, 100, scale);
+        point->y = MulDiv(point->y, 100, scale);
+    }
+    return ok;
+}
 
 int WINAPI scaledSetDIBitsToDevice(
     HDC hdc, int xDest, int yDest, DWORD width, DWORD height,
@@ -353,6 +375,86 @@ bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
 
             first[i].u1.Function = static_cast<decltype(first[i].u1.Function)>(
                 reinterpret_cast<std::uintptr_t>(&scaledSetDIBitsToDevice));
+            FlushInstructionCache(
+                GetCurrentProcess(), &first[i].u1.Function,
+                sizeof(first[i].u1.Function));
+
+            DWORD ignored = 0;
+            VirtualProtect(
+                &first[i].u1.Function, sizeof(first[i].u1.Function),
+                oldProtect, &ignored);
+
+            g_gdiScalePercent.store(scalePercent, std::memory_order_relaxed);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool patchScreenToClientImport(void* nativeModule, int scalePercent) {
+    if (!nativeModule || scalePercent <= 100)
+        return scalePercent <= 100;
+
+    auto* base = static_cast<std::uint8_t*>(nativeModule);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+
+    const auto& dir =
+        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress || !dir.Size)
+        return false;
+
+    auto* imports = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(
+        base + dir.VirtualAddress);
+    const FARPROC target = GetProcAddress(
+        GetModuleHandleW(L"user32.dll"), "ScreenToClient");
+    if (!target)
+        return false;
+
+    for (; imports->Name; ++imports) {
+        const char* dllName =
+            reinterpret_cast<const char*>(base + imports->Name);
+        if (_stricmp(dllName, "USER32.dll") != 0 &&
+            _stricmp(dllName, "user32.dll") != 0)
+            continue;
+
+        auto* first = reinterpret_cast<IMAGE_THUNK_DATA*>(
+            base + imports->FirstThunk);
+        IMAGE_THUNK_DATA* original = imports->OriginalFirstThunk
+            ? reinterpret_cast<IMAGE_THUNK_DATA*>(
+                  base + imports->OriginalFirstThunk)
+            : nullptr;
+
+        for (std::size_t i = 0; first[i].u1.Function; ++i) {
+            bool match = false;
+            if (original && original[i].u1.AddressOfData &&
+                !IMAGE_SNAP_BY_ORDINAL(original[i].u1.Ordinal)) {
+                auto* byName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(
+                    base + original[i].u1.AddressOfData);
+                match = std::strcmp(
+                    reinterpret_cast<const char*>(byName->Name),
+                    "ScreenToClient") == 0;
+            } else {
+                match = reinterpret_cast<FARPROC>(
+                    static_cast<std::uintptr_t>(first[i].u1.Function)) == target;
+            }
+
+            if (!match)
+                continue;
+
+            DWORD oldProtect = 0;
+            if (!VirtualProtect(
+                    &first[i].u1.Function, sizeof(first[i].u1.Function),
+                    PAGE_READWRITE, &oldProtect))
+                return false;
+
+            first[i].u1.Function = static_cast<decltype(first[i].u1.Function)>(
+                reinterpret_cast<std::uintptr_t>(&scaledScreenToClient));
             FlushInstructionCache(
                 GetCurrentProcess(), &first[i].u1.Function,
                 sizeof(first[i].u1.Function));
@@ -496,12 +598,19 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (ctx->editor && IsWindow(ctx->editor))
             return reinterpret_cast<LRESULT>(ctx->editor);
 
-        if (ctx->gdiScalePercent > 100 &&
-            !patchSetDIBitsImport(
-                ctx->module->nativeModuleHandle(),
-                ctx->gdiScalePercent)) {
-            appendEditorDiagnostic(L"GDI-SCALE import hook failed");
-            return 0;
+        if (ctx->gdiScalePercent > 100) {
+            if (!patchSetDIBitsImport(
+                    ctx->module->nativeModuleHandle(),
+                    ctx->gdiScalePercent)) {
+                appendEditorDiagnostic(L"GDI-SCALE SetDIBitsToDevice hook failed");
+                return 0;
+            }
+            if (!patchScreenToClientImport(
+                    ctx->module->nativeModuleHandle(),
+                    ctx->gdiScalePercent)) {
+                appendEditorDiagnostic(L"GDI-SCALE ScreenToClient hook failed");
+                return 0;
+            }
         }
 
         if (!ctx->module->openEditor(hwnd))
@@ -527,6 +636,8 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         ctx->editor = child;
+        if (ctx->gdiScalePercent > 100)
+            g_gdiEditorWindow.store(child, std::memory_order_relaxed);
 
         {
             std::wstringstream ss;
@@ -569,6 +680,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     case kEditorCloseMessage: {
         KillTimer(hwnd, kEditorIdleTimer);
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        g_gdiEditorWindow.store(nullptr, std::memory_order_relaxed);
         const bool ok = ctx->module->closeEditor();
         ctx->editor = nullptr;
         ShowWindow(hwnd, SW_HIDE);
@@ -1116,10 +1228,14 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     std::cerr << "error=" << error << '\n';
                     ok = false;
                 } else {
-                    if (guiContext.gdiScalePercent > 100)
+                    if (guiContext.gdiScalePercent > 100) {
                         (void)patchSetDIBitsImport(
                             module.nativeModuleHandle(),
                             guiContext.gdiScalePercent);
+                        (void)patchScreenToClientImport(
+                            module.nativeModuleHandle(),
+                            guiContext.gdiScalePercent);
+                    }
                     configuredBlockSize = requestedBlockSize;
                     configuredSampleRate = requestedSampleRate;
                     appliedParameterGeneration = 0;
