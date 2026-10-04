@@ -164,6 +164,7 @@ inline constexpr VstInt32 kEffectFlagIsSynth = 1 << 8;
 enum AudioMasterOpcode : VstInt32 {
     AudioMasterAutomate = 0,
     AudioMasterVersion = 1,
+    AudioMasterWantMidi = 6,
     AudioMasterGetTime = 7,
     AudioMasterProcessEvents = 8,
     AudioMasterGetSampleRate = 16,
