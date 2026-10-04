@@ -240,6 +240,56 @@ using SetDIBitsToDeviceFn = int (WINAPI*)(
 std::atomic<int> g_gdiScalePercent{100};
 std::atomic<HWND> g_gdiEditorWindow{nullptr};
 
+std::mutex g_gdiFrameMutex;
+std::vector<std::uint8_t> g_gdiFramePixels;
+std::uint32_t g_gdiFrameWidth{0};
+std::uint32_t g_gdiFrameHeight{0};
+std::uint32_t g_gdiFrameStride{0};
+
+void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
+    if (!bits || !bmi)
+        return;
+
+    const auto& hdr = bmi->bmiHeader;
+    const int width = std::abs(hdr.biWidth);
+    const int height = std::abs(hdr.biHeight);
+    if (width <= 0 || height <= 0 ||
+        width > 8192 || height > 8192 ||
+        hdr.biCompression != BI_RGB ||
+        (hdr.biBitCount != 24 && hdr.biBitCount != 32))
+        return;
+
+    const std::size_t srcStride =
+        ((static_cast<std::size_t>(width) * hdr.biBitCount + 31u) / 32u) * 4u;
+    const std::size_t dstStride = static_cast<std::size_t>(width) * 4u;
+    std::vector<std::uint8_t> frame(
+        dstStride * static_cast<std::size_t>(height));
+
+    const auto* src = static_cast<const std::uint8_t*>(bits);
+    for (int y = 0; y < height; ++y) {
+        const int srcY = hdr.biHeight > 0 ? (height - 1 - y) : y;
+        const auto* srcRow = src + static_cast<std::size_t>(srcY) * srcStride;
+        auto* dstRow = frame.data() + static_cast<std::size_t>(y) * dstStride;
+
+        if (hdr.biBitCount == 32) {
+            std::memcpy(dstRow, srcRow, dstStride);
+        } else {
+            for (int x = 0; x < width; ++x) {
+                dstRow[x * 4 + 0] = srcRow[x * 3 + 0];
+                dstRow[x * 4 + 1] = srcRow[x * 3 + 1];
+                dstRow[x * 4 + 2] = srcRow[x * 3 + 2];
+                dstRow[x * 4 + 3] = 0xFF;
+            }
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
+    g_gdiFramePixels = std::move(frame);
+    g_gdiFrameWidth = static_cast<std::uint32_t>(width);
+    g_gdiFrameHeight = static_cast<std::uint32_t>(height);
+    g_gdiFrameStride = static_cast<std::uint32_t>(dstStride);
+}
+
 thread_local HWND g_gdiCreateParent{nullptr};
 thread_local int g_gdiCreateScalePercent{100};
 
@@ -330,6 +380,11 @@ int WINAPI scaledSetDIBitsToDevice(
         return 0;
 
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
+
+    // TV-style scaler source: keep a native BGRA copy of the plugin's own DIB.
+    // This avoids PrintWindow/BitBlt entirely for legacy plugins such as Pro-53.
+    captureNativeGdiFrame(bits, bmi);
+
     if (scale <= 100 || !bits || !bmi || width == 0 || height == 0)
         return original(hdc, xDest, yDest, width, height,
                         xSrc, ySrc, startScan, scanLines,
@@ -391,8 +446,8 @@ int WINAPI scaledSetDIBitsToDevice(
 }
 
 bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
-    if (!nativeModule || scalePercent <= 100)
-        return scalePercent <= 100;
+    if (!nativeModule || scalePercent < 100)
+        return false;
 
     auto* base = static_cast<std::uint8_t*>(nativeModule);
     auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
@@ -797,16 +852,25 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     switch (msg) {
     case kEditorOpenMessage: {
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        {
+            std::lock_guard<std::mutex> frameLock(g_gdiFrameMutex);
+            g_gdiFramePixels.clear();
+            g_gdiFrameWidth = 0;
+            g_gdiFrameHeight = 0;
+            g_gdiFrameStride = 0;
+        }
         if (ctx->editor && IsWindow(ctx->editor))
             return reinterpret_cast<LRESULT>(ctx->editor);
 
-        if (ctx->gdiScalePercent > 100) {
+        if (ctx->gdiScalePercent >= 100) {
             if (!patchSetDIBitsImport(
                     ctx->module->nativeModuleHandle(),
                     ctx->gdiScalePercent)) {
                 appendEditorDiagnostic(L"GDI-SCALE SetDIBitsToDevice hook failed");
                 return 0;
             }
+        }
+        if (ctx->gdiScalePercent > 100) {
             if (!patchScreenToClientImport(
                     ctx->module->nativeModuleHandle(),
                     ctx->gdiScalePercent)) {
@@ -939,6 +1003,13 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case kEditorCloseMessage: {
         KillTimer(hwnd, kEditorIdleTimer);
+        {
+            std::lock_guard<std::mutex> frameLock(g_gdiFrameMutex);
+            g_gdiFramePixels.clear();
+            g_gdiFrameWidth = 0;
+            g_gdiFrameHeight = 0;
+            g_gdiFrameStride = 0;
+        }
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         g_gdiEditorWindow.store(nullptr, std::memory_order_relaxed);
         const bool ok = ctx->module->closeEditor();
@@ -958,6 +1029,24 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         auto* request = reinterpret_cast<EditorCaptureRequest*>(lp);
         if (!request || !request->bytes)
             return 0;
+
+        {
+            std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
+            if (!g_gdiFramePixels.empty() &&
+                g_gdiFrameWidth > 0 && g_gdiFrameHeight > 0 &&
+                g_gdiFrameStride >= g_gdiFrameWidth * 4u) {
+                pluginscaler::ipc::EditorBitmapHeader header{};
+                header.width = g_gdiFrameWidth;
+                header.height = g_gdiFrameHeight;
+                header.strideBytes = g_gdiFrameStride;
+                request->bytes->resize(
+                    sizeof(header) + g_gdiFramePixels.size());
+                std::memcpy(request->bytes->data(), &header, sizeof(header));
+                std::memcpy(request->bytes->data() + sizeof(header),
+                            g_gdiFramePixels.data(), g_gdiFramePixels.size());
+                return 1;
+            }
+        }
 
         const auto candidates = editorCaptureCandidates(ctx);
         if (candidates.empty())
@@ -1305,7 +1394,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     guiContext.gdiScalePercent =
                         req.arg0 >= 100 && req.arg0 <= 400
                             ? static_cast<int>(req.arg0)
-                            : 100;
+                            : 0;
                     const LRESULT editorResult = SendMessageW(
                         guiContext.surrogate, kEditorOpenMessage, 0, 0);
                     HWND editor = reinterpret_cast<HWND>(editorResult);
