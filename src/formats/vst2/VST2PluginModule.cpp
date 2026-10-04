@@ -36,12 +36,12 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
         return 2400;
     case AudioMasterGetTime:
         return module
-            ? reinterpret_cast<VstIntPtr>(&module->timeInfo_)
+            ? reinterpret_cast<VstIntPtr>(module->hostTimeInfo())
             : 0;
     case AudioMasterGetSampleRate:
-        return module ? static_cast<VstIntPtr>(module->sampleRate_) : 48000;
+        return module ? static_cast<VstIntPtr>(module->sampleRate()) : 48000;
     case AudioMasterGetBlockSize:
-        return module ? static_cast<VstIntPtr>(module->blockSize_) : 512;
+        return module ? static_cast<VstIntPtr>(module->blockSize()) : 512;
     case AudioMasterGetVendorVersion:
         return 1000;
     case AudioMasterGetVendorString:
