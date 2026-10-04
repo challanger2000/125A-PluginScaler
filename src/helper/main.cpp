@@ -1447,21 +1447,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         }
                         SendMessageW(guiContext.editor, message,
                                      static_cast<WPARAM>(mouse.keyFlags), coords);
-
-                        if (message == WM_RBUTTONUP) {
-                            POINT screenPoint{
-                                static_cast<LONG>(mouse.x),
-                                static_cast<LONG>(mouse.y)
-                            };
-                            ClientToScreen(guiContext.editor, &screenPoint);
-                            SendMessageW(
-                                guiContext.editor,
-                                WM_CONTEXTMENU,
-                                reinterpret_cast<WPARAM>(guiContext.editor),
-                                MAKELPARAM(
-                                    static_cast<short>(screenPoint.x),
-                                    static_cast<short>(screenPoint.y)));
-                        }
                     }
                 }
             } else if (req.command == ipc::ControlCommand::Shutdown) {
@@ -1584,17 +1569,32 @@ int runSharedVst2Server(const std::filesystem::path& path,
             const auto requestedSampleRate = block->header.sampleRateHz;
             if (configuredBlockSize != requestedBlockSize ||
                 configuredSampleRate != requestedSampleRate) {
+                module.close();
+
                 std::string error;
-                if (!module.reconfigureProcessing(
-                        static_cast<double>(requestedSampleRate),
-                        requestedBlockSize, error)) {
+                if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
+                                              requestedBlockSize, error)) {
                     std::cerr << "error=" << error << '\n';
                     ok = false;
                 } else {
+                    if (guiContext.gdiScalePercent > 100) {
+                        (void)patchSetDIBitsImport(
+                            module.nativeModuleHandle(),
+                            guiContext.gdiScalePercent);
+                        (void)patchScreenToClientImport(
+                            module.nativeModuleHandle(),
+                            guiContext.gdiScalePercent);
+                        (void)patchClientToScreenImport(
+                            module.nativeModuleHandle(),
+                            guiContext.gdiScalePercent);
+                    }
                     configuredBlockSize = requestedBlockSize;
                     configuredSampleRate = requestedSampleRate;
-                    // The plugin instance, native editor HWND and GDI hook stay
-                    // alive across host block-size/sample-rate changes.
+                    appliedParameterGeneration = 0;
+                    if (!persistedChunk.empty())
+                        ok = module.setChunk(persistedChunkIndex,
+                                             persistedChunk.data(),
+                                             persistedChunk.size());
                 }
             }
 
