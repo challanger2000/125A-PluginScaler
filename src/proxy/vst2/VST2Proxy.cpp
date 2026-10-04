@@ -11,6 +11,7 @@
 #include <roapi.h>
 #include <wrl/client.h>
 #include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
@@ -551,7 +552,8 @@ bool startGraphicsCapture(ProxyInstance* inst, HWND source) {
                 if (!frame)
                     return;
 
-                auto access = frame.Surface().as<IDirect3DDxgiInterfaceAccess>();
+                auto access = frame.Surface().as<
+                    ::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
                 Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
                 winrt::check_hresult(access->GetInterface(
                     __uuidof(ID3D11Texture2D),
@@ -677,56 +679,6 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_TIMER:
-        if (inst->settings.graphicsEditor) {
-            if (!ensureScalerSurfaceClass())
-                return 0;
-
-            RECT nativeRc{};
-            if (!GetClientRect(editor, &nativeRc))
-                return 0;
-            const int nativeWidth = nativeRc.right - nativeRc.left;
-            const int nativeHeight = nativeRc.bottom - nativeRc.top;
-            const int scaledWidth = nativeWidth * inst->scalePercent / 100;
-            const int scaledHeight = nativeHeight * inst->scalePercent / 100;
-            if (nativeWidth <= 0 || nativeHeight <= 0 ||
-                scaledWidth <= 0 || scaledHeight <= 0)
-                return 0;
-
-            // Keep the real x86 editor in its original helper hierarchy.
-            // Move the helper surrogate well off-screen but leave it visible so
-            // Windows composition can continue producing capture frames.
-            SetWindowPos(surrogate, HWND_BOTTOM, -10000, -10000,
-                         nativeWidth, nativeHeight,
-                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
-            ShowWindow(editor, SW_SHOWNA);
-            UpdateWindow(editor);
-
-            HWND surface = CreateWindowExW(
-                0, L"125A_PluginScaler_ScaledSurface", L"",
-                WS_CHILD | WS_VISIBLE,
-                0, 0, scaledWidth, scaledHeight,
-                parent, nullptr, GetModuleHandleW(nullptr), inst);
-            if (!surface)
-                return 0;
-
-            inst->editorSurface = surface;
-            inst->editorMagnifier = nullptr;
-            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
-            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
-            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
-            inst->editorOpen = true;
-
-            if (!startGraphicsCapture(inst, surrogate)) {
-                DestroyWindow(surface);
-                inst->editorSurface = nullptr;
-                inst->editorOpen = false;
-                return 0;
-            }
-
-            SetTimer(surface, 0x125A, 33, nullptr);
-            return 1;
-        }
-
         if (inst->settings.magEditor) {
             (void)updateMagnifierSource(inst);
             return 0;
@@ -1072,6 +1024,55 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             inst->editorSurface = nullptr;
             inst->editorMagnifier = nullptr;
             inst->editorOpen = true;
+            return 1;
+        }
+
+        if (inst->settings.graphicsEditor) {
+            if (!ensureScalerSurfaceClass())
+                return 0;
+
+            RECT nativeRc{};
+            if (!GetClientRect(editor, &nativeRc))
+                return 0;
+            const int nativeWidth = nativeRc.right - nativeRc.left;
+            const int nativeHeight = nativeRc.bottom - nativeRc.top;
+            const int scaledWidth = nativeWidth * inst->scalePercent / 100;
+            const int scaledHeight = nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                scaledWidth <= 0 || scaledHeight <= 0)
+                return 0;
+
+            // Preserve the working x86 editor hierarchy. Keep it visible for
+            // composition, but park the helper window off-screen.
+            SetWindowPos(surrogate, HWND_BOTTOM, -10000, -10000,
+                         nativeWidth, nativeHeight,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ShowWindow(editor, SW_SHOWNA);
+            UpdateWindow(editor);
+
+            HWND surface = CreateWindowExW(
+                0, L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, scaledWidth, scaledHeight,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface)
+                return 0;
+
+            inst->editorSurface = surface;
+            inst->editorMagnifier = nullptr;
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
+            inst->editorOpen = true;
+
+            if (!startGraphicsCapture(inst, surrogate)) {
+                DestroyWindow(surface);
+                inst->editorSurface = nullptr;
+                inst->editorOpen = false;
+                return 0;
+            }
+
+            SetTimer(surface, 0x125A, 33, nullptr);
             return 1;
         }
 
