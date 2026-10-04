@@ -211,6 +211,12 @@ jobs:
 
           $joined = ($output | Out-String)
           foreach ($marker in @(
+            "gdi-scale-125=PASS",
+            "gdi-scale-150=PASS",
+            "gdi-scale-200=PASS",
+            "gdi-cycle-125-3=PASS",
+            "gdi-cycle-150-3=PASS",
+            "gdi-cycle-200-3=PASS",
             "gdi-scaled-visual=PASS",
             "gdi-click-map=PASS",
             "gdi-drag-redraw=PASS",
