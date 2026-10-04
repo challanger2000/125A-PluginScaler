@@ -1447,6 +1447,25 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         }
                         SendMessageW(guiContext.editor, message,
                                      static_cast<WPARAM>(mouse.keyFlags), coords);
+
+                        // Many legacy editors implement right-click menus via
+                        // WM_CONTEXTMENU rather than handling WM_RBUTTONUP
+                        // directly. Recreate the Windows-generated context
+                        // message inside the native helper process.
+                        if (message == WM_RBUTTONUP) {
+                            POINT screenPoint{
+                                static_cast<LONG>(mouse.x),
+                                static_cast<LONG>(mouse.y)
+                            };
+                            ClientToScreen(guiContext.editor, &screenPoint);
+                            SendMessageW(
+                                guiContext.editor,
+                                WM_CONTEXTMENU,
+                                reinterpret_cast<WPARAM>(guiContext.editor),
+                                MAKELPARAM(
+                                    static_cast<short>(screenPoint.x),
+                                    static_cast<short>(screenPoint.y)));
+                        }
                     }
                 }
             } else if (req.command == ipc::ControlCommand::Shutdown) {
