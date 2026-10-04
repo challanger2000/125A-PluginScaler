@@ -75,8 +75,8 @@ struct ProxySettings {
     std::wstring helper;
     std::wstring target;
     std::wstring manifest;
-    int scalePercent{200};
-    bool directEditor{false};
+    int scalePercent{100};
+    bool directEditor{true};
     bool magEditor{false};
     bool graphicsEditor{false};
     bool gdiEditor{false};
@@ -102,7 +102,7 @@ struct ProxyInstance {
     HWND editorMagnifier{nullptr};
     HWND editorHost{nullptr};
     std::shared_ptr<GraphicsCaptureState> graphicsCapture;
-    int scalePercent{200};
+    int scalePercent{100};
     std::vector<std::uint8_t> editorBitmap;
     std::uint32_t editorBitmapWidth{0};
     std::uint32_t editorBitmapHeight{0};
@@ -205,7 +205,7 @@ ProxySettings loadSettings() {
                 try {
                     settings.scalePercent = std::clamp(std::stoi(scaleValue), 100, 400);
                 } catch (...) {
-                    settings.scalePercent = 200;
+                    settings.scalePercent = 100;
                 }
             }
             if (!editorValue.empty()) {
@@ -216,6 +216,9 @@ ProxySettings loadSettings() {
                 settings.magEditor = (mode == L"mag" || mode == L"magnifier");
                 settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
                 settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
+                if (!settings.directEditor && !settings.magEditor &&
+                    !settings.graphicsEditor && !settings.gdiEditor)
+                    settings.directEditor = true;
             }
 
             settings.sidecarLoaded = true;
@@ -232,7 +235,7 @@ ProxySettings loadSettings() {
         try {
             settings.scalePercent = std::clamp(std::stoi(env), 100, 400);
         } catch (...) {
-            settings.scalePercent = 200;
+            settings.scalePercent = 100;
         }
     }
     if (const auto env = getenvWide(L"PLUGINSCALER_EDITOR_MODE"); !env.empty()) {
@@ -243,6 +246,9 @@ ProxySettings loadSettings() {
         settings.magEditor = (mode == L"mag" || mode == L"magnifier");
         settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
         settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
+        if (!settings.directEditor && !settings.magEditor &&
+            !settings.graphicsEditor && !settings.gdiEditor)
+            settings.directEditor = true;
     }
 
     if (settings.helper.empty() && !baseDir.empty())
@@ -946,6 +952,15 @@ bool startBridge(ProxyInstance* inst) {
     inst->helperProcess = pi;
     inst->bridgeStarted = true;
 
+    {
+        std::vector<std::uint8_t> ignored;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
+                         inst->mainsOn ? 1 : 0, nullptr, 0, ignored)) {
+            stopBridge(inst);
+            return false;
+        }
+    }
+
     if (!inst->stateChunk.empty()) {
         std::vector<std::uint8_t> ignored;
         if (controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
@@ -979,12 +994,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->blockSize = value > 0 ? static_cast<VstInt32>(value) : 512;
         return 1;
 
-    case EffMainsChanged:
+    case EffMainsChanged: {
         inst->mainsOn = value != 0;
-        if (inst->mainsOn)
-            return startBridge(inst) ? 1 : 0;
-        stopBridge(inst);
-        return 1;
+        if (!startBridge(inst))
+            return 0;
+        std::vector<std::uint8_t> ignored;
+        return controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
+                           inst->mainsOn ? 1 : 0, nullptr, 0, ignored) ? 1 : 0;
+    }
 
     case EffEditGetRect: {
         if (!ptr || !startBridge(inst)) return 0;
@@ -1355,8 +1372,8 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         auto** eventPtrs = reinterpret_cast<VstEvent**>(
             reinterpret_cast<std::uint8_t*>(events) + offsetof(VstEvents, events));
 
-        std::uint32_t written = 0;
-        for (std::uint32_t i = 0; i < count; ++i) {
+        std::uint32_t written = inst->pendingMidiCount;
+        for (std::uint32_t i = 0; i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
             auto* ev = eventPtrs[i];
             if (!ev || ev->type != kVstMidiType ||
                 ev->byteSize < static_cast<VstInt32>(sizeof(VstMidiEvent)))
@@ -1372,7 +1389,25 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
     }
 
+    case EffGetPlugCategory:
+        return (inst->manifest.flags & kEffectFlagIsSynth)
+            ? PlugCategSynth : PlugCategEffect;
+
+    case EffGetVstVersion:
+        return 2400;
+
+    case EffGetNumMidiInputChannels:
+        return (inst->manifest.flags & kEffectFlagIsSynth) ? 16 : 0;
+
+    case EffGetNumMidiOutputChannels:
+        return 0;
+
     case EffCanDo:
+        if (!ptr) return 0;
+        if ((inst->manifest.flags & kEffectFlagIsSynth) &&
+            (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+             std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0))
+            return 1;
         return 0;
 
     default:
@@ -1414,6 +1449,35 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<std::uint32_t>(std::llround(inst->sampleRate));
     block->header.sequence = ++inst->sequence;
     block->header.errorCode = 0;
+
+    block->hostTime = {};
+    if (inst->host) {
+        constexpr VstIntPtr wantedTimeFlags =
+            VstNanosValid | VstPpqPosValid | VstTempoValid | VstBarsValid |
+            VstCyclePosValid | VstTimeSigValid | VstSmpteValid | VstClockValid;
+        const auto raw = inst->host(effect, AudioMasterGetTime, 0,
+                                    wantedTimeFlags, nullptr, 0.0f);
+        if (raw) {
+            const auto* ti = reinterpret_cast<const VstTimeInfo*>(raw);
+            block->hostTime.samplePos = ti->samplePos;
+            block->hostTime.sampleRate = ti->sampleRate;
+            block->hostTime.nanoSeconds = ti->nanoSeconds;
+            block->hostTime.ppqPos = ti->ppqPos;
+            block->hostTime.tempo = ti->tempo;
+            block->hostTime.barStartPos = ti->barStartPos;
+            block->hostTime.cycleStartPos = ti->cycleStartPos;
+            block->hostTime.cycleEndPos = ti->cycleEndPos;
+            block->hostTime.timeSigNumerator = ti->timeSigNumerator;
+            block->hostTime.timeSigDenominator = ti->timeSigDenominator;
+            block->hostTime.smpteOffset = ti->smpteOffset;
+            block->hostTime.smpteFrameRate = ti->smpteFrameRate;
+            block->hostTime.samplesToNextClock = ti->samplesToNextClock;
+            block->hostTime.flags = ti->flags;
+        } else {
+            block->hostTime.sampleRate = inst->sampleRate;
+        }
+    }
+
     block->header.midiEventCount = inst->pendingMidiCount;
     for (std::uint32_t i = 0; i < inst->pendingMidiCount; ++i)
         block->midiEvents[i] = inst->pendingMidi[i];
