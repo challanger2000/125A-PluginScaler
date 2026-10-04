@@ -760,8 +760,21 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         ctx->editor = child;
-        if (ctx->gdiScalePercent > 100)
+        if (ctx->gdiScalePercent > 100) {
             g_gdiEditorWindow.store(child, std::memory_order_relaxed);
+
+            // Pro-53 receives real Windows mouse messages on its actual editor
+            // HWND. With the editor enlarged to 150%, their LPARAM coordinates
+            // are physical/scaled coordinates, while Pro-53's hit-test layout
+            // remains in the native 762x358 coordinate space. Subclass only the
+            // real editor window and translate those coordinates before calling
+            // its original WindowProc. Capture, focus and keyboard routing stay
+            // native Windows behaviour.
+            if (!installGdiMouseScaling(child, ctx->gdiScalePercent)) {
+                appendEditorDiagnostic(L"GDI-SCALE editor mouse-coordinate hook failed");
+                return 0;
+            }
+        }
 
         {
             std::wstringstream ss;
