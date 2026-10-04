@@ -6,6 +6,16 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <magnification.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
+#include <roapi.h>
+#include <wrl/client.h>
+#include <winrt/base.h>
+#include <winrt/Windows.Graphics.Capture.h>
+#include <winrt/Windows.Graphics.DirectX.h>
+#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
+#include <windows.graphics.capture.interop.h>
+#include <windows.graphics.directx.direct3d11.interop.h>
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +32,7 @@
 #include <cstddef>
 #include <string>
 #include <thread>
+#include <mutex>
 
 using namespace pluginscaler::formats::vst2abi;
 
@@ -42,6 +53,23 @@ struct ProxyManifest {
     bool valid{false};
 };
 
+struct GraphicsCaptureState {
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+    winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrtDevice{nullptr};
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
+    winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool framePool{nullptr};
+    winrt::Windows::Graphics::Capture::GraphicsCaptureSession session{nullptr};
+    winrt::event_token frameToken{};
+    std::mutex mutex;
+    std::vector<std::uint8_t> pixels;
+    std::uint32_t width{0};
+    std::uint32_t height{0};
+    std::uint32_t stride{0};
+    bool running{false};
+};
+
 struct ProxySettings {
     std::wstring helper;
     std::wstring target;
@@ -49,6 +77,7 @@ struct ProxySettings {
     int scalePercent{200};
     bool directEditor{false};
     bool magEditor{false};
+    bool graphicsEditor{false};
     bool sidecarLoaded{false};
 };
 
@@ -70,6 +99,7 @@ struct ProxyInstance {
     HWND editorSurface{nullptr};
     HWND editorMagnifier{nullptr};
     HWND editorHost{nullptr};
+    std::shared_ptr<GraphicsCaptureState> graphicsCapture;
     int scalePercent{200};
     std::vector<std::uint8_t> editorBitmap;
     std::uint32_t editorBitmapWidth{0};
@@ -181,6 +211,7 @@ ProxySettings loadSettings() {
                                [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
                 settings.directEditor = (mode == L"direct" || mode == L"integrated");
                 settings.magEditor = (mode == L"mag" || mode == L"magnifier");
+                settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
             }
 
             settings.sidecarLoaded = true;
@@ -206,6 +237,7 @@ ProxySettings loadSettings() {
                        [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
         settings.directEditor = (mode == L"direct" || mode == L"integrated");
         settings.magEditor = (mode == L"mag" || mode == L"magnifier");
+        settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
     }
 
     if (settings.helper.empty() && !baseDir.empty())
@@ -441,6 +473,175 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
     return ok;
 }
 
+bool startGraphicsCapture(ProxyInstance* inst, HWND source) {
+    if (!inst || !source || !IsWindow(source))
+        return false;
+
+    auto state = std::make_shared<GraphicsCaptureState>();
+
+    const HRESULT ro = RoInitialize(RO_INIT_MULTITHREADED);
+    if (FAILED(ro) && ro != RPC_E_CHANGED_MODE)
+        return false;
+
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    D3D_FEATURE_LEVEL featureLevel{};
+    const D3D_FEATURE_LEVEL levels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0
+    };
+
+    HRESULT hr = D3D11CreateDevice(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags,
+        levels, static_cast<UINT>(std::size(levels)),
+        D3D11_SDK_VERSION, &state->device, &featureLevel, &state->context);
+    if (FAILED(hr)) {
+        hr = D3D11CreateDevice(
+            nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
+            levels, static_cast<UINT>(std::size(levels)),
+            D3D11_SDK_VERSION, &state->device, &featureLevel, &state->context);
+    }
+    if (FAILED(hr))
+        return false;
+
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    if (FAILED(state->device.As(&dxgiDevice)))
+        return false;
+
+    winrt::com_ptr<IInspectable> inspectable;
+    hr = CreateDirect3D11DeviceFromDXGIDevice(
+        dxgiDevice.Get(), inspectable.put());
+    if (FAILED(hr))
+        return false;
+    state->winrtDevice = inspectable.as<
+        winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+
+    auto interop = winrt::get_activation_factory<
+        winrt::Windows::Graphics::Capture::GraphicsCaptureItem,
+        IGraphicsCaptureItemInterop>();
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item{nullptr};
+    hr = interop->CreateForWindow(
+        source,
+        winrt::guid_of<winrt::Windows::Graphics::Capture::GraphicsCaptureItem>(),
+        winrt::put_abi(item));
+    if (FAILED(hr) || !item)
+        return false;
+    state->item = item;
+
+    const auto size = item.Size();
+    if (size.Width <= 0 || size.Height <= 0)
+        return false;
+
+    state->framePool =
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::CreateFreeThreaded(
+            state->winrtDevice,
+            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2, size);
+    state->session = state->framePool.CreateCaptureSession(item);
+
+    std::weak_ptr<GraphicsCaptureState> weak = state;
+    state->frameToken = state->framePool.FrameArrived(
+        [weak](auto const& sender, auto const&) {
+            auto s = weak.lock();
+            if (!s || !s->running)
+                return;
+            try {
+                auto frame = sender.TryGetNextFrame();
+                if (!frame)
+                    return;
+
+                auto access = frame.Surface().as<IDirect3DDxgiInterfaceAccess>();
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
+                winrt::check_hresult(access->GetInterface(
+                    __uuidof(ID3D11Texture2D),
+                    reinterpret_cast<void**>(sourceTexture.GetAddressOf())));
+
+                D3D11_TEXTURE2D_DESC desc{};
+                sourceTexture->GetDesc(&desc);
+                if (desc.Width == 0 || desc.Height == 0)
+                    return;
+
+                bool recreate = !s->staging;
+                if (!recreate) {
+                    D3D11_TEXTURE2D_DESC old{};
+                    s->staging->GetDesc(&old);
+                    recreate = old.Width != desc.Width || old.Height != desc.Height;
+                }
+
+                if (recreate) {
+                    D3D11_TEXTURE2D_DESC stagingDesc = desc;
+                    stagingDesc.BindFlags = 0;
+                    stagingDesc.MiscFlags = 0;
+                    stagingDesc.Usage = D3D11_USAGE_STAGING;
+                    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                    stagingDesc.MipLevels = 1;
+                    stagingDesc.ArraySize = 1;
+                    s->staging.Reset();
+                    winrt::check_hresult(
+                        s->device->CreateTexture2D(&stagingDesc, nullptr, &s->staging));
+                }
+
+                s->context->CopyResource(s->staging.Get(), sourceTexture.Get());
+
+                D3D11_MAPPED_SUBRESOURCE mapped{};
+                if (FAILED(s->context->Map(
+                        s->staging.Get(), 0, D3D11_MAP_READ, 0, &mapped)))
+                    return;
+
+                const std::uint32_t rowBytes = desc.Width * 4u;
+                std::vector<std::uint8_t> pixels(
+                    static_cast<std::size_t>(rowBytes) * desc.Height);
+                const auto* src = static_cast<const std::uint8_t*>(mapped.pData);
+                for (UINT y = 0; y < desc.Height; ++y) {
+                    std::memcpy(
+                        pixels.data() + static_cast<std::size_t>(y) * rowBytes,
+                        src + static_cast<std::size_t>(y) * mapped.RowPitch,
+                        rowBytes);
+                }
+                s->context->Unmap(s->staging.Get(), 0);
+
+                {
+                    std::lock_guard<std::mutex> lock(s->mutex);
+                    s->pixels = std::move(pixels);
+                    s->width = desc.Width;
+                    s->height = desc.Height;
+                    s->stride = rowBytes;
+                }
+            } catch (...) {
+                // Keep the wrapper alive; a later frame may recover.
+            }
+        });
+
+    state->running = true;
+    try {
+        state->session.StartCapture();
+    } catch (...) {
+        state->running = false;
+        state->framePool.FrameArrived(state->frameToken);
+        return false;
+    }
+
+    inst->graphicsCapture = std::move(state);
+    return true;
+}
+
+void stopGraphicsCapture(ProxyInstance* inst) noexcept {
+    if (!inst || !inst->graphicsCapture)
+        return;
+    auto state = std::move(inst->graphicsCapture);
+    state->running = false;
+    try {
+        if (state->framePool)
+            state->framePool.FrameArrived(state->frameToken);
+        if (state->session)
+            state->session.Close();
+        if (state->framePool)
+            state->framePool.Close();
+    } catch (...) {
+    }
+}
+
 bool ensureMagnifierRuntime() {
     static const bool initialized = MagInitialize() != FALSE;
     return initialized;
@@ -476,8 +677,62 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_TIMER:
+        if (inst->settings.graphicsEditor) {
+            if (!ensureScalerSurfaceClass())
+                return 0;
+
+            RECT nativeRc{};
+            if (!GetClientRect(editor, &nativeRc))
+                return 0;
+            const int nativeWidth = nativeRc.right - nativeRc.left;
+            const int nativeHeight = nativeRc.bottom - nativeRc.top;
+            const int scaledWidth = nativeWidth * inst->scalePercent / 100;
+            const int scaledHeight = nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                scaledWidth <= 0 || scaledHeight <= 0)
+                return 0;
+
+            // Keep the real x86 editor in its original helper hierarchy.
+            // Move the helper surrogate well off-screen but leave it visible so
+            // Windows composition can continue producing capture frames.
+            SetWindowPos(surrogate, HWND_BOTTOM, -10000, -10000,
+                         nativeWidth, nativeHeight,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ShowWindow(editor, SW_SHOWNA);
+            UpdateWindow(editor);
+
+            HWND surface = CreateWindowExW(
+                0, L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, scaledWidth, scaledHeight,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface)
+                return 0;
+
+            inst->editorSurface = surface;
+            inst->editorMagnifier = nullptr;
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
+            inst->editorOpen = true;
+
+            if (!startGraphicsCapture(inst, surrogate)) {
+                DestroyWindow(surface);
+                inst->editorSurface = nullptr;
+                inst->editorOpen = false;
+                return 0;
+            }
+
+            SetTimer(surface, 0x125A, 33, nullptr);
+            return 1;
+        }
+
         if (inst->settings.magEditor) {
             (void)updateMagnifierSource(inst);
+            return 0;
+        }
+        if (inst->settings.graphicsEditor) {
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         break;
@@ -504,6 +759,36 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         GetClientRect(hwnd, &rc);
 
         if (inst->settings.magEditor) {
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+
+        if (inst->settings.graphicsEditor && inst->graphicsCapture) {
+            std::vector<std::uint8_t> pixels;
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            {
+                std::lock_guard<std::mutex> lock(inst->graphicsCapture->mutex);
+                pixels = inst->graphicsCapture->pixels;
+                width = inst->graphicsCapture->width;
+                height = inst->graphicsCapture->height;
+            }
+            if (!pixels.empty() && width > 0 && height > 0) {
+                BITMAPINFO bmi{};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = static_cast<LONG>(width);
+                bmi.bmiHeader.biHeight = -static_cast<LONG>(height);
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                SetStretchBltMode(dc, HALFTONE);
+                StretchDIBits(dc,
+                              0, 0, rc.right - rc.left, rc.bottom - rc.top,
+                              0, 0, static_cast<int>(width), static_cast<int>(height),
+                              pixels.data(), &bmi, DIB_RGB_COLORS, SRCCOPY);
+            } else {
+                FillRect(dc, &rc, reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
+            }
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -563,6 +848,7 @@ void stopBridge(ProxyInstance* inst) noexcept {
                 ShowWindow(inst->editorWindow, SW_HIDE);
                 SetParent(inst->editorWindow, inst->editorSurrogate);
             }
+            stopGraphicsCapture(inst);
             if (inst->editorSurface && IsWindow(inst->editorSurface))
                 KillTimer(inst->editorSurface, 0x125A);
             if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
@@ -898,6 +1184,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             SetParent(inst->editorWindow, inst->editorSurrogate);
         }
 
+        stopGraphicsCapture(inst);
         if (inst->editorSurface && IsWindow(inst->editorSurface))
             KillTimer(inst->editorSurface, 0x125A);
         if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))

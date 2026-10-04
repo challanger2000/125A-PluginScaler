@@ -11,6 +11,10 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_link_libraries(PluginScalerVST2Proxy PRIVATE
         PluginScalerIPC
         Magnification
+        d3d11
+        dxgi
+        runtimeobject
+        windowsapp
     )
 
     target_compile_features(PluginScalerVST2Proxy PRIVATE cxx_std_20)
