@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
 #include <algorithm>
