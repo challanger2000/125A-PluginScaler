@@ -686,39 +686,6 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             (void)updateMagnifierSource(inst);
             return 0;
         }
-        if (inst->settings.gdiEditor) {
-            RECT rc{};
-            if (!GetClientRect(editor, &rc))
-                return 0;
-            const int nativeWidth = rc.right - rc.left;
-            const int nativeHeight = rc.bottom - rc.top;
-            const int width = nativeWidth * inst->scalePercent / 100;
-            const int height = nativeHeight * inst->scalePercent / 100;
-            if (nativeWidth <= 0 || nativeHeight <= 0 ||
-                width <= 0 || height <= 0)
-                return 0;
-
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
-                return 0;
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-
-            inst->editorSurface = nullptr;
-            inst->editorMagnifier = nullptr;
-            inst->editorOpen = true;
-            return 1;
-        }
-
         if (inst->settings.graphicsEditor) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -1043,6 +1010,39 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             const int width = rc.right - rc.left;
             const int height = rc.bottom - rc.top;
             if (width <= 0 || height <= 0)
+                return 0;
+
+            SetLastError(0);
+            HWND previousParent = SetParent(editor, parent);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+
+            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+            style |= WS_CHILD | WS_VISIBLE;
+            style &= ~WS_POPUP;
+            SetWindowLongPtrW(editor, GWL_STYLE, style);
+
+            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            RedrawWindow(editor, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+            inst->editorSurface = nullptr;
+            inst->editorMagnifier = nullptr;
+            inst->editorOpen = true;
+            return 1;
+        }
+
+        if (inst->settings.gdiEditor) {
+            RECT rc{};
+            if (!GetClientRect(editor, &rc))
+                return 0;
+            const int nativeWidth = rc.right - rc.left;
+            const int nativeHeight = rc.bottom - rc.top;
+            const int width = nativeWidth * inst->scalePercent / 100;
+            const int height = nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                width <= 0 || height <= 0)
                 return 0;
 
             SetLastError(0);
