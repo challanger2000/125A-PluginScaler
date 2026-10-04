@@ -17,7 +17,8 @@ enum class ControlCommand : std::uint16_t {
     OpenEditor = 6,
     CloseEditor = 7,
     CaptureEditor = 8,
-    SendEditorMouse = 9
+    SendEditorMouse = 9,
+    SetMains = 10
 };
 
 #pragma pack(push, 1)
