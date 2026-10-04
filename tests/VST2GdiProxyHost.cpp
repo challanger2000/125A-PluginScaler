@@ -114,7 +114,7 @@ bool runScale(EntryProc entry, int scale) {
         // The legacy GDI path intentionally gives old editors a quiet
         // startup grace period before capture. Keep pumping the host message
         // queue so the surface timer can begin capture after that grace.
-        pumpMessagesFor(2300);
+        pumpMessagesFor(5300);
 
         HWND surface=nullptr;
         EnumChildWindows(host,findSurfaceProc,reinterpret_cast<LPARAM>(&surface));
