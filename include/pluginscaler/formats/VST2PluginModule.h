@@ -29,6 +29,7 @@ struct VST2ProbeResult {
     std::int32_t midiInputChannels{0};
     bool receivesVstEvents{false};
     bool receivesVstMidiEvents{false};
+    bool wantsMidi{false};
     std::vector<float> parameterDefaults;
     std::string error;
 };
@@ -70,6 +71,8 @@ public:
     const vst2abi::VstTimeInfo* hostTimeInfo() const noexcept { return &timeInfo_; }
     double sampleRate() const noexcept { return sampleRate_; }
     std::int32_t blockSize() const noexcept { return blockSize_; }
+    void noteWantMidiRequest() noexcept { wantsMidi_ = true; }
+    bool wantsMidi() const noexcept { return wantsMidi_; }
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -96,6 +99,7 @@ private:
     bool mainsOn_{false};
     double sampleRate_{48000.0};
     std::int32_t blockSize_{512};
+    bool wantsMidi_{false};
     vst2abi::VstTimeInfo timeInfo_{};
 };
 
