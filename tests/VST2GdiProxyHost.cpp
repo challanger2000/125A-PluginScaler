@@ -1,7 +1,9 @@
+#define NOMINMAX
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
 #include <windows.h>
 #include <windowsx.h>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <string_view>
