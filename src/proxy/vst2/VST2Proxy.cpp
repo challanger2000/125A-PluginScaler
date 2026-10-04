@@ -134,9 +134,16 @@ struct ProxyInstance {
 std::atomic<std::uint64_t> g_instanceCounter{1};
 
 void appendMidiDiagnostic(const std::wstring& line) {
-    const auto modulePath = proxyModulePath();
-    const auto dir = modulePath.empty() ? std::filesystem::current_path()
-                                        : modulePath.parent_path();
+    std::filesystem::path dir = std::filesystem::current_path();
+    if (g_moduleHandle) {
+        std::wstring buffer(32768, L'\0');
+        const DWORD written = GetModuleFileNameW(
+            g_moduleHandle, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (written > 0 && written < buffer.size()) {
+            buffer.resize(written);
+            dir = std::filesystem::path(buffer).parent_path();
+        }
+    }
     std::wofstream out(dir / L"PluginScaler-MidiDiagnostics.txt", std::ios::app);
     if (out) out << line << L"\n";
 }
