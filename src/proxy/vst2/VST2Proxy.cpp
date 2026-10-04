@@ -1045,11 +1045,27 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             RECT rc{};
             if (!GetClientRect(editor, &rc))
                 return 0;
-            const int nativeWidth = rc.right - rc.left;
-            const int nativeHeight = rc.bottom - rc.top;
-            const int width = nativeWidth * inst->scalePercent / 100;
-            const int height = nativeHeight * inst->scalePercent / 100;
-            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+            const int editorWidth = rc.right - rc.left;
+            const int editorHeight = rc.bottom - rc.top;
+            const int expectedWidth =
+                inst->editorRect.right - inst->editorRect.left;
+            const int expectedHeight =
+                inst->editorRect.bottom - inst->editorRect.top;
+
+            // New helper builds create the legacy HWND at its final scaled
+            // dimensions before the first paint. Keep compatibility with an
+            // older helper by scaling only when the returned HWND is still
+            // smaller than the already-scaled VST editor rect.
+            const bool helperAlreadyScaled =
+                editorWidth == expectedWidth &&
+                editorHeight == expectedHeight;
+            const int width = helperAlreadyScaled
+                ? editorWidth
+                : editorWidth * inst->scalePercent / 100;
+            const int height = helperAlreadyScaled
+                ? editorHeight
+                : editorHeight * inst->scalePercent / 100;
+            if (editorWidth <= 0 || editorHeight <= 0 ||
                 width <= 0 || height <= 0)
                 return 0;
 
@@ -1073,9 +1089,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             // mouse forwarding can deadlock legacy plugin UI threads.
             inst->editorSurface = nullptr;
             inst->editorMagnifier = nullptr;
-            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
-            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
-            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(editorWidth);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(editorHeight);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(editorWidth * 4);
             inst->editorOpen = true;
             return 1;
         }
