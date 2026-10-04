@@ -1147,6 +1147,20 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             }
         }
 
+        if (ctx->gdiScalePercent > 0) {
+            // jBridge's FORCE_GUI_REFRESH compatibility path ultimately uses
+            // InvalidateRect on the legacy editor HWND. Mirror that behavior
+            // conservatively for TV/GDI mode: when no native DIB has arrived
+            // yet, request one normal repaint and return. Do not fall through
+            // to PrintWindow/WM_PRINT/BitBlt capture, which proved both blank
+            // and destabilizing with Pro-53.
+            if (ctx->editor && IsWindow(ctx->editor)) {
+                InvalidateRect(ctx->editor, nullptr, FALSE);
+                UpdateWindow(ctx->editor);
+            }
+            return 1;
+        }
+
         const auto candidates = editorCaptureCandidates(ctx);
         if (candidates.empty())
             return 0;
