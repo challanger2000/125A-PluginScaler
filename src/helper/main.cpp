@@ -248,15 +248,33 @@ BOOL WINAPI scaledScreenToClient(HWND hwnd, LPPOINT point) {
     if (!original)
         return FALSE;
 
+    POINT before{};
+    if (point)
+        before = *point;
+
     const BOOL ok = original(hwnd, point);
     if (!ok || !point)
         return ok;
 
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
     const HWND editor = g_gdiEditorWindow.load(std::memory_order_relaxed);
+
+    POINT native = *point;
     if (scale > 100 && editor && hwnd == editor) {
-        point->x = MulDiv(point->x, 100, scale);
-        point->y = MulDiv(point->y, 100, scale);
+        native.x = MulDiv(native.x, 100, scale);
+        native.y = MulDiv(native.y, 100, scale);
+        *point = native;
+
+        static std::atomic<unsigned> diagCount{0};
+        const unsigned n = diagCount.fetch_add(1, std::memory_order_relaxed);
+        if (n < 32) {
+            std::wstringstream ss;
+            ss << L"INPUT ScreenToClient #" << n
+               << L" before=(" << before.x << L"," << before.y << L")"
+               << L" client=(" << original(hwnd, &before), before.x << L"," << before.y << L")"
+               << L" mapped=(" << point->x << L"," << point->y << L")";
+            appendEditorDiagnostic(ss.str());
+        }
     }
     return ok;
 }
@@ -646,9 +664,26 @@ LRESULT CALLBACK gdiScaledEditorProc(
     case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN:
     case WM_MBUTTONUP:
-    case WM_MBUTTONDBLCLK:
-        lp = mapMouseCoordinates(state, msg, lp);
+    case WM_MBUTTONDBLCLK: {
+        const int rawX = GET_X_LPARAM(lp);
+        const int rawY = GET_Y_LPARAM(lp);
+        const LPARAM mapped = mapMouseCoordinates(state, msg, lp);
+
+        static std::atomic<unsigned> diagCount{0};
+        const unsigned n = diagCount.fetch_add(1, std::memory_order_relaxed);
+        if (n < 48) {
+            std::wstringstream ss;
+            ss << L"INPUT WM #" << n
+               << L" msg=0x" << std::hex << msg << std::dec
+               << L" raw=(" << rawX << L"," << rawY << L")"
+               << L" mapped=(" << GET_X_LPARAM(mapped)
+               << L"," << GET_Y_LPARAM(mapped) << L")";
+            appendEditorDiagnostic(ss.str());
+        }
+
+        lp = mapped;
         break;
+    }
     default:
         break;
     }
