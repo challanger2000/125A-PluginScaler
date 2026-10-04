@@ -996,8 +996,16 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffMainsChanged: {
         inst->mainsOn = value != 0;
+
+        // Hosts are allowed to send mains-off before the plugin has ever
+        // started processing. That must not launch the x86 helper merely to
+        // tell a non-existent bridge to stop.
+        if (!inst->mainsOn && !inst->bridgeStarted)
+            return 1;
+
         if (!startBridge(inst))
             return 0;
+
         std::vector<std::uint8_t> ignored;
         return controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
                            inst->mainsOn ? 1 : 0, nullptr, 0, ignored) ? 1 : 0;
