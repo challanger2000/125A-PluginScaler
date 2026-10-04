@@ -106,6 +106,7 @@ struct EditorGuiContext {
     std::mutex* moduleMutex{nullptr};
     HWND surrogate{nullptr};
     HWND editor{nullptr};
+    int gdiScalePercent{100};
 };
 
 inline constexpr UINT kEditorOpenMessage = WM_APP + 0x125;
@@ -230,6 +231,232 @@ std::vector<HWND> editorCaptureCandidates(const EditorGuiContext* ctx) {
     return windows;
 }
 
+
+using SetDIBitsToDeviceFn = int (WINAPI*)(
+    HDC, int, int, DWORD, DWORD, int, int, UINT, UINT,
+    const VOID*, const BITMAPINFO*, UINT);
+
+std::atomic<int> g_gdiScalePercent{100};
+
+int WINAPI scaledSetDIBitsToDevice(
+    HDC hdc, int xDest, int yDest, DWORD width, DWORD height,
+    int xSrc, int ySrc, UINT startScan, UINT scanLines,
+    const VOID* bits, const BITMAPINFO* bmi, UINT colorUse) {
+    static const auto original = reinterpret_cast<SetDIBitsToDeviceFn>(
+        GetProcAddress(GetModuleHandleW(L"gdi32.dll"), "SetDIBitsToDevice"));
+    if (!original)
+        return 0;
+
+    const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
+    if (scale <= 100 || !bits || !bmi || width == 0 || height == 0)
+        return original(hdc, xDest, yDest, width, height,
+                        xSrc, ySrc, startScan, scanLines,
+                        bits, bmi, colorUse);
+
+    const int scaledX = MulDiv(xDest, scale, 100);
+    const int scaledY = MulDiv(yDest, scale, 100);
+    const int scaledW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
+    const int scaledH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
+
+    // Pro-53's editor uses a 32-bit software DIB as its final GUI blit.
+    // Stretch only the destination; keep the plugin's source bitmap untouched.
+    const int srcW = static_cast<int>(width);
+    const int srcH = static_cast<int>(height);
+    SetStretchBltMode(hdc, HALFTONE);
+    const int result = StretchDIBits(
+        hdc,
+        scaledX, scaledY, scaledW, scaledH,
+        xSrc, ySrc, srcW, srcH,
+        bits, bmi, colorUse, SRCCOPY);
+    return result == GDI_ERROR ? 0 : result;
+}
+
+bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
+    if (!nativeModule || scalePercent <= 100)
+        return scalePercent <= 100;
+
+    auto* base = static_cast<std::uint8_t*>(nativeModule);
+    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+        return false;
+
+    auto* nt = reinterpret_cast<IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+
+    const auto& dir =
+        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress || !dir.Size)
+        return false;
+
+    auto* imports = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(
+        base + dir.VirtualAddress);
+    const FARPROC target = GetProcAddress(
+        GetModuleHandleW(L"gdi32.dll"), "SetDIBitsToDevice");
+    if (!target)
+        return false;
+
+    for (; imports->Name; ++imports) {
+        const char* dllName =
+            reinterpret_cast<const char*>(base + imports->Name);
+        if (_stricmp(dllName, "GDI32.dll") != 0 &&
+            _stricmp(dllName, "gdi32.dll") != 0)
+            continue;
+
+        auto* first = reinterpret_cast<IMAGE_THUNK_DATA*>(
+            base + imports->FirstThunk);
+        IMAGE_THUNK_DATA* original = imports->OriginalFirstThunk
+            ? reinterpret_cast<IMAGE_THUNK_DATA*>(
+                  base + imports->OriginalFirstThunk)
+            : nullptr;
+
+        for (std::size_t i = 0; first[i].u1.Function; ++i) {
+            bool match = false;
+            if (original && original[i].u1.AddressOfData &&
+                !IMAGE_SNAP_BY_ORDINAL(original[i].u1.Ordinal)) {
+                auto* byName = reinterpret_cast<IMAGE_IMPORT_BY_NAME*>(
+                    base + original[i].u1.AddressOfData);
+                match = std::strcmp(
+                    reinterpret_cast<const char*>(byName->Name),
+                    "SetDIBitsToDevice") == 0;
+            } else {
+                match = reinterpret_cast<FARPROC>(
+                    static_cast<std::uintptr_t>(first[i].u1.Function)) == target;
+            }
+
+            if (!match)
+                continue;
+
+            DWORD oldProtect = 0;
+            if (!VirtualProtect(
+                    &first[i].u1.Function, sizeof(first[i].u1.Function),
+                    PAGE_READWRITE, &oldProtect))
+                return false;
+
+            first[i].u1.Function = static_cast<decltype(first[i].u1.Function)>(
+                reinterpret_cast<std::uintptr_t>(&scaledSetDIBitsToDevice));
+            FlushInstructionCache(
+                GetCurrentProcess(), &first[i].u1.Function,
+                sizeof(first[i].u1.Function));
+
+            DWORD ignored = 0;
+            VirtualProtect(
+                &first[i].u1.Function, sizeof(first[i].u1.Function),
+                oldProtect, &ignored);
+
+            g_gdiScalePercent.store(scalePercent, std::memory_order_relaxed);
+            return true;
+        }
+    }
+    return false;
+}
+
+struct GdiMouseScaleState {
+    WNDPROC original{nullptr};
+    int scale{100};
+    bool leftDrag{false};
+    POINT surfaceStart{};
+    POINT nativeStart{};
+};
+
+const wchar_t* kGdiMouseScaleProp = L"125A.PluginScaler.GdiMouseScale";
+
+LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
+    if (!state || state->scale <= 100)
+        return lp;
+
+    const int x = GET_X_LPARAM(lp);
+    const int y = GET_Y_LPARAM(lp);
+
+    int nativeX = MulDiv(x, 100, state->scale);
+    int nativeY = MulDiv(y, 100, state->scale);
+
+    if (msg == WM_LBUTTONDOWN) {
+        state->leftDrag = true;
+        state->surfaceStart = {x, y};
+        state->nativeStart = {nativeX, nativeY};
+    } else if (msg == WM_MOUSEMOVE && state->leftDrag) {
+        // Keep drag deltas 1:1 in physical pixels; only the initial hit-test
+        // is scaled back to the native editor coordinate system.
+        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
+        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
+    } else if (msg == WM_LBUTTONUP && state->leftDrag) {
+        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
+        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
+        state->leftDrag = false;
+    }
+
+    return MAKELPARAM(
+        static_cast<short>(nativeX),
+        static_cast<short>(nativeY));
+}
+
+LRESULT CALLBACK gdiScaledEditorProc(
+    HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* state = reinterpret_cast<GdiMouseScaleState*>(
+        GetPropW(hwnd, kGdiMouseScaleProp));
+    if (!state || !state->original)
+        return DefWindowProcW(hwnd, msg, wp, lp);
+
+    switch (msg) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+        lp = mapMouseCoordinates(state, msg, lp);
+        break;
+    default:
+        break;
+    }
+
+    const WNDPROC original = state->original;
+    const LRESULT result = CallWindowProcW(original, hwnd, msg, wp, lp);
+
+    if (msg == WM_NCDESTROY) {
+        RemovePropW(hwnd, kGdiMouseScaleProp);
+        delete state;
+    }
+    return result;
+}
+
+bool installGdiMouseScaling(HWND editor, int scalePercent) {
+    if (!editor || !IsWindow(editor) || scalePercent <= 100)
+        return scalePercent <= 100;
+    if (GetPropW(editor, kGdiMouseScaleProp))
+        return true;
+
+    auto* state = new (std::nothrow) GdiMouseScaleState{};
+    if (!state)
+        return false;
+    state->scale = scalePercent;
+
+    SetLastError(0);
+    const auto previous = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(
+            editor, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(&gdiScaledEditorProc)));
+    if (!previous && GetLastError() != 0) {
+        delete state;
+        return false;
+    }
+
+    state->original = previous;
+    if (!SetPropW(editor, kGdiMouseScaleProp, state)) {
+        SetWindowLongPtrW(
+            editor, GWLP_WNDPROC,
+            reinterpret_cast<LONG_PTR>(previous));
+        delete state;
+        return false;
+    }
+    return true;
+}
+
 LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* ctx = reinterpret_cast<EditorGuiContext*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -250,6 +477,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         if (ctx->editor && IsWindow(ctx->editor))
             return reinterpret_cast<LRESULT>(ctx->editor);
+
+        if (ctx->gdiScalePercent > 100 &&
+            !patchSetDIBitsImport(
+                ctx->module->nativeModuleHandle(),
+                ctx->gdiScalePercent)) {
+            appendEditorDiagnostic(L"GDI-SCALE import hook failed");
+            return 0;
+        }
 
         if (!ctx->module->openEditor(hwnd))
             return 0;
@@ -274,6 +509,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         }
 
         ctx->editor = child;
+
+        if (ctx->gdiScalePercent > 100 &&
+            !installGdiMouseScaling(child, ctx->gdiScalePercent)) {
+            appendEditorDiagnostic(L"GDI-SCALE mouse subclass failed");
+            ctx->module->closeEditor();
+            ctx->editor = nullptr;
+            return 0;
+        }
 
         {
             std::wstringstream ss;
@@ -675,6 +918,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 if (!payload.empty()) {
                     resp.status = ipc::ControlStatus::InvalidRequest;
                 } else {
+                    guiContext.gdiScalePercent =
+                        req.arg0 >= 100 && req.arg0 <= 400
+                            ? static_cast<int>(req.arg0)
+                            : 100;
                     const LRESULT editorResult = SendMessageW(
                         guiContext.surrogate, kEditorOpenMessage, 0, 0);
                     HWND editor = reinterpret_cast<HWND>(editorResult);
@@ -853,6 +1100,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     std::cerr << "error=" << error << '\n';
                     ok = false;
                 } else {
+                    if (guiContext.gdiScalePercent > 100)
+                        (void)patchSetDIBitsImport(
+                            module.nativeModuleHandle(),
+                            guiContext.gdiScalePercent);
                     configuredBlockSize = requestedBlockSize;
                     configuredSampleRate = requestedSampleRate;
                     appliedParameterGeneration = 0;

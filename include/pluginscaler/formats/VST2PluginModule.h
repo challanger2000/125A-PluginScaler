@@ -73,6 +73,7 @@ public:
     std::int32_t numParams() const noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
+    void* nativeModuleHandle() const noexcept { return module_; }
 
     void close() noexcept;
 

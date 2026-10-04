@@ -79,6 +79,7 @@ struct ProxySettings {
     bool directEditor{false};
     bool magEditor{false};
     bool graphicsEditor{false};
+    bool gdiEditor{false};
     bool sidecarLoaded{false};
 };
 
@@ -213,6 +214,7 @@ ProxySettings loadSettings() {
                 settings.directEditor = (mode == L"direct" || mode == L"integrated");
                 settings.magEditor = (mode == L"mag" || mode == L"magnifier");
                 settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
+                settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
             }
 
             settings.sidecarLoaded = true;
@@ -239,6 +241,7 @@ ProxySettings loadSettings() {
         settings.directEditor = (mode == L"direct" || mode == L"integrated");
         settings.magEditor = (mode == L"mag" || mode == L"magnifier");
         settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
+        settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
     }
 
     if (settings.helper.empty() && !baseDir.empty())
@@ -683,6 +686,39 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             (void)updateMagnifierSource(inst);
             return 0;
         }
+        if (inst->settings.gdiEditor) {
+            RECT rc{};
+            if (!GetClientRect(editor, &rc))
+                return 0;
+            const int nativeWidth = rc.right - rc.left;
+            const int nativeHeight = rc.bottom - rc.top;
+            const int width = nativeWidth * inst->scalePercent / 100;
+            const int height = nativeHeight * inst->scalePercent / 100;
+            if (nativeWidth <= 0 || nativeHeight <= 0 ||
+                width <= 0 || height <= 0)
+                return 0;
+
+            SetLastError(0);
+            HWND previousParent = SetParent(editor, parent);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+
+            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
+            style |= WS_CHILD | WS_VISIBLE;
+            style &= ~WS_POPUP;
+            SetWindowLongPtrW(editor, GWL_STYLE, style);
+
+            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            RedrawWindow(editor, nullptr, nullptr,
+                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+
+            inst->editorSurface = nullptr;
+            inst->editorMagnifier = nullptr;
+            inst->editorOpen = true;
+            return 1;
+        }
+
         if (inst->settings.graphicsEditor) {
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -794,7 +830,7 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor) &&
+            if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
                 inst->editorWindow && IsWindow(inst->editorWindow) &&
                 inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
                 ShowWindow(inst->editorWindow, SW_HIDE);
@@ -977,7 +1013,10 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!ptr || !startBridge(inst)) return 0;
         std::vector<std::uint8_t> reply;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                         0, nullptr, 0, reply) ||
+                         inst->settings.gdiEditor
+                             ? static_cast<std::uint32_t>(inst->scalePercent)
+                             : 0u,
+                         nullptr, 0, reply) ||
             reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
             return 0;
 
@@ -1194,7 +1233,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor) &&
+        if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             ShowWindow(inst->editorWindow, SW_HIDE);

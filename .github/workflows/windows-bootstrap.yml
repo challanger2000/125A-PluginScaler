@@ -312,7 +312,7 @@ jobs:
             -HelperExe ".\PluginScalerHelper-x86.exe" `
             -OutputDir ".\Pro53-Test" `
             -Scale 150 `
-            -EditorMode Graphics `
+            -EditorMode Gdi `
             -WrapperName "Pro-53-125A"
           "@ | Set-Content (Join-Path $kit "PRO53-QUICKSTART.txt") -Encoding UTF8
 
