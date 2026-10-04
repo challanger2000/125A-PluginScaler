@@ -288,44 +288,65 @@ int WINAPI scaledSetDIBitsToDevice(
         return 0;
 
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
-    if (scale <= 100 || !hdc)
+    if (scale <= 100 || !bits || !bmi || width == 0 || height == 0)
         return original(hdc, xDest, yDest, width, height,
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
-    // Scale the destination coordinate space instead of rebuilding the DIB.
-    // This preserves SetDIBitsToDevice's native handling of partial scan-line
-    // updates and avoids reading beyond buffers supplied for those updates.
-    const int saved = SaveDC(hdc);
-    if (saved == 0)
-        return original(hdc, xDest, yDest, width, height,
-                        xSrc, ySrc, startScan, scanLines,
-                        bits, bmi, colorUse);
+    const auto dibWidth = std::abs(bmi->bmiHeader.biWidth);
+    const auto dibHeight = std::abs(bmi->bmiHeader.biHeight);
 
-    int result = 0;
-    if (SetGraphicsMode(hdc, GM_ADVANCED)) {
-        const FLOAT factor = static_cast<FLOAT>(scale) / 100.0f;
-        XFORM scaleTransform{};
-        scaleTransform.eM11 = factor;
-        scaleTransform.eM22 = factor;
-
-        if (ModifyWorldTransform(hdc, &scaleTransform, MWT_LEFTMULTIPLY)) {
-            result = original(hdc, xDest, yDest, width, height,
-                              xSrc, ySrc, startScan, scanLines,
-                              bits, bmi, colorUse);
-        } else {
-            result = original(hdc, xDest, yDest, width, height,
-                              xSrc, ySrc, startScan, scanLines,
-                              bits, bmi, colorUse);
-        }
-    } else {
-        result = original(hdc, xDest, yDest, width, height,
-                          xSrc, ySrc, startScan, scanLines,
-                          bits, bmi, colorUse);
+    // Diagnostic only: capture the first few real Pro-53 blits so the next
+    // scaling change is based on the plugin's actual update pattern.
+    static std::atomic<unsigned> diagnosticCount{0};
+    const unsigned diagnosticIndex =
+        diagnosticCount.fetch_add(1, std::memory_order_relaxed);
+    if (diagnosticIndex < 24) {
+        std::wstringstream ss;
+        ss << L"GDI-BLIT #" << diagnosticIndex
+           << L" hdc=0x" << std::hex
+           << reinterpret_cast<std::uintptr_t>(hdc) << std::dec
+           << L" hwnd=0x" << std::hex
+           << reinterpret_cast<std::uintptr_t>(WindowFromDC(hdc)) << std::dec
+           << L" dst=(" << xDest << L"," << yDest << L")"
+           << L" size=" << width << L"x" << height
+           << L" src=(" << xSrc << L"," << ySrc << L")"
+           << L" start=" << startScan
+           << L" lines=" << scanLines
+           << L" dib=" << dibWidth << L"x" << dibHeight;
+        appendEditorDiagnostic(ss.str());
     }
 
-    RestoreDC(hdc, saved);
-    return result;
+    // Safety first: SetDIBitsToDevice may be called with only a subset of
+    // scanlines during interactive redraws. In that case the supplied bits
+    // pointer does not necessarily describe a complete height-sized buffer.
+    // Stretching the full image can read beyond the valid source region.
+    // Until partial-update semantics are handled explicitly, pass those calls
+    // straight through to GDI unchanged.
+    const bool fullFrame =
+        startScan == 0 &&
+        scanLines == height &&
+        dibWidth >= static_cast<LONG>(width) &&
+        dibHeight >= static_cast<LONG>(height);
+
+    if (!fullFrame)
+        return original(hdc, xDest, yDest, width, height,
+                        xSrc, ySrc, startScan, scanLines,
+                        bits, bmi, colorUse);
+
+    const int scaledX = MulDiv(xDest, scale, 100);
+    const int scaledY = MulDiv(yDest, scale, 100);
+    const int scaledW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
+    const int scaledH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
+
+    // Full-frame Pro-53 GUI blit only.
+    SetStretchBltMode(hdc, COLORONCOLOR);
+    const int result = StretchDIBits(
+        hdc,
+        scaledX, scaledY, scaledW, scaledH,
+        xSrc, ySrc, static_cast<int>(width), static_cast<int>(height),
+        bits, bmi, colorUse, SRCCOPY);
+    return result == GDI_ERROR ? 0 : result;
 }
 
 bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
