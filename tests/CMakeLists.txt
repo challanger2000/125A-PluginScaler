@@ -44,6 +44,12 @@ set_tests_properties(PluginScaler.VST2AudioProbe PROPERTIES
     TIMEOUT 20
 )
 
+add_library(MockVST2LegacyGdi SHARED MockVST2LegacyGdi.cpp)
+target_include_directories(MockVST2LegacyGdi PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_features(MockVST2LegacyGdi PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2LegacyGdi)
+set_target_properties(MockVST2LegacyGdi PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2LegacyGdi")
+
 add_executable(PluginScalerBridgeClient BridgeClient.cpp)
 target_include_directories(PluginScalerBridgeClient PRIVATE "${PROJECT_SOURCE_DIR}/include")
 target_link_libraries(PluginScalerBridgeClient PRIVATE PluginScalerIPC)
@@ -68,6 +74,11 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_include_directories(PluginScalerVST2ProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
     target_compile_features(PluginScalerVST2ProxyHost PRIVATE cxx_std_20)
     pluginscaler_enable_warnings(PluginScalerVST2ProxyHost)
+
+    add_executable(PluginScalerVST2GdiProxyHost VST2GdiProxyHost.cpp)
+    target_include_directories(PluginScalerVST2GdiProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2GdiProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2GdiProxyHost)
 
     add_executable(PluginScalerVST2SynthProxyHost VST2SynthProxyHost.cpp)
     target_include_directories(PluginScalerVST2SynthProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
