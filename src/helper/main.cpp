@@ -240,6 +240,27 @@ using SetDIBitsToDeviceFn = int (WINAPI*)(
 std::atomic<int> g_gdiScalePercent{100};
 std::atomic<HWND> g_gdiEditorWindow{nullptr};
 
+thread_local HWND g_gdiCreateParent{nullptr};
+thread_local int g_gdiCreateScalePercent{100};
+
+LRESULT CALLBACK gdiCreateCbtProc(int code, WPARAM wp, LPARAM lp) {
+    if (code == HCBT_CREATEWND &&
+        g_gdiCreateParent &&
+        g_gdiCreateScalePercent > 100) {
+        auto* create = reinterpret_cast<CBT_CREATEWND*>(lp);
+        if (create && create->lpcs &&
+            create->lpcs->hwndParent == g_gdiCreateParent) {
+            if (create->lpcs->cx > 0)
+                create->lpcs->cx = MulDiv(
+                    create->lpcs->cx, g_gdiCreateScalePercent, 100);
+            if (create->lpcs->cy > 0)
+                create->lpcs->cy = MulDiv(
+                    create->lpcs->cy, g_gdiCreateScalePercent, 100);
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
+
 using ScreenToClientFn = BOOL (WINAPI*)(HWND, LPPOINT);
 
 BOOL WINAPI scaledScreenToClient(HWND hwnd, LPPOINT point) {
@@ -800,7 +821,46 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             }
         }
 
-        if (!ctx->module->openEditor(hwnd))
+        HHOOK createHook = nullptr;
+        if (ctx->gdiScalePercent > 100) {
+            // DPI-style virtualization for the legacy editor: establish the
+            // scaled parent geometry before effEditOpen and resize the direct
+            // child in the CBT create callback, before its first visible paint.
+            VstRect nativeRect{};
+            if (ctx->module->editorRect(nativeRect)) {
+                const int nativeWidth = nativeRect.right - nativeRect.left;
+                const int nativeHeight = nativeRect.bottom - nativeRect.top;
+                const int scaledWidth = MulDiv(
+                    nativeWidth, ctx->gdiScalePercent, 100);
+                const int scaledHeight = MulDiv(
+                    nativeHeight, ctx->gdiScalePercent, 100);
+                if (scaledWidth > 0 && scaledHeight > 0) {
+                    SetWindowPos(hwnd, HWND_BOTTOM, 0, 0,
+                                 scaledWidth, scaledHeight,
+                                 SWP_NOACTIVATE | SWP_NOZORDER);
+                }
+            }
+
+            g_gdiCreateParent = hwnd;
+            g_gdiCreateScalePercent = ctx->gdiScalePercent;
+            createHook = SetWindowsHookExW(
+                WH_CBT, gdiCreateCbtProc, nullptr, GetCurrentThreadId());
+            if (!createHook) {
+                g_gdiCreateParent = nullptr;
+                g_gdiCreateScalePercent = 100;
+                appendEditorDiagnostic(L"GDI-SCALE CBT create hook failed");
+                return 0;
+            }
+        }
+
+        const bool editorOpened = ctx->module->openEditor(hwnd);
+
+        if (createHook)
+            UnhookWindowsHookEx(createHook);
+        g_gdiCreateParent = nullptr;
+        g_gdiCreateScalePercent = 100;
+
+        if (!editorOpened)
             return 0;
 
         EditorChildCandidate candidate{};
