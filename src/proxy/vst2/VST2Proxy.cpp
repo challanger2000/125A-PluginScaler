@@ -113,6 +113,7 @@ struct ProxyInstance {
     int dragNativeStartX{0};
     int dragNativeStartY{0};
     bool editorOpen{false};
+    ULONGLONG gdiCaptureNotBefore{0};
 
     double sampleRate{48000.0};
     VstInt32 blockSize{512};
@@ -698,6 +699,11 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (inst->settings.graphicsEditor || inst->settings.gdiEditor) {
+            if (inst->settings.gdiEditor &&
+                inst->gdiCaptureNotBefore != 0 &&
+                GetTickCount64() < inst->gdiCaptureNotBefore) {
+                return 0;
+            }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -759,8 +765,14 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
 
-        const bool haveFrame = captureEditorBitmap(inst) &&
-                               !inst->editorBitmap.empty();
+        const bool gdiWaiting =
+            inst->settings.gdiEditor &&
+            inst->gdiCaptureNotBefore != 0 &&
+            GetTickCount64() < inst->gdiCaptureNotBefore;
+        const bool haveFrame =
+            !gdiWaiting &&
+            captureEditorBitmap(inst) &&
+            !inst->editorBitmap.empty();
         if (haveFrame) {
             BITMAPINFO bmi{};
             bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -831,6 +843,7 @@ void stopBridge(ProxyInstance* inst) noexcept {
             if (inst->editorSurface && IsWindow(inst->editorSurface))
                 DestroyWindow(inst->editorSurface);
             inst->editorSurface = nullptr;
+            inst->gdiCaptureNotBefore = 0;
             std::vector<std::uint8_t> ignored;
             (void)controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
                               0, nullptr, 0, ignored);
@@ -1083,7 +1096,13 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
             inst->editorOpen = true;
 
-            SetTimer(surface, 0x125A, 33, nullptr);
+            // Give very old GDI editors time to finish their own startup
+            // painting before the wrapper starts asking for frames.
+            // The surface is available immediately, but capture begins only
+            // after a quiet 2-second grace period. 100 ms polling is enough
+            // for GUI work and avoids hammering the 32-bit editor.
+            inst->gdiCaptureNotBefore = GetTickCount64() + 2000ULL;
+            SetTimer(surface, 0x125A, 100, nullptr);
             InvalidateRect(surface, nullptr, FALSE);
             UpdateWindow(surface);
             return 1;
