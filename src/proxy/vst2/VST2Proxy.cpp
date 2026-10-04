@@ -455,12 +455,17 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
         inst->dragNativeStartY = nativeY;
     } else if ((message == WM_MOUSEMOVE || message == WM_LBUTTONUP) &&
                inst->dragActive) {
-        const int nativeDeltaX =
-            (scaledX - inst->dragSurfaceStartX) *
-            static_cast<int>(inst->editorBitmapWidth) / surfaceWidth;
-        const int nativeDeltaY =
-            (scaledY - inst->dragSurfaceStartY) *
-            static_cast<int>(inst->editorBitmapHeight) / surfaceHeight;
+        // Preserve the established 1:1 relative-drag semantics for the
+        // generic scaler path. Only the TV-style GDI mode maps physical
+        // surface deltas back into the native plugin coordinate system.
+        const int nativeDeltaX = inst->settings.gdiEditor
+            ? (scaledX - inst->dragSurfaceStartX) *
+              static_cast<int>(inst->editorBitmapWidth) / surfaceWidth
+            : (scaledX - inst->dragSurfaceStartX);
+        const int nativeDeltaY = inst->settings.gdiEditor
+            ? (scaledY - inst->dragSurfaceStartY) *
+              static_cast<int>(inst->editorBitmapHeight) / surfaceHeight
+            : (scaledY - inst->dragSurfaceStartY);
         nativeX = std::clamp(
             inst->dragNativeStartX + nativeDeltaX,
             0, static_cast<int>(inst->editorBitmapWidth) - 1);
