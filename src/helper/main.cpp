@@ -293,60 +293,59 @@ int WINAPI scaledSetDIBitsToDevice(
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
-    const auto dibWidth = std::abs(bmi->bmiHeader.biWidth);
-    const auto dibHeight = std::abs(bmi->bmiHeader.biHeight);
-
-    // Diagnostic only: capture the first few real Pro-53 blits so the next
-    // scaling change is based on the plugin's actual update pattern.
-    static std::atomic<unsigned> diagnosticCount{0};
-    const unsigned diagnosticIndex =
-        diagnosticCount.fetch_add(1, std::memory_order_relaxed);
-    if (diagnosticIndex < 24) {
-        std::wstringstream ss;
-        ss << L"GDI-BLIT #" << diagnosticIndex
-           << L" hdc=0x" << std::hex
-           << reinterpret_cast<std::uintptr_t>(hdc) << std::dec
-           << L" hwnd=0x" << std::hex
-           << reinterpret_cast<std::uintptr_t>(WindowFromDC(hdc)) << std::dec
-           << L" dst=(" << xDest << L"," << yDest << L")"
-           << L" size=" << width << L"x" << height
-           << L" src=(" << xSrc << L"," << ySrc << L")"
-           << L" start=" << startScan
-           << L" lines=" << scanLines
-           << L" dib=" << dibWidth << L"x" << dibHeight;
-        appendEditorDiagnostic(ss.str());
-    }
-
-    // Safety first: SetDIBitsToDevice may be called with only a subset of
-    // scanlines during interactive redraws. In that case the supplied bits
-    // pointer does not necessarily describe a complete height-sized buffer.
-    // Stretching the full image can read beyond the valid source region.
-    // Until partial-update semantics are handled explicitly, pass those calls
-    // straight through to GDI unchanged.
-    const bool fullFrame =
-        startScan == 0 &&
-        scanLines == height &&
-        dibWidth >= static_cast<LONG>(width) &&
-        dibHeight >= static_cast<LONG>(height);
-
-    if (!fullFrame)
+    const int dibWidth = std::abs(bmi->bmiHeader.biWidth);
+    const int dibHeight = std::abs(bmi->bmiHeader.biHeight);
+    if (dibWidth <= 0 || dibHeight <= 0)
         return original(hdc, xDest, yDest, width, height,
                         xSrc, ySrc, startScan, scanLines,
                         bits, bmi, colorUse);
 
-    const int scaledX = MulDiv(xDest, scale, 100);
-    const int scaledY = MulDiv(yDest, scale, 100);
-    const int scaledW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
-    const int scaledH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
+    const int scaledDibWidth = (std::max)(1, MulDiv(dibWidth, scale, 100));
+    const int scaledDibHeight = (std::max)(1, MulDiv(dibHeight, scale, 100));
 
-    // Full-frame Pro-53 GUI blit only.
+    // Pro-53's first repaint after the host enlarges its HWND asks
+    // SetDIBitsToDevice for the already-scaled window size, while the DIB
+    // itself remains native-sized. SetDIBitsToDevice cannot stretch that DIB,
+    // so map this exact full-editor case to StretchDIBits.
+    const bool fullScaledEditorBlit =
+        xDest == 0 && yDest == 0 &&
+        static_cast<int>(width) == scaledDibWidth &&
+        static_cast<int>(height) == scaledDibHeight &&
+        xSrc == 0 &&
+        ySrc == dibHeight - static_cast<int>(height) &&
+        startScan == 0 &&
+        scanLines >= static_cast<UINT>(dibHeight);
+
+    int result = 0;
     SetStretchBltMode(hdc, COLORONCOLOR);
-    const int result = StretchDIBits(
-        hdc,
-        scaledX, scaledY, scaledW, scaledH,
-        xSrc, ySrc, static_cast<int>(width), static_cast<int>(height),
-        bits, bmi, colorUse, SRCCOPY);
-    return result == GDI_ERROR ? 0 : result;
+
+    if (fullScaledEditorBlit) {
+        result = StretchDIBits(
+            hdc,
+            0, 0, scaledDibWidth, scaledDibHeight,
+            0, 0, dibWidth, dibHeight,
+            bits, bmi, colorUse, SRCCOPY);
+    } else {
+        // Normal Pro-53 invalidation rectangles remain expressed in native
+        // editor coordinates. Scale only the destination rectangle; the
+        // source rectangle stays in the native 762x358 DIB coordinate space.
+        const int dstX = MulDiv(xDest, scale, 100);
+        const int dstY = MulDiv(yDest, scale, 100);
+        const int dstW = (std::max)(1, MulDiv(static_cast<int>(width), scale, 100));
+        const int dstH = (std::max)(1, MulDiv(static_cast<int>(height), scale, 100));
+
+        result = StretchDIBits(
+            hdc,
+            dstX, dstY, dstW, dstH,
+            xSrc, ySrc, static_cast<int>(width), static_cast<int>(height),
+            bits, bmi, colorUse, SRCCOPY);
+    }
+
+    if (result == 0 || result == GDI_ERROR)
+        return 0;
+
+    // Preserve SetDIBitsToDevice-style success semantics for the legacy code.
+    return static_cast<int>(scanLines);
 }
 
 bool patchSetDIBitsImport(void* nativeModule, int scalePercent) {
