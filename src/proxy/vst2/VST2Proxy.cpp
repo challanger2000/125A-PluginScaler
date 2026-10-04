@@ -1356,6 +1356,12 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffGetVstVersion:
         return 2400;
 
+    case EffGetNumMidiInputChannels:
+        return (inst->manifest.flags & (1 << 8)) ? 16 : 0;
+
+    case EffGetNumMidiOutputChannels:
+        return 0;
+
     case EffCanDo:
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
