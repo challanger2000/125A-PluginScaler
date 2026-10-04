@@ -1584,32 +1584,17 @@ int runSharedVst2Server(const std::filesystem::path& path,
             const auto requestedSampleRate = block->header.sampleRateHz;
             if (configuredBlockSize != requestedBlockSize ||
                 configuredSampleRate != requestedSampleRate) {
-                module.close();
-
                 std::string error;
-                if (!module.openForProcessing(path, static_cast<double>(requestedSampleRate),
-                                              requestedBlockSize, error)) {
+                if (!module.reconfigureProcessing(
+                        static_cast<double>(requestedSampleRate),
+                        requestedBlockSize, error)) {
                     std::cerr << "error=" << error << '\n';
                     ok = false;
                 } else {
-                    if (guiContext.gdiScalePercent > 100) {
-                        (void)patchSetDIBitsImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchScreenToClientImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                        (void)patchClientToScreenImport(
-                            module.nativeModuleHandle(),
-                            guiContext.gdiScalePercent);
-                    }
                     configuredBlockSize = requestedBlockSize;
                     configuredSampleRate = requestedSampleRate;
-                    appliedParameterGeneration = 0;
-                    if (!persistedChunk.empty())
-                        ok = module.setChunk(persistedChunkIndex,
-                                             persistedChunk.data(),
-                                             persistedChunk.size());
+                    // The plugin instance, native editor HWND and GDI hook stay
+                    // alive across host block-size/sample-rate changes.
                 }
             }
 
