@@ -63,6 +63,9 @@ public:
                                std::int32_t blockSize) noexcept;
     bool setMains(bool active) noexcept;
     void setHostTimeInfo(const vst2abi::VstTimeInfo& info) noexcept;
+    const vst2abi::VstTimeInfo* hostTimeInfo() const noexcept { return &timeInfo_; }
+    double sampleRate() const noexcept { return sampleRate_; }
+    std::int32_t blockSize() const noexcept { return blockSize_; }
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
