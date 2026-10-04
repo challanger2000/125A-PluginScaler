@@ -245,6 +245,38 @@ std::vector<std::uint8_t> g_gdiFramePixels;
 std::uint32_t g_gdiFrameWidth{0};
 std::uint32_t g_gdiFrameHeight{0};
 std::uint32_t g_gdiFrameStride{0};
+std::size_t g_gdiFrameScore{0};
+
+std::size_t scoreNativeGdiFrame(const std::vector<std::uint8_t>& pixels,
+                                int width, int height) {
+    if (pixels.empty() || width <= 0 || height <= 0)
+        return 0;
+
+    const std::size_t total =
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    const std::size_t step = (std::max<std::size_t>)(1, total / 8192u);
+    std::size_t score = 0;
+    std::uint8_t lastR = 0, lastG = 0, lastB = 0;
+    bool haveLast = false;
+
+    for (std::size_t px = 0; px < total; px += step) {
+        const std::size_t i = px * 4u;
+        if (i + 2 >= pixels.size())
+            break;
+        const std::uint8_t b = pixels[i + 0];
+        const std::uint8_t g = pixels[i + 1];
+        const std::uint8_t r = pixels[i + 2];
+        if (r > 8 || g > 8 || b > 8)
+            score += 2;
+        if (haveLast &&
+            (std::abs(static_cast<int>(r) - static_cast<int>(lastR)) > 4 ||
+             std::abs(static_cast<int>(g) - static_cast<int>(lastG)) > 4 ||
+             std::abs(static_cast<int>(b) - static_cast<int>(lastB)) > 4))
+            ++score;
+        lastR = r; lastG = g; lastB = b; haveLast = true;
+    }
+    return score;
+}
 
 void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
     if (!bits || !bmi)
@@ -283,12 +315,13 @@ void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
         }
     }
 
+    const std::size_t newScore = scoreNativeGdiFrame(frame, width, height);
+
     std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
 
-    // A legacy editor may call SetDIBitsToDevice for many small auxiliary
-    // bitmaps after drawing its full editor. Do not let a later tiny/black
-    // control bitmap replace the actual editor framebuffer. Once we have a
-    // large source, only accept an equally large or larger DIB.
+    // Legacy editors can emit auxiliary or temporary full-size black DIBs
+    // during initialization/repaint. Keep the largest editor-sized source,
+    // and once a useful image exists reject only obviously blank replacements.
     const std::uint64_t newArea =
         static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
     const std::uint64_t currentArea =
@@ -298,10 +331,18 @@ void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
     if (currentArea != 0 && newArea < currentArea)
         return;
 
+    const bool sameArea = currentArea != 0 && newArea == currentArea;
+    const bool suspiciousBlank =
+        sameArea && g_gdiFrameScore >= 512 &&
+        (newScore < 128 || newScore * 8 < g_gdiFrameScore);
+    if (suspiciousBlank)
+        return;
+
     g_gdiFramePixels = std::move(frame);
     g_gdiFrameWidth = static_cast<std::uint32_t>(width);
     g_gdiFrameHeight = static_cast<std::uint32_t>(height);
     g_gdiFrameStride = static_cast<std::uint32_t>(dstStride);
+    g_gdiFrameScore = newScore;
 }
 
 thread_local HWND g_gdiCreateParent{nullptr};
@@ -872,6 +913,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g_gdiFrameWidth = 0;
             g_gdiFrameHeight = 0;
             g_gdiFrameStride = 0;
+            g_gdiFrameScore = 0;
         }
         if (ctx->editor && IsWindow(ctx->editor))
             return reinterpret_cast<LRESULT>(ctx->editor);
@@ -1023,6 +1065,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g_gdiFrameWidth = 0;
             g_gdiFrameHeight = 0;
             g_gdiFrameStride = 0;
+            g_gdiFrameScore = 0;
         }
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         g_gdiEditorWindow.store(nullptr, std::memory_order_relaxed);
