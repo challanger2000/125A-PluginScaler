@@ -284,6 +284,20 @@ void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
     }
 
     std::lock_guard<std::mutex> lock(g_gdiFrameMutex);
+
+    // A legacy editor may call SetDIBitsToDevice for many small auxiliary
+    // bitmaps after drawing its full editor. Do not let a later tiny/black
+    // control bitmap replace the actual editor framebuffer. Once we have a
+    // large source, only accept an equally large or larger DIB.
+    const std::uint64_t newArea =
+        static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
+    const std::uint64_t currentArea =
+        static_cast<std::uint64_t>(g_gdiFrameWidth) *
+        static_cast<std::uint64_t>(g_gdiFrameHeight);
+
+    if (currentArea != 0 && newArea < currentArea)
+        return;
+
     g_gdiFramePixels = std::move(frame);
     g_gdiFrameWidth = static_cast<std::uint32_t>(width);
     g_gdiFrameHeight = static_cast<std::uint32_t>(height);
