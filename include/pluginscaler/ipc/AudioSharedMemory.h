@@ -6,7 +6,7 @@
 namespace pluginscaler::ipc {
 
 inline constexpr std::uint32_t kAudioSharedMagic = 0x41505341u; // "ASPA"
-inline constexpr std::uint32_t kAudioSharedVersion = 5;
+inline constexpr std::uint32_t kAudioSharedVersion = 6;
 inline constexpr std::uint32_t kMaxParameters = 2048;
 inline constexpr std::uint32_t kMaxMidiEvents = 256;
 inline constexpr std::uint32_t kMaxAudioChannels = 8;
@@ -61,9 +61,16 @@ struct MidiSharedEvent {
     std::uint8_t reserved[4]{};
 };
 
+struct AutomationSharedMailbox {
+    std::atomic<std::uint32_t> generation{0};
+    std::atomic<std::int32_t> index{-1};
+    std::atomic<std::uint32_t> valueBits{0};
+};
+
 struct AudioSharedBlock {
     AudioSharedHeader header{};
     HostTimeShared hostTime{};
+    AutomationSharedMailbox automation{};
     MidiSharedEvent midiEvents[kMaxMidiEvents]{};
     float parameterValues[kMaxParameters]{};
     float inputs[kMaxAudioChannels][kMaxAudioFrames]{};
@@ -73,5 +80,6 @@ struct AudioSharedBlock {
 static_assert(alignof(AudioSharedHeader) == 64);
 static_assert(sizeof(AudioSharedHeader) == 64);
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+static_assert(std::atomic<std::int32_t>::is_always_lock_free);
 
 } // namespace pluginscaler::ipc
