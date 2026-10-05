@@ -36,8 +36,8 @@ VST2PluginModule* moduleForHostCallback(AEffect* effect) {
     return g_constructingModule;
 }
 
-VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
-                               VstIntPtr value, void* ptr, float) {
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
+                               VstIntPtr value, void* ptr, float opt) {
     auto* module = moduleForHostCallback(effect);
     switch (opcode) {
     case AudioMasterVersion:
@@ -50,13 +50,14 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
         // The helper owns a Win32 message loop and calls effEditIdle
         // periodically while the editor is open.
         return 1;
+    case AudioMasterAutomate:
     case AudioMasterUpdateDisplay:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
-        // These are normal GUI/program-change notifications. The x86 helper
-        // currently has no automation backchannel to the x64 host yet, but the
-        // callback itself must be acknowledged so legacy editors do not wait
-        // for a host response that never comes.
+        // Preserve GUI/automation callbacks so the x64 proxy can replay them
+        // into the real DAW host on its own host/editor thread.
+        if (module)
+            module->enqueueHostCallback(opcode, index, value, opt);
         return 1;
     case AudioMasterGetTime:
         return module
@@ -579,6 +580,29 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     close();
     result.closed = true;
     return result;
+}
+
+void VST2PluginModule::enqueueHostCallback(std::int32_t opcode,
+                                               std::int32_t index,
+                                               std::intptr_t value,
+                                               float opt) noexcept {
+    try {
+        std::lock_guard<std::mutex> lock(hostCallbackMutex_);
+        // Bound the queue so a broken legacy plug-in cannot grow it forever.
+        if (hostCallbacks_.size() >= 512)
+            hostCallbacks_.erase(hostCallbacks_.begin(),
+                                 hostCallbacks_.begin() + 128);
+        hostCallbacks_.push_back(VST2HostCallbackEvent{opcode, index, value, opt});
+    } catch (...) {
+        // Host callbacks must never unwind through a legacy VST2 binary.
+    }
+}
+
+std::vector<VST2HostCallbackEvent> VST2PluginModule::drainHostCallbacks() {
+    std::lock_guard<std::mutex> lock(hostCallbackMutex_);
+    std::vector<VST2HostCallbackEvent> out;
+    out.swap(hostCallbacks_);
+    return out;
 }
 
 void VST2PluginModule::close() noexcept {
