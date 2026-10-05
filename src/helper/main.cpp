@@ -4,6 +4,7 @@
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/Protocol.h"
 #include "pluginscaler/ipc/ControlProtocol.h"
+#include "pluginscaler/ipc/VST2CallbackProtocol.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -26,6 +27,66 @@
 #include <cstdint>
 
 namespace {
+
+struct HostCallbackPipeContext {
+    HANDLE pipe{INVALID_HANDLE_VALUE};
+    std::mutex mutex;
+};
+
+bool pipeReadExact(HANDLE pipe, void* data, DWORD bytes) noexcept {
+    auto* p = static_cast<std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, p + done, bytes - done, &got, nullptr) || got == 0)
+            return false;
+        done += got;
+    }
+    return true;
+}
+
+bool pipeWriteExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD sent = 0;
+        if (!WriteFile(pipe, p + done, bytes - done, &sent, nullptr) || sent == 0)
+            return false;
+        done += sent;
+    }
+    return true;
+}
+
+pluginscaler::formats::vst2abi::VstIntPtr forwardLegacyHostCallback(
+    void* opaque,
+    std::int32_t opcode,
+    std::int32_t index,
+    pluginscaler::formats::vst2abi::VstIntPtr value,
+    void*,
+    float opt) noexcept {
+    auto* context = static_cast<HostCallbackPipeContext*>(opaque);
+    if (!context || context->pipe == INVALID_HANDLE_VALUE)
+        return 0;
+
+    // Keep the callback path completely separate from host->plugin control
+    // traffic. For now only data-less callbacks use this channel.
+    pluginscaler::ipc::VST2CallbackRequest req{};
+    req.opcode = opcode;
+    req.index = index;
+    req.value = static_cast<std::int64_t>(value);
+    req.opt = opt;
+
+    pluginscaler::ipc::VST2CallbackResponse resp{};
+    std::lock_guard<std::mutex> lock(context->mutex);
+    if (!pipeWriteExact(context->pipe, &req, sizeof(req)) ||
+        !pipeReadExact(context->pipe, &resp, sizeof(resp)) ||
+        resp.magic != pluginscaler::ipc::kVst2CallbackMagic ||
+        resp.version != pluginscaler::ipc::kVst2CallbackVersion)
+        return 0;
+
+    return static_cast<pluginscaler::formats::vst2abi::VstIntPtr>(
+        resp.returnValue);
+}
 
 int runVst2Probe(const std::filesystem::path& path) {
     pluginscaler::formats::VST2PluginModule module;
@@ -1464,7 +1525,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         const std::wstring& inputEvent,
                         const std::wstring& outputEvent,
                         const std::wstring& controlPipeName,
-                        DWORD parentProcessId) {
+                        DWORD parentProcessId,
+                        const std::wstring& callbackPipeName) {
     using namespace pluginscaler;
 
     ipc::AudioSharedChannel channel;
@@ -1477,6 +1539,33 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (!block) return 11;
 
     formats::VST2PluginModule module;
+    HostCallbackPipeContext hostCallbackContext{};
+    if (!callbackPipeName.empty()) {
+        for (int attempt = 0;
+             attempt < 100 && hostCallbackContext.pipe == INVALID_HANDLE_VALUE;
+             ++attempt) {
+            hostCallbackContext.pipe = CreateFileW(
+                callbackPipeName.c_str(),
+                GENERIC_READ | GENERIC_WRITE,
+                0, nullptr, OPEN_EXISTING, 0, nullptr);
+            if (hostCallbackContext.pipe != INVALID_HANDLE_VALUE)
+                break;
+            if (GetLastError() != ERROR_PIPE_BUSY &&
+                GetLastError() != ERROR_FILE_NOT_FOUND)
+                break;
+            WaitNamedPipeW(callbackPipeName.c_str(), 20);
+            Sleep(10);
+        }
+
+        if (hostCallbackContext.pipe == INVALID_HANDLE_VALUE) {
+            std::cerr << "error=callback-pipe-open\n";
+            return 24;
+        }
+
+        module.setHostCallbackForwarder(
+            &forwardLegacyHostCallback, &hostCallbackContext);
+    }
+
     std::mutex moduleMutex;
     std::vector<std::uint8_t> persistedChunk;
     std::int32_t persistedChunkIndex = 0;
@@ -1969,6 +2058,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (guiThread.joinable())
         guiThread.join();
 
+    module.setHostCallbackForwarder(nullptr, nullptr);
+    if (hostCallbackContext.pipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(hostCallbackContext.pipe);
+        hostCallbackContext.pipe = INVALID_HANDLE_VALUE;
+    }
+
     return resultCode;
 }
 
@@ -1984,18 +2079,20 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 4 && std::wstring_view(argv[1]) == L"--write-vst2-manifest")
         return writeVst2Manifest(argv[2], argv[3]);
 
-    if ((argc == 7 || argc == 8) &&
+    if ((argc == 7 || argc == 8 || argc == 9) &&
         std::wstring_view(argv[1]) == L"--serve-vst2-shm") {
         DWORD parentPid = 0;
-        if (argc == 8) {
+        if (argc >= 8) {
             try {
                 parentPid = static_cast<DWORD>(std::stoul(argv[7]));
             } catch (...) {
                 return 23;
             }
         }
+        const std::wstring callbackPipeName =
+            argc == 9 ? std::wstring(argv[8]) : std::wstring{};
         return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5], argv[6],
-                                   parentPid);
+                                   parentPid, callbackPipeName);
     }
 
     std::cout << "125A PluginScaler Helper\n"
@@ -2005,6 +2102,6 @@ int wmain(int argc, wchar_t** argv) {
               << "  PluginScalerHelper --probe-vst2 <plugin.dll>\n"
               << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n"
               << "  PluginScalerHelper --write-vst2-manifest <plugin.dll> <manifest.txt>\n"
-              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event> <control-pipe> <parent-pid>\n";
+              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event> <control-pipe> <parent-pid> [callback-pipe]\n";
     return 0;
 }
