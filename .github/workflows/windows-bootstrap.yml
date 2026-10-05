@@ -138,6 +138,43 @@ jobs:
             throw "Proxy lifecycle torture marker missing"
           }
 
+      - name: Run x64 proxy with non-chunk VST2 state fallback
+        shell: pwsh
+        run: |
+          $proxyHostExe = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2NoChunk.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2NoChunk.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $plugin $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "No-chunk manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $manifestText = Get-Content $manifest
+          $flagsLine = $manifestText | Where-Object { $_ -like "flags=*" } | Select-Object -First 1
+          if (-not $flagsLine) {
+            throw "No-chunk manifest flags missing"
+          }
+          $flags = [int]($flagsLine.Substring(6))
+          if (($flags -band 32) -ne 0) {
+            throw "No-chunk mock unexpectedly advertises program chunks"
+          }
+
+          $output = & $proxyHostExe $proxy $helper $plugin $manifest
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "No-chunk fallback bridge failed with exit code $LASTEXITCODE"
+          }
+          $joined = ($output | Out-String)
+          foreach ($marker in @("metadata=PASS","parameter=PASS","state=PASS","torture=PASS")) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "No-chunk fallback marker missing: $marker"
+            }
+          }
+          Write-Host "fallback-state=PASS"
+
       - name: Run x64 proxy with x86 zero-input synth
         timeout-minutes: 3
         shell: pwsh

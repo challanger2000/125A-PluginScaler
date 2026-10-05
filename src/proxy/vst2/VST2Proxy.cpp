@@ -2155,7 +2155,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     inst->effect.numParams = inst->manifest.numParams;
     inst->effect.numInputs = inst->manifest.numInputs;
     inst->effect.numOutputs = inst->manifest.numOutputs;
-    inst->effect.flags = inst->manifest.flags;
+    // The wrapper itself always supports opaque project state. If the target
+    // plug-in has no native VST2 chunks, the x86 module serializes
+    // program+parameters into a validated 125A fallback state blob.
+    inst->effect.flags = inst->manifest.flags | kEffectFlagProgramChunks;
     if (inst->manifest.plugCategory == PlugCategSynth ||
         inst->manifest.wantsMidi ||
         inst->manifest.receivesVstEvents ||

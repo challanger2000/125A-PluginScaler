@@ -9,13 +9,20 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+struct MockChunkState {
+    VstInt32 currentProgram{0};
+    float parameters[16]{};
+};
+
 struct MockState {
     float sampleRate{0.0f};
     VstInt32 blockSize{0};
     bool mains{false};
     bool midiSeen{false};
     std::uint8_t lastMidiNote{0};
+    VstInt32 currentProgram{0};
     float parameters[16]{0.125f};
+    MockChunkState chunkState{};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr value, void* ptr, float opt) {
@@ -37,17 +44,36 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
     case EffMainsChanged:
         if (state) state->mains = value != 0;
         return 1;
-    case EffGetChunk:
-        if (state && ptr) {
-            *static_cast<void**>(ptr) = state->parameters;
-            return static_cast<VstIntPtr>(sizeof(state->parameters));
-        }
-        return 0;
-    case EffSetChunk:
-        if (state && ptr && value == static_cast<VstIntPtr>(sizeof(state->parameters))) {
-            std::memcpy(state->parameters, ptr, sizeof(state->parameters));
+    case EffSetProgram:
+        if (state && value >= 0 && value < 8) {
+            state->currentProgram = static_cast<VstInt32>(value);
             return 1;
         }
+        return 0;
+    case EffGetProgram:
+        return state ? state->currentProgram : 0;
+    case EffGetChunk:
+#ifndef PLUGINSCALER_MOCK_NO_CHUNK
+        if (state && ptr) {
+            state->chunkState.currentProgram = state->currentProgram;
+            std::memcpy(state->chunkState.parameters,
+                        state->parameters, sizeof(state->parameters));
+            *static_cast<void**>(ptr) = &state->chunkState;
+            return static_cast<VstIntPtr>(sizeof(state->chunkState));
+        }
+#endif
+        return 0;
+    case EffSetChunk:
+#ifndef PLUGINSCALER_MOCK_NO_CHUNK
+        if (state && ptr &&
+            value == static_cast<VstIntPtr>(sizeof(state->chunkState))) {
+            std::memcpy(&state->chunkState, ptr, sizeof(state->chunkState));
+            state->currentProgram = state->chunkState.currentProgram;
+            std::memcpy(state->parameters,
+                        state->chunkState.parameters, sizeof(state->parameters));
+            return 1;
+        }
+#endif
         return 0;
     case EffProcessEvents:
         if (state && ptr) {
@@ -136,7 +162,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numParams = 16;
     effect->numInputs = 2;
     effect->numOutputs = 2;
-    effect->flags = (1 << 4) | (1 << 5) | (1 << 8);
+    effect->flags = (1 << 4) | (1 << 8);
+#ifndef PLUGINSCALER_MOCK_NO_CHUNK
+    effect->flags |= (1 << 5);
+#endif
     effect->object = new MockState{};
     effect->uniqueId = 0x31323541;
     effect->version = 1000;

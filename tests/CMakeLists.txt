@@ -20,6 +20,13 @@ target_compile_features(MockVST2 PRIVATE cxx_std_20)
 pluginscaler_enable_warnings(MockVST2)
 set_target_properties(MockVST2 PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2")
 
+add_library(MockVST2NoChunk SHARED MockVST2.cpp)
+target_include_directories(MockVST2NoChunk PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_definitions(MockVST2NoChunk PRIVATE PLUGINSCALER_MOCK_NO_CHUNK=1)
+target_compile_features(MockVST2NoChunk PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2NoChunk)
+set_target_properties(MockVST2NoChunk PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2NoChunk")
+
 add_library(MockVST2Synth SHARED MockVST2Synth.cpp)
 target_include_directories(MockVST2Synth PRIVATE "${PROJECT_SOURCE_DIR}/include")
 target_compile_features(MockVST2Synth PRIVATE cxx_std_20)

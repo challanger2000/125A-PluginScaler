@@ -26,6 +26,23 @@ std::array<HostModuleSlot, kHostModuleSlots> g_hostModuleSlots{};
 thread_local VST2PluginModule* g_constructingModule = nullptr;
 thread_local bool g_inRealtimeProcess = false;
 
+inline constexpr std::uint32_t kFallbackStateMagic = 0x53353231u; // "125S"
+inline constexpr std::uint16_t kFallbackStateVersion = 1;
+
+#pragma pack(push, 1)
+struct FallbackStateHeader {
+    std::uint32_t magic{kFallbackStateMagic};
+    std::uint16_t version{kFallbackStateVersion};
+    std::uint16_t reserved{0};
+    std::int32_t pluginUniqueId{0};
+    std::int32_t pluginVersion{0};
+    std::int32_t currentProgram{0};
+    std::uint32_t parameterCount{0};
+};
+#pragma pack(pop)
+
+static_assert(sizeof(FallbackStateHeader) == 24);
+
 bool registerHostModule(AEffect* effect, VST2PluginModule* module) noexcept {
     if (!effect || !module)
         return false;
@@ -666,17 +683,58 @@ VstIntPtr VST2PluginModule::dispatch(std::int32_t opcode,
 bool VST2PluginModule::getChunk(std::int32_t index,
                                 std::vector<std::uint8_t>& data) noexcept {
     data.clear();
-    if (!effect_ || !effect_->dispatcher) return false;
-
-    void* chunk = nullptr;
-    VstIntPtr bytes = 0;
-    if (!callDispatcherSafely(effect_, EffGetChunk, index, 0, &chunk, 0.0f, &bytes) ||
-        bytes <= 0 || !chunk)
+    if (!effect_ || !effect_->dispatcher)
         return false;
 
-    const auto size = static_cast<std::size_t>(bytes);
-    data.resize(size);
-    std::memcpy(data.data(), chunk, size);
+    // Preserve a plug-in's native opaque state whenever it advertises and
+    // successfully provides VST2 chunks.
+    if ((effect_->flags & kEffectFlagProgramChunks) != 0) {
+        void* chunk = nullptr;
+        VstIntPtr bytes = 0;
+        if (callDispatcherSafely(effect_, EffGetChunk, index, 0,
+                                 &chunk, 0.0f, &bytes) &&
+            bytes > 0 && chunk) {
+            const auto size = static_cast<std::size_t>(bytes);
+            data.resize(size);
+            std::memcpy(data.data(), chunk, size);
+            return true;
+        }
+    }
+
+    // Legacy plug-ins without program chunks still need project recall. The
+    // wrapper serializes the current program plus every exposed parameter.
+    const auto parameterCount = std::max<std::int32_t>(0, effect_->numParams);
+    if (parameterCount > 65536)
+        return false;
+
+    VstIntPtr currentProgram = 0;
+    if (effect_->numPrograms > 0) {
+        if (!callDispatcherSafely(effect_, EffGetProgram, 0, 0,
+                                  nullptr, 0.0f, &currentProgram))
+            return false;
+        if (currentProgram < 0 || currentProgram >= effect_->numPrograms)
+            return false;
+    }
+
+    FallbackStateHeader header{};
+    header.pluginUniqueId = effect_->uniqueId;
+    header.pluginVersion = effect_->version;
+    header.currentProgram = static_cast<std::int32_t>(currentProgram);
+    header.parameterCount = static_cast<std::uint32_t>(parameterCount);
+
+    const std::size_t parameterBytes =
+        static_cast<std::size_t>(parameterCount) * sizeof(float);
+    data.resize(sizeof(header) + parameterBytes);
+    std::memcpy(data.data(), &header, sizeof(header));
+
+    for (std::int32_t i = 0; i < parameterCount; ++i) {
+        const float value = callGetParameterSafely(effect_, i);
+        std::memcpy(
+            data.data() + sizeof(header) +
+                static_cast<std::size_t>(i) * sizeof(float),
+            &value, sizeof(value));
+    }
+
     return true;
 }
 
@@ -685,6 +743,24 @@ bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
     if (!effect_ || !effect_->dispatcher || !data || bytes == 0 ||
         bytes > static_cast<std::size_t>(INTPTR_MAX))
         return false;
+
+    const auto* raw = static_cast<const std::uint8_t*>(data);
+    FallbackStateHeader fallback{};
+    bool isFallback = false;
+    if (bytes >= sizeof(fallback)) {
+        std::memcpy(&fallback, raw, sizeof(fallback));
+        const std::size_t expected =
+            sizeof(fallback) +
+            static_cast<std::size_t>(fallback.parameterCount) * sizeof(float);
+        isFallback =
+            fallback.magic == kFallbackStateMagic &&
+            fallback.version == kFallbackStateVersion &&
+            fallback.pluginUniqueId == effect_->uniqueId &&
+            fallback.parameterCount ==
+                static_cast<std::uint32_t>(
+                    std::max<std::int32_t>(0, effect_->numParams)) &&
+            expected == bytes;
+    }
 
     VstPatchChunkInfo info{};
     info.version = 1;
@@ -698,9 +774,6 @@ bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
     if (!callDispatcherSafely(effect_, beginLoadOpcode, 0, 0,
                               &info, 0.0f, &beginLoadResult))
         return false;
-
-    // VST2 uses a negative return as an explicit rejection. Zero must remain
-    // compatible with older plugins that simply do not implement this hint.
     if (beginLoadResult < 0)
         return false;
 
@@ -708,16 +781,52 @@ bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
     (void)callDispatcherSafely(
         effect_, EffBeginSetProgram, 0, 0, nullptr, 0.0f, &ignored);
 
-    VstIntPtr result = 0;
-    const bool dispatched = callDispatcherSafely(
-        effect_, EffSetChunk, index,
-        static_cast<VstIntPtr>(bytes),
-        const_cast<void*>(data), 0.0f, &result);
+    bool restored = false;
+    if (isFallback) {
+        restored = true;
+
+        if (effect_->numPrograms > 0) {
+            if (fallback.currentProgram < 0 ||
+                fallback.currentProgram >= effect_->numPrograms) {
+                restored = false;
+            } else {
+                VstIntPtr programResult = 0;
+                restored = callDispatcherSafely(
+                    effect_, EffSetProgram, 0,
+                    static_cast<VstIntPtr>(fallback.currentProgram),
+                    nullptr, 0.0f, &programResult);
+            }
+        }
+
+        if (restored) {
+            for (std::uint32_t i = 0;
+                 i < fallback.parameterCount; ++i) {
+                float value = 0.0f;
+                std::memcpy(
+                    &value,
+                    raw + sizeof(fallback) +
+                        static_cast<std::size_t>(i) * sizeof(float),
+                    sizeof(value));
+                if (!callSetParameterSafely(
+                        effect_, static_cast<VstInt32>(i), value)) {
+                    restored = false;
+                    break;
+                }
+            }
+        }
+    } else if ((effect_->flags & kEffectFlagProgramChunks) != 0) {
+        VstIntPtr result = 0;
+        restored = callDispatcherSafely(
+                       effect_, EffSetChunk, index,
+                       static_cast<VstIntPtr>(bytes),
+                       const_cast<void*>(data), 0.0f, &result) &&
+                   result != 0;
+    }
 
     (void)callDispatcherSafely(
         effect_, EffEndSetProgram, 0, 0, nullptr, 0.0f, &ignored);
 
-    return dispatched && result != 0;
+    return restored;
 }
 
 bool VST2PluginModule::editorRect(VstRect& rect) noexcept {

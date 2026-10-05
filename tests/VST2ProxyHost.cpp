@@ -128,7 +128,8 @@ int wmain(int argc, wchar_t** argv) {
         effect->numOutputs == 2 &&
         effect->uniqueId == 0x31323541 &&
         effect->version == 1000 &&
-        (effect->flags & (1 << 8)) != 0;
+        (effect->flags & kEffectFlagIsSynth) != 0 &&
+        (effect->flags & kEffectFlagProgramChunks) != 0;
     std::cout << "metadata=" << (metadataOk ? "PASS" : "FAIL") << "\n";
     if (!metadataOk) {
         effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
@@ -182,7 +183,14 @@ int wmain(int argc, wchar_t** argv) {
              processAndCheck(effect, 128, 0.25f, 0.25f);
 
 
-    // Verify plugin-native chunk state crosses the separate control pipe.
+    // Verify wrapper project state restores both preset/program selection and
+    // parameter values. This same test is run against native-chunk and
+    // no-chunk targets.
+    if (ok) {
+        ok = effect->dispatcher(effect, EffSetProgram, 0, 3, nullptr, 0.0f) != 0 &&
+             effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 3;
+    }
+
     if (ok) {
         void* chunkPtr = nullptr;
         const auto chunkBytes = effect->dispatcher(
@@ -197,13 +205,16 @@ int wmain(int argc, wchar_t** argv) {
 
         if (ok) {
             effect->setParameter(effect, 0, 0.75f);
-            ok = processAndCheck(effect, 128, 0.40f, 0.75f);
+            ok = effect->dispatcher(effect, EffSetProgram, 0, 5, nullptr, 0.0f) != 0 &&
+                 effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 5 &&
+                 processAndCheck(effect, 128, 0.40f, 0.75f);
         }
 
         if (ok) {
             ok = effect->dispatcher(effect, EffSetChunk, 0,
                                     static_cast<VstIntPtr>(saved.size()),
                                     saved.data(), 0.0f) != 0 &&
+                 effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 3 &&
                  std::fabs(effect->getParameter(effect, 0) - 0.25f) < 0.00001f &&
                  processAndCheck(effect, 128, 0.45f, 0.25f);
         }
