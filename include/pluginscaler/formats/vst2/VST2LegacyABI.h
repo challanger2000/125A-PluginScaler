@@ -128,7 +128,13 @@ inline constexpr VstInt32 kEffectMagic = 0x56737450; // VstP
 enum DispatcherOpcode : VstInt32 {
     EffOpen = 0,
     EffClose = 1,
+    EffSetProgram = 2,
     EffGetProgram = 3,
+    EffSetProgramName = 4,
+    EffGetProgramName = 5,
+    EffGetParamLabel = 6,
+    EffGetParamDisplay = 7,
+    EffGetParamName = 8,
     EffSetSampleRate = 10,
     EffSetBlockSize = 11,
     EffMainsChanged = 12,
@@ -139,6 +145,9 @@ enum DispatcherOpcode : VstInt32 {
     EffGetChunk = 23,
     EffSetChunk = 24,
     EffProcessEvents = 25,
+    EffCanBeAutomated = 26,
+    EffString2Parameter = 27,
+    EffGetProgramNameIndexed = 29,
     EffGetPlugCategory = 35,
     EffGetEffectName = 45,
     EffGetVendorString = 47,
@@ -146,6 +155,8 @@ enum DispatcherOpcode : VstInt32 {
     EffGetVendorVersion = 49,
     EffCanDo = 51,
     EffGetVstVersion = 58,
+    EffBeginLoadBank = 75,
+    EffBeginLoadProgram = 76,
     EffGetNumMidiInputChannels = 78,
     EffGetNumMidiOutputChannels = 79
 };
