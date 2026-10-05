@@ -36,8 +36,8 @@ VST2PluginModule* moduleForHostCallback(AEffect* effect) {
     return g_constructingModule;
 }
 
-VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
-                               VstIntPtr value, void* ptr, float) {
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
+                               VstIntPtr value, void* ptr, float opt) {
     auto* module = moduleForHostCallback(effect);
     switch (opcode) {
     case AudioMasterVersion:
@@ -49,6 +49,10 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
     case AudioMasterNeedIdle:
         // The helper owns a Win32 message loop and calls effEditIdle
         // periodically while the editor is open.
+        return 1;
+    case AudioMasterAutomate:
+        if (module)
+            module->noteAutomation(index, opt);
         return 1;
     case AudioMasterUpdateDisplay:
     case AudioMasterBeginEdit:
@@ -579,6 +583,34 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     close();
     result.closed = true;
     return result;
+}
+
+void VST2PluginModule::noteAutomation(std::int32_t index,
+                                      float value) noexcept {
+    automationIndex_.store(index, std::memory_order_relaxed);
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    automationValueBits_.store(bits, std::memory_order_relaxed);
+    automationGeneration_.fetch_add(1, std::memory_order_release);
+}
+
+bool VST2PluginModule::readAutomation(std::uint32_t& generation,
+                                      std::int32_t& index,
+                                      float& value) const noexcept {
+    const auto current = automationGeneration_.load(std::memory_order_acquire);
+    if (current == 0 || current == generation)
+        return false;
+
+    const auto idx = automationIndex_.load(std::memory_order_relaxed);
+    const auto bits = automationValueBits_.load(std::memory_order_relaxed);
+    float v = 0.0f;
+    std::memcpy(&v, &bits, sizeof(v));
+
+    generation = current;
+    index = idx;
+    value = v;
+    return true;
 }
 
 void VST2PluginModule::close() noexcept {
