@@ -180,6 +180,7 @@ struct EditorGuiContext {
     pluginscaler::formats::VST2PluginModule* module{nullptr};
     std::mutex* moduleMutex{nullptr};
     HWND surrogate{nullptr};
+    HWND editorHostContainer{nullptr};
     HWND editor{nullptr};
     int gdiScalePercent{100};
 };
@@ -1049,8 +1050,20 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     case kEditorOpenMessage: {
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         HWND requestedParent = reinterpret_cast<HWND>(lp);
-        HWND editorParent =
-            requestedParent && IsWindow(requestedParent) ? requestedParent : hwnd;
+        HWND editorParent = hwnd;
+
+        if (requestedParent && IsWindow(requestedParent)) {
+            if (!ctx->editorHostContainer || !IsWindow(ctx->editorHostContainer)) {
+                ctx->editorHostContainer = CreateWindowExW(
+                    0, L"125A_PluginScaler_EditorHost", L"",
+                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    0, 0, 32, 32,
+                    requestedParent, nullptr, GetModuleHandleW(nullptr), nullptr);
+            }
+            if (!ctx->editorHostContainer || !IsWindow(ctx->editorHostContainer))
+                return 0;
+            editorParent = ctx->editorHostContainer;
+        }
         {
             std::lock_guard<std::mutex> frameLock(g_gdiFrameMutex);
             g_gdiFramePixels.clear();
@@ -1144,6 +1157,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                              SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 RedrawWindow(hwnd, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            } else if (editorParent == ctx->editorHostContainer) {
+                SetWindowPos(ctx->editorHostContainer, HWND_TOP, 0, 0,
+                             width, height,
+                             SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
             ShowWindow(child, SW_SHOWNA);
             UpdateWindow(child);
@@ -1228,6 +1245,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         g_gdiEditorWindow.store(nullptr, std::memory_order_relaxed);
         const bool ok = ctx->module->closeEditor();
         ctx->editor = nullptr;
+        if (ctx->editorHostContainer && IsWindow(ctx->editorHostContainer)) {
+            DestroyWindow(ctx->editorHostContainer);
+            ctx->editorHostContainer = nullptr;
+        }
         ShowWindow(hwnd, SW_HIDE);
         return ok ? 1 : 0;
     }
@@ -1532,6 +1553,10 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 (void)ctx->module->closeEditor();
                 ctx->editor = nullptr;
             }
+            if (ctx->editorHostContainer && IsWindow(ctx->editorHostContainer)) {
+                DestroyWindow(ctx->editorHostContainer);
+                ctx->editorHostContainer = nullptr;
+            }
             ctx->module->close();
         }
         DestroyWindow(hwnd);
@@ -1638,6 +1663,17 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 SetEvent(guiReady);
                 return;
             }
+        }
+
+        static const wchar_t* kHostClassName = L"125A_PluginScaler_EditorHost";
+        WNDCLASSW hostWc{};
+        hostWc.lpfnWndProc = DefWindowProcW;
+        hostWc.hInstance = GetModuleHandleW(nullptr);
+        hostWc.lpszClassName = kHostClassName;
+        ATOM hostAtom = RegisterClassW(&hostWc);
+        if (!hostAtom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            SetEvent(guiReady);
+            return;
         }
 
         static const wchar_t* kClassName = L"125A_PluginScaler_EditorSurrogate";
