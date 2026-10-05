@@ -343,6 +343,15 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (ok) {
+        const bool capabilitiesOk =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1264, 0, nullptr, 0.0f) == 1;
+        std::cout << "host-capabilities="
+                  << (capabilitiesOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && capabilitiesOk;
+    }
+
+    if (ok) {
         const auto callbackTrigger =
             effect->dispatcher(effect, EffVendorSpecific,
                                0x1262, 0, nullptr, 0.0f);

@@ -244,7 +244,24 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 effect, AudioMasterIOChanged, 0, 0, nullptr, 0.0f);
             const auto updateDisplay = gHostCallback(
                 effect, AudioMasterUpdateDisplay, 0, 0, nullptr, 0.0f);
-            return (ioChanged != 0 && updateDisplay != 0) ? 1 : 0;
+            return (ioChanged == 0 && updateDisplay != 0) ? 1 : 0;
+        }
+        if (index == 0x1264) {
+            if (!gHostCallback)
+                return 0;
+            char sendEvents[] = "sendVstEvents";
+            char sendMidi[] = "sendVstMidiEvent";
+            char recvEvents[] = "receiveVstEvents";
+            char recvMidi[] = "receiveVstMidiEvent";
+            char sizeWindow[] = "sizeWindow";
+            char unknown[] = "125AUnknownCapability";
+            return gHostCallback(effect, AudioMasterCanDo, 0, 0, sendEvents, 0.0f) == 1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, sendMidi, 0.0f) == 1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvEvents, 0.0f) == -1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvMidi, 0.0f) == -1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, sizeWindow, 0.0f) == 1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, unknown, 0.0f) == 0
+                ? 1 : 0;
         }
         if (index == 0x1263) {
             Sleep(800);

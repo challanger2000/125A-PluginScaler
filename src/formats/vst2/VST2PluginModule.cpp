@@ -109,13 +109,22 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case AudioMasterAutomate:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
-    case AudioMasterIOChanged:
     case AudioMasterUpdateDisplay:
         // Notifications are forwarded asynchronously by the helper. The
         // callback itself must never wait for the x64 proxy/DAW.
         if (module)
             module->emitHostCallback(opcode, index, value, opt);
         return 1;
+    case AudioMasterIOChanged:
+        // Preserve the notification for the outer host, but do not claim that
+        // dynamic VST2 I/O reconfiguration succeeded: the proxy currently
+        // exposes the manifest's fixed bus counts for its lifetime.
+        if (module)
+            module->emitHostCallback(opcode, index, value, opt);
+        return 0;
+    case AudioMasterProcessEvents:
+        // Plug-in -> host event/MIDI output is not bridged yet.
+        return 0;
     case AudioMasterGetTime:
         return module
             ? reinterpret_cast<VstIntPtr>(
@@ -149,10 +158,11 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sizeWindow") == 0)
             return 1;
+        if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
+            return -1;
         return 0;
     default:
         (void)value;
