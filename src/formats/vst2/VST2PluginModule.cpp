@@ -36,8 +36,8 @@ VST2PluginModule* moduleForHostCallback(AEffect* effect) {
     return g_constructingModule;
 }
 
-VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
-                               VstIntPtr value, void* ptr, float opt) {
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
+                               VstIntPtr value, void* ptr, float) {
     auto* module = moduleForHostCallback(effect);
     switch (opcode) {
     case AudioMasterVersion:
@@ -50,13 +50,6 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         // The helper owns a Win32 message loop and calls effEditIdle
         // periodically while the editor is open.
         return 1;
-    case AudioMasterAutomate:
-        // Forward parameter gestures over the dedicated plugin->host callback
-        // channel. Do not reuse audio shared memory or the host->plugin
-        // control pipe for this direction.
-        return module
-            ? module->forwardHostCallback(opcode, index, value, ptr, opt)
-            : 0;
     case AudioMasterUpdateDisplay:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
@@ -586,17 +579,6 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     close();
     result.closed = true;
     return result;
-}
-
-VstIntPtr VST2PluginModule::forwardHostCallback(std::int32_t opcode,
-                                                     std::int32_t index,
-                                                     VstIntPtr value,
-                                                     void* ptr,
-                                                     float opt) noexcept {
-    if (!hostCallbackForwarder_)
-        return 0;
-    return hostCallbackForwarder_(
-        hostCallbackContext_, opcode, index, value, ptr, opt);
 }
 
 void VST2PluginModule::close() noexcept {

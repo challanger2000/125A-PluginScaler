@@ -2,11 +2,9 @@
 
 #include <windows.h>
 
-#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <string_view>
 #include <vector>
@@ -14,10 +12,6 @@
 using namespace pluginscaler::formats::vst2abi;
 
 namespace {
-
-std::atomic<int> gAutomationCount{0};
-std::atomic<int> gAutomationIndex{-1};
-std::atomic<std::uint32_t> gAutomationValueBits{0};
 
 LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -53,22 +47,13 @@ int childCount(HWND parent) {
     return count;
 }
 
-VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32 index,
-                               VstIntPtr, void*, float opt) {
+VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
+                               VstIntPtr, void*, float) {
     switch (opcode) {
     case AudioMasterVersion: return 2400;
     case AudioMasterGetSampleRate: return 48000;
     case AudioMasterGetBlockSize: return 64;
     case AudioMasterGetVendorVersion: return 1000;
-    case AudioMasterAutomate: {
-        std::uint32_t bits = 0;
-        static_assert(sizeof(bits) == sizeof(opt));
-        std::memcpy(&bits, &opt, sizeof(bits));
-        gAutomationIndex.store(index, std::memory_order_relaxed);
-        gAutomationValueBits.store(bits, std::memory_order_relaxed);
-        gAutomationCount.fetch_add(1, std::memory_order_release);
-        return 1;
-    }
     default: return 0;
     }
 }
@@ -259,18 +244,6 @@ int wmain(int argc, wchar_t** argv) {
                 GetBValue(mappedPixel) < 120;
             std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << "\n";
             ok = ok && mappingOk;
-
-            std::uint32_t automationBits =
-                gAutomationValueBits.load(std::memory_order_acquire);
-            float automationValue = 0.0f;
-            std::memcpy(&automationValue, &automationBits, sizeof(automationValue));
-            const bool automationOk =
-                gAutomationCount.load(std::memory_order_acquire) >= 1 &&
-                gAutomationIndex.load(std::memory_order_relaxed) == 0 &&
-                std::fabs(automationValue - 0.75f) < 0.00001f;
-            std::cout << "editor-automation-callback="
-                      << (automationOk ? "PASS" : "FAIL") << "\n";
-            ok = ok && automationOk;
 
             if (ok) {
                 SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
