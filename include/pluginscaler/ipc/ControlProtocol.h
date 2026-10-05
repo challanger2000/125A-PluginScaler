@@ -30,6 +30,10 @@ struct EditorRectPayload {
     std::int32_t bottom{0};
 };
 
+struct EditorOpenRequest {
+    std::uint64_t hostParentWindow{0};
+};
+
 struct EditorOpenResult {
     std::uint64_t surrogateWindow{0};
     std::uint64_t editorWindow{0};
@@ -64,6 +68,7 @@ struct LegacyDispatchResponse {
 #pragma pack(pop)
 
 static_assert(sizeof(EditorRectPayload) == 16);
+static_assert(sizeof(EditorOpenRequest) == 8);
 static_assert(sizeof(EditorOpenResult) == 16);
 static_assert(sizeof(EditorBitmapHeader) == 16);
 static_assert(sizeof(EditorMousePayload) == 16);
