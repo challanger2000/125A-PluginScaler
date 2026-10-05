@@ -1801,7 +1801,17 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         dispatch.opcode == formats::vst2abi::EffGetParamName ||
                         dispatch.opcode == formats::vst2abi::EffCanBeAutomated ||
                         dispatch.opcode == formats::vst2abi::EffString2Parameter ||
-                        dispatch.opcode == formats::vst2abi::EffGetProgramNameIndexed;
+                        dispatch.opcode == formats::vst2abi::EffGetProgramNameIndexed ||
+                        dispatch.opcode == formats::vst2abi::EffGetTailSize ||
+                        dispatch.opcode == formats::vst2abi::EffGetParameterProperties ||
+                        dispatch.opcode == formats::vst2abi::EffBeginSetProgram ||
+                        dispatch.opcode == formats::vst2abi::EffEndSetProgram ||
+                        dispatch.opcode == formats::vst2abi::EffStartProcess ||
+                        dispatch.opcode == formats::vst2abi::EffStopProcess ||
+                        dispatch.opcode == formats::vst2abi::EffBeginLoadBank ||
+                        dispatch.opcode == formats::vst2abi::EffBeginLoadProgram ||
+                        dispatch.opcode == formats::vst2abi::EffSetProcessPrecision ||
+                        dispatch.opcode == formats::vst2abi::EffVendorSpecific;
                     if (!allowedOpcode || expected != payload.size() ||
                         dispatch.bufferBytes > 1024u) {
                         resp.status = ipc::ControlStatus::InvalidRequest;
