@@ -104,7 +104,7 @@ struct SynthState {
     VstRect editorRect{0, 0, 180, 320};
 };
 
-VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
+VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                            VstIntPtr value, void* ptr, float opt) {
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
     switch (opcode) {
@@ -174,8 +174,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
             *props = {};
             props->smallStepFloat = 0.01f;
             props->largeStepFloat = 0.1f;
-            strcpy_s(props->label, "Gain");
-            strcpy_s(props->shortLabel, "Gain");
+            strcpy_s(props->label, sizeof(props->label), "Gain");
+            strcpy_s(props->shortLabel, sizeof(props->shortLabel), "Gain");
             return 1;
         }
         return 0;
