@@ -14,6 +14,8 @@ namespace {
 bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
+AudioMasterCallback gHostCallback = nullptr;
+AEffect* gEffectForCallback = nullptr;
 
 LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -25,6 +27,9 @@ LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (x == 50 && y == 40) {
             gMappedClickReceived = true;
             gDragArmed = true;
+            if (gHostCallback && gEffectForCallback)
+                (void)gHostCallback(gEffectForCallback, AudioMasterAutomate,
+                                    0, 0, nullptr, 0.75f);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 1;
@@ -84,6 +89,7 @@ struct SynthState {
     VstInt32 blockSize{0};
     bool mains{false};
     float gain{0.5f};
+    VstInt32 currentProgram{0};
 
     bool pendingEvent{false};
     bool pendingNoteOn{false};
@@ -107,6 +113,87 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
     case EffClose:
         delete state;
         delete effect;
+        gEffectForCallback = nullptr;
+        return 1;
+    case EffSetProgram:
+        if (!state || value < 0 || value >= effect->numPrograms)
+            return 0;
+        state->currentProgram = static_cast<VstInt32>(value);
+        state->gain = 0.25f + 0.1f * static_cast<float>(state->currentProgram);
+        if (gHostCallback)
+            (void)gHostCallback(effect, AudioMasterAutomate, 0, 0, nullptr,
+                                state->gain);
+        return 1;
+    case EffGetProgram:
+        return state ? state->currentProgram : 0;
+    case EffSetProgramName:
+        return ptr ? 1 : 0;
+    case EffGetProgramName:
+        if (ptr && state) {
+            char name[24]{};
+            sprintf_s(name, "Program %d", static_cast<int>(state->currentProgram));
+            std::memcpy(ptr, name, sizeof(name));
+            return 1;
+        }
+        return 0;
+    case EffGetProgramNameIndexed:
+        if (ptr && index >= 0 && index < effect->numPrograms) {
+            char name[24]{};
+            sprintf_s(name, "Program %d", static_cast<int>(index));
+            std::memcpy(ptr, name, sizeof(name));
+            return 1;
+        }
+        return 0;
+    case EffGetParamName:
+        if (ptr && index == 0) {
+            char text[8]{"Gain"};
+            std::memcpy(ptr, text, sizeof(text));
+            return 1;
+        }
+        return 0;
+    case EffGetParamDisplay:
+        if (ptr && state && index == 0) {
+            char text[8]{};
+            sprintf_s(text, "%.2f", static_cast<double>(state->gain));
+            std::memcpy(ptr, text, sizeof(text));
+            return 1;
+        }
+        return 0;
+    case EffGetParamLabel:
+        if (ptr && index == 0) {
+            char text[8]{"lin"};
+            std::memcpy(ptr, text, sizeof(text));
+            return 1;
+        }
+        return 0;
+    case EffCanBeAutomated:
+        return index == 0 ? 1 : 0;
+    case EffGetParameterProperties:
+        if (ptr && index == 0) {
+            auto* props = static_cast<VstParameterProperties*>(ptr);
+            *props = {};
+            props->smallStepFloat = 0.01f;
+            props->largeStepFloat = 0.1f;
+            strcpy_s(props->label, "Gain");
+            strcpy_s(props->shortLabel, "Gain");
+            return 1;
+        }
+        return 0;
+    case EffBeginSetProgram:
+    case EffEndSetProgram:
+    case EffStartProcess:
+    case EffStopProcess:
+        return 1;
+    case EffBeginLoadBank:
+    case EffBeginLoadProgram:
+        if (ptr) {
+            const auto* info = static_cast<const VstPatchChunkInfo*>(ptr);
+            return info->pluginUniqueID == effect->uniqueId ? 1 : -1;
+        }
+        return 0;
+    case EffSetProcessPrecision:
+        return value == 0 ? 1 : 0;
+    case EffGetTailSize:
         return 1;
     case EffSetSampleRate:
         if (state) state->sampleRate = opt;
@@ -295,6 +382,8 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numOutputs = 2;
     effect->flags = (1 << 4) | (1 << 5) | (1 << 8); // replacing, chunks, synth
     effect->object = new SynthState{};
+    gHostCallback = host;
+    gEffectForCallback = effect;
     effect->uniqueId = 0x53594E31; // "SYN1"
     effect->version = 1000;
     return effect;
