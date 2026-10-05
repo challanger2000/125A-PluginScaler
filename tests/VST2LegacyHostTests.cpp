@@ -27,6 +27,19 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "plugin-open=PASS\n";
 
+    pluginscaler::formats::vst2abi::VstTimeInfo timeInfo{};
+    timeInfo.sampleRate = 48000.0;
+    timeInfo.ppqPos = 12.5;
+    timeInfo.tempo = 123.0;
+    timeInfo.timeSigNumerator = 4;
+    timeInfo.timeSigDenominator = 4;
+    timeInfo.flags =
+        pluginscaler::formats::vst2abi::VstTransportPlaying |
+        pluginscaler::formats::vst2abi::VstPpqPosValid |
+        pluginscaler::formats::vst2abi::VstTempoValid |
+        pluginscaler::formats::vst2abi::VstTimeSigValid;
+    host.setHostTimeInfo(timeInfo);
+
     std::vector<float> left(64, -1.0f);
     std::vector<float> right(64, -1.0f);
     float* outputs[2]{left.data(), right.data()};
@@ -37,23 +50,31 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "audio=PASS\n";
 
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125A) != 1) {
+        std::cerr << "time-info=FAIL\n";
+        return 5;
+    }
+    std::cout << "time-info=PASS\n";
+
     if (!host.openEditor(error)) {
         std::cerr << "editor-open=FAIL " << error << "\n";
-        return 5;
+        return 6;
     }
     std::cout << "editor-open=PASS\n";
 
     HWND editorHost = host.editorHostWindow();
     if (!editorHost || !IsWindow(editorHost)) {
         std::cerr << "editor-host=FAIL\n";
-        return 6;
+        return 7;
     }
     std::cout << "editor-host=PASS\n";
 
     HWND child = GetWindow(editorHost, GW_CHILD);
     if (!child || !IsWindow(child)) {
         std::cerr << "editor-child=FAIL\n";
-        return 7;
+        return 8;
     }
     std::cout << "editor-child=PASS\n";
 
@@ -66,19 +87,19 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << "editor-resize=FAIL "
                   << (resized.right - resized.left) << "x"
                   << (resized.bottom - resized.top) << "\n";
-        return 8;
+        return 9;
     }
     std::cout << "editor-resize=PASS\n";
 
     if (!host.closeEditor()) {
         std::cerr << "editor-close=FAIL\n";
-        return 9;
+        return 10;
     }
     std::cout << "editor-close=PASS\n";
 
     if (!host.closePlugin()) {
         std::cerr << "plugin-close=FAIL\n";
-        return 10;
+        return 11;
     }
     std::cout << "plugin-close=PASS\n";
 

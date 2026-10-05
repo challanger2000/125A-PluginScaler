@@ -2097,10 +2097,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
             }
 
             if (ok) {
-                const auto inCount = std::max<std::uint32_t>(1, block->header.inputChannels);
-                const auto outCount = std::max<std::uint32_t>(1, block->header.outputChannels);
-                std::vector<float*> inputs(inCount);
-                std::vector<float*> outputs(outCount);
+                const auto inCount =
+                    std::max<std::uint32_t>(1, block->header.inputChannels);
+                const auto outCount =
+                    std::max<std::uint32_t>(1, block->header.outputChannels);
+                std::array<float*, ipc::kMaxAudioChannels> inputs{};
+                std::array<float*, ipc::kMaxAudioChannels> outputs{};
                 for (std::uint32_t ch = 0; ch < inCount; ++ch)
                     inputs[ch] = block->inputs[ch];
                 for (std::uint32_t ch = 0; ch < outCount; ++ch)

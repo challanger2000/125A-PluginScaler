@@ -78,7 +78,8 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
     case AudioMasterGetTime:
         return module
-            ? reinterpret_cast<VstIntPtr>(module->hostTimeInfo())
+            ? reinterpret_cast<VstIntPtr>(
+                  module->hostTimeInfoForRequest(value))
             : 0;
     case AudioMasterGetSampleRate:
         return module ? static_cast<VstIntPtr>(module->sampleRate()) : 48000;
@@ -479,6 +480,21 @@ void VST2PluginModule::setHostTimeInfo(const VstTimeInfo& info) noexcept {
     timeInfo_ = info;
     if (timeInfo_.sampleRate <= 0.0)
         timeInfo_.sampleRate = sampleRate_;
+}
+
+const VstTimeInfo* VST2PluginModule::hostTimeInfoForRequest(
+    VstIntPtr requestedFlags) noexcept {
+    constexpr VstInt32 kValidityMask =
+        VstNanosValid | VstPpqPosValid | VstTempoValid | VstBarsValid |
+        VstCyclePosValid | VstTimeSigValid | VstSmpteValid | VstClockValid;
+
+    timeInfoView_ = timeInfo_;
+    const auto requested = static_cast<VstInt32>(requestedFlags);
+    const auto stateFlags = timeInfo_.flags & ~kValidityMask;
+    const auto validRequested =
+        timeInfo_.flags & requested & kValidityMask;
+    timeInfoView_.flags = stateFlags | validRequested;
+    return &timeInfoView_;
 }
 
 bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {

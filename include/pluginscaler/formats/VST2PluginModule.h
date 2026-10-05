@@ -82,7 +82,8 @@ public:
                                std::int32_t blockSize) noexcept;
     bool setMains(bool active) noexcept;
     void setHostTimeInfo(const vst2abi::VstTimeInfo& info) noexcept;
-    const vst2abi::VstTimeInfo* hostTimeInfo() const noexcept { return &timeInfo_; }
+    const vst2abi::VstTimeInfo* hostTimeInfoForRequest(
+        vst2abi::VstIntPtr requestedFlags) noexcept;
     double sampleRate() const noexcept { return sampleRate_; }
     std::int32_t blockSize() const noexcept { return blockSize_; }
     std::int32_t uniqueId() const noexcept { return effect_ ? effect_->uniqueId : 0; }
@@ -146,6 +147,7 @@ private:
     std::atomic<bool> editorOpen_{false};
     std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
+    vst2abi::VstTimeInfo timeInfoView_{};
     HostCallbackSink hostCallbackSink_{nullptr};
     void* hostCallbackContext_{nullptr};
     HostWindowResizeSink hostWindowResizeSink_{nullptr};

@@ -14,6 +14,7 @@ namespace {
 bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
+bool gTimeInfoVerified = false;
 AudioMasterCallback gHostCallback = nullptr;
 AEffect* gEffectForCallback = nullptr;
 
@@ -196,6 +197,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return value == 0 ? 1 : 0;
     case EffGetTailSize:
         return 1;
+    case EffVendorSpecific:
+        return index == 0x125A && gTimeInfoVerified ? 1 : 0;
     case EffSetSampleRate:
         if (state) state->sampleRate = opt;
         return 1;
@@ -328,6 +331,26 @@ float __cdecl getParameter(AEffect* effect, VstInt32 index) {
 
 void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt32 frames) {
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
+
+    if (gHostCallback && effect) {
+        const VstIntPtr requested =
+            VstPpqPosValid | VstTempoValid | VstSmpteValid;
+        auto* info = reinterpret_cast<VstTimeInfo*>(
+            gHostCallback(effect, AudioMasterGetTime, 0,
+                          requested, nullptr, 0.0f));
+        if (info) {
+            constexpr VstInt32 validityMask =
+                VstNanosValid | VstPpqPosValid | VstTempoValid |
+                VstBarsValid | VstCyclePosValid | VstTimeSigValid |
+                VstSmpteValid | VstClockValid;
+            const auto returnedValidity = info->flags & validityMask;
+            gTimeInfoVerified =
+                returnedValidity == (VstPpqPosValid | VstTempoValid) &&
+                (info->flags & VstTransportPlaying) != 0 &&
+                info->ppqPos == 12.5 &&
+                info->tempo == 123.0;
+        }
+    }
     if (!state || !state->mains || !outputs || frames <= 0) {
         if (outputs && effect) {
             for (VstInt32 ch = 0; ch < effect->numOutputs; ++ch)
