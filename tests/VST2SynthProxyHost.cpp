@@ -190,7 +190,7 @@ int wmain(int argc, wchar_t** argv) {
         effect->numPrograms == 4 &&
         effect->uniqueId == 0x53594E31 &&
         (effect->flags & (1 << 8)) != 0;
-    std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << std::endl;
 
     HWND editorHost = nullptr;
     if (ok) {
@@ -216,24 +216,27 @@ int wmain(int argc, wchar_t** argv) {
 
         COLORREF pixel = CLR_INVALID;
         if (surface) {
-            RedrawWindow(surface, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            InvalidateRect(surface, nullptr, FALSE);
+            DWORD_PTR redrawResult = 0;
+            SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                &redrawResult);
             HDC dc = GetDC(surface);
             pixel = GetPixel(dc, 50, 40);
             ReleaseDC(surface, dc);
         }
 
-        std::cout << "editor-rect=" << rectWidth << "x" << rectHeight << "\n";
-        std::cout << "editor-open-result=" << openResult << "\n";
-        std::cout << "editor-children=" << children << "\n";
-        std::cout << "editor-surface=" << (surface ? 1 : 0) << "\n";
+        std::cout << "editor-rect=" << rectWidth << "x" << rectHeight << std::endl;
+        std::cout << "editor-open-result=" << openResult << std::endl;
+        std::cout << "editor-children=" << children << std::endl;
+        std::cout << "editor-surface=" << (surface ? 1 : 0) << std::endl;
         std::cout << "editor-pixel=";
         if (pixel == CLR_INVALID) {
             std::cout << "INVALID\n";
         } else {
             std::cout << static_cast<unsigned>(GetRValue(pixel)) << ","
                       << static_cast<unsigned>(GetGValue(pixel)) << ","
-                      << static_cast<unsigned>(GetBValue(pixel)) << "\n";
+                      << static_cast<unsigned>(GetBValue(pixel)) << std::endl;
         }
 
         ok = editorHost != nullptr &&
@@ -249,12 +252,15 @@ int wmain(int argc, wchar_t** argv) {
              GetGValue(pixel) < 120 &&
              GetBValue(pixel) < 100;
 
-        std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << "\n";
-        std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << std::endl;
 
         if (ok && surface) {
-            SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
-            SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40));
+            DWORD_PTR mouseResult = 0;
+            SendMessageTimeoutW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
+            SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
             RedrawWindow(surface, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
@@ -267,13 +273,17 @@ int wmain(int argc, wchar_t** argv) {
                 GetRValue(mappedPixel) < 100 &&
                 GetGValue(mappedPixel) > 170 &&
                 GetBValue(mappedPixel) < 120;
-            std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << "\n";
+            std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << std::endl;
             ok = ok && mappingOk;
 
             if (ok) {
-                SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
-                SendMessageW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(70, 20));
-                SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20));
+                DWORD_PTR dragResult = 0;
+                SendMessageTimeoutW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
+                SendMessageTimeoutW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(70, 20),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
+                SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
                 RedrawWindow(surface, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
@@ -286,7 +296,7 @@ int wmain(int argc, wchar_t** argv) {
                     GetRValue(dragPixel) > 180 &&
                     GetGValue(dragPixel) > 170 &&
                     GetBValue(dragPixel) < 100;
-                std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << "\n";
+                std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << std::endl;
                 ok = ok && dragOk;
             }
         }
@@ -296,7 +306,7 @@ int wmain(int argc, wchar_t** argv) {
         ok = effect->dispatcher(effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
         Sleep(50);
         ok = ok && childCount(editorHost) == 0;
-        std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << std::endl;
     }
     if (editorHost)
         DestroyWindow(editorHost);
@@ -318,12 +328,12 @@ int wmain(int argc, wchar_t** argv) {
         ok = std::fabs(gain - 0.5f) < 0.00001f &&
              sendMidi(effect, 0x90, 60, 100, 7) &&
              processNoteOnBlock(effect, 64, 7, expectedAmplitude);
-    std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << std::endl;
 
     if (ok)
         ok = sendMidi(effect, 0x80, 60, 0, 11) &&
              processNoteOffBlock(effect, 64, 11, expectedAmplitude);
-    std::cout << "synth-note-off=" << (ok ? "PASS" : "FAIL") << "\n";
+    std::cout << "synth-note-off=" << (ok ? "PASS" : "FAIL") << std::endl;
 
     if (effect) {
         effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
@@ -331,6 +341,6 @@ int wmain(int argc, wchar_t** argv) {
     }
     FreeLibrary(proxy);
 
-    std::cout << "synth=PASS" << (ok ? "" : "-FAIL") << "\n";
+    std::cout << "synth=PASS" << (ok ? "" : "-FAIL") << std::endl;
     return ok ? 0 : 5;
 }
