@@ -36,8 +36,8 @@ VST2PluginModule* moduleForHostCallback(AEffect* effect) {
     return g_constructingModule;
 }
 
-VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
-                               VstIntPtr value, void* ptr, float) {
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
+                               VstIntPtr value, void* ptr, float opt) {
     auto* module = moduleForHostCallback(effect);
     switch (opcode) {
     case AudioMasterVersion:
@@ -50,9 +50,15 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
         // The helper owns a Win32 message loop and calls effEditIdle
         // periodically while the editor is open.
         return 1;
-    case AudioMasterUpdateDisplay:
+    case AudioMasterAutomate:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
+        // GUI gestures are notifications. Queue them to the proxy and return
+        // immediately; never block the legacy plugin waiting for the DAW.
+        if (module)
+            module->emitHostCallback(opcode, index, value, opt);
+        return 1;
+    case AudioMasterUpdateDisplay:
         // These are normal GUI/program-change notifications. The x86 helper
         // currently has no automation backchannel to the x64 host yet, but the
         // callback itself must be acknowledged so legacy editors do not wait
@@ -579,6 +585,14 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     close();
     result.closed = true;
     return result;
+}
+
+void VST2PluginModule::emitHostCallback(std::int32_t opcode,
+                                            std::int32_t index,
+                                            VstIntPtr value,
+                                            float opt) noexcept {
+    if (hostCallbackSink_)
+        hostCallbackSink_(hostCallbackContext_, opcode, index, value, opt);
 }
 
 void VST2PluginModule::close() noexcept {
