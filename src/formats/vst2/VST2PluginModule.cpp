@@ -485,27 +485,27 @@ bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
     if (!effect_ || !mainsOn_ || !effect_->dispatcher || !events || eventCount <= 0)
         return eventCount == 0;
 
-    std::vector<VstEvent*> pointers(static_cast<std::size_t>(eventCount));
+    constexpr std::int32_t kMaxRealtimeMidiEvents = 256;
+    if (eventCount > kMaxRealtimeMidiEvents)
+        return false;
+
+    struct FixedVstEvents {
+        VstInt32 numEvents;
+        VstIntPtr reserved;
+        VstEvent* events[kMaxRealtimeMidiEvents];
+    };
+    static_assert(offsetof(FixedVstEvents, events) == offsetof(VstEvents, events));
+
+    FixedVstEvents list{};
+    list.numEvents = eventCount;
     for (std::int32_t i = 0; i < eventCount; ++i)
-        pointers[static_cast<std::size_t>(i)] =
+        list.events[i] =
             reinterpret_cast<VstEvent*>(const_cast<VstMidiEvent*>(&events[i]));
 
-    const std::size_t bytes = sizeof(VstEvents) +
-        (eventCount > 2 ? static_cast<std::size_t>(eventCount - 2) * sizeof(VstEvent*) : 0);
-    std::vector<std::uint8_t> storage(bytes, 0);
-    auto* list = reinterpret_cast<VstEvents*>(storage.data());
-    list->numEvents = eventCount;
-    list->reserved = 0;
-    auto** dst = reinterpret_cast<VstEvent**>(
-        storage.data() + offsetof(VstEvents, events));
-    for (std::int32_t i = 0; i < eventCount; ++i)
-        dst[i] = pointers[static_cast<std::size_t>(i)];
-
     VstIntPtr result = 0;
-    // effProcessEvents delivers MIDI/events to the plugin. Some legacy VST2
-    // instruments consume the events but return 0 from their dispatcher.
-    // Only an actual dispatcher fault is a bridge failure.
-    return callDispatcherSafely(effect_, EffProcessEvents, 0, 0, list, 0.0f, &result);
+    // No heap allocation is allowed on the realtime event path.
+    return callDispatcherSafely(
+        effect_, EffProcessEvents, 0, 0, &list, 0.0f, &result);
 }
 
 bool VST2PluginModule::setParameter(std::int32_t index, float value) noexcept {
@@ -573,21 +573,31 @@ bool VST2PluginModule::editorRect(VstRect& rect) noexcept {
 
 bool VST2PluginModule::openEditor(void* parentWindow) noexcept {
     if (!effect_ || !effect_->dispatcher || !parentWindow) return false;
+    if (editorOpen_.load(std::memory_order_acquire))
+        return true;
 
     // Old VST2 editors may create their HWND successfully and still return 0.
     VstIntPtr ignored = 0;
-    return callDispatcherSafely(effect_, EffEditOpen, 0, 0,
-                                parentWindow, 0.0f, &ignored);
+    const bool ok = callDispatcherSafely(
+        effect_, EffEditOpen, 0, 0, parentWindow, 0.0f, &ignored);
+    if (ok)
+        editorOpen_.store(true, std::memory_order_release);
+    return ok;
 }
 
 bool VST2PluginModule::closeEditor() noexcept {
     if (!effect_ || !effect_->dispatcher) return false;
+    if (!editorOpen_.exchange(false, std::memory_order_acq_rel))
+        return true;
     VstIntPtr result = 0;
-    return callDispatcherSafely(effect_, EffEditClose, 0, 0, nullptr, 0.0f, &result);
+    return callDispatcherSafely(
+        effect_, EffEditClose, 0, 0, nullptr, 0.0f, &result);
 }
 
 bool VST2PluginModule::editorIdle() noexcept {
     if (!effect_ || !effect_->dispatcher) return false;
+    if (!editorOpen_.load(std::memory_order_acquire))
+        return true;
 
     if (editorIdleActive_.test_and_set(std::memory_order_acquire))
         return true;
@@ -688,6 +698,12 @@ void VST2PluginModule::emitHostCallback(std::int32_t opcode,
 void VST2PluginModule::close() noexcept {
     auto* effect = effect_;
     effect_ = nullptr;
+
+    if (effect && editorOpen_.exchange(false, std::memory_order_acq_rel) &&
+        effect->dispatcher) {
+        (void)callDispatcherSafely(
+            effect, EffEditClose, 0, 0, nullptr, 0.0f);
+    }
 
     if (effect) {
         std::lock_guard<std::mutex> lock(g_hostModuleMutex);

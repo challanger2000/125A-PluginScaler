@@ -129,6 +129,7 @@ private:
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};
     std::string pluginDirectoryAnsi_;
+    std::atomic<bool> editorOpen_{false};
     std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
     HostCallbackSink hostCallbackSink_{nullptr};

@@ -2077,8 +2077,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
             }
 
             if (ok && block->header.midiEventCount > 0) {
-                std::vector<formats::vst2abi::VstMidiEvent> midi(
-                    static_cast<std::size_t>(block->header.midiEventCount));
+                std::array<formats::vst2abi::VstMidiEvent, ipc::kMaxMidiEvents> midi{};
                 for (std::uint32_t i = 0; i < block->header.midiEventCount; ++i) {
                     auto& dst = midi[static_cast<std::size_t>(i)];
                     const auto& src = block->midiEvents[i];
@@ -2092,8 +2091,9 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     for (int b = 0; b < 4; ++b)
                         dst.midiData[b] = static_cast<char>(src.data[b]);
                 }
-                ok = module.processMidiEvents(midi.data(),
-                                              static_cast<std::int32_t>(midi.size()));
+                ok = module.processMidiEvents(
+                    midi.data(),
+                    static_cast<std::int32_t>(block->header.midiEventCount));
             }
 
             if (ok) {
