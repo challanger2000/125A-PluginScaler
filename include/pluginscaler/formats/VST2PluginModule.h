@@ -92,6 +92,11 @@ public:
                            std::int32_t eventCount) noexcept;
     bool setParameter(std::int32_t index, float value) noexcept;
     float getParameter(std::int32_t index) const noexcept;
+    vst2abi::VstIntPtr dispatch(std::int32_t opcode,
+                                std::int32_t index = 0,
+                                vst2abi::VstIntPtr value = 0,
+                                void* ptr = nullptr,
+                                float opt = 0.0f) noexcept;
     bool getChunk(std::int32_t index, std::vector<std::uint8_t>& data) noexcept;
     bool setChunk(std::int32_t index, const void* data, std::size_t bytes) noexcept;
     bool editorRect(vst2abi::VstRect& rect) noexcept;
