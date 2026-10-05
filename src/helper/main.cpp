@@ -1755,9 +1755,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     auto& dst = midi[static_cast<std::size_t>(i)];
                     const auto& src = block->midiEvents[i];
                     dst.type = formats::vst2abi::kVstMidiType;
-                    // Normalize bridged MIDI to the canonical VST2.4 event
-                    // structure expected by the x86 plug-in.
-                    dst.byteSize = sizeof(formats::vst2abi::VstMidiEvent);
+                    // Legacy VST2 MIDI uses byteSize=24. FM7-era hosts/plugins
+                    // use this value even though the in-memory structure contains
+                    // additional reserved fields.
+                    dst.byteSize = 24;
                     dst.deltaFrames = src.deltaFrames;
                     dst.flags = src.flags;
                     for (int b = 0; b < 4; ++b)
