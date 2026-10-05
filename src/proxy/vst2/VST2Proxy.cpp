@@ -504,6 +504,49 @@ bool controlCall(ProxyInstance* inst,
            readExact(inst->controlPipe, reply.data(), resp.responseBytes);
 }
 
+bool legacyDispatchCall(ProxyInstance* inst,
+                        VstInt32 opcode,
+                        VstInt32 index,
+                        VstIntPtr value,
+                        void* buffer,
+                        std::uint32_t bufferBytes,
+                        float opt,
+                        VstIntPtr& returnValue) {
+    returnValue = 0;
+    if (!inst || bufferBytes > 1024u)
+        return false;
+
+    pluginscaler::ipc::LegacyDispatchRequest req{};
+    req.opcode = opcode;
+    req.index = index;
+    req.value = static_cast<std::int64_t>(value);
+    req.opt = opt;
+    req.bufferBytes = bufferBytes;
+
+    std::vector<std::uint8_t> payload(sizeof(req) + bufferBytes, 0);
+    std::memcpy(payload.data(), &req, sizeof(req));
+    if (bufferBytes && buffer)
+        std::memcpy(payload.data() + sizeof(req), buffer, bufferBytes);
+
+    std::vector<std::uint8_t> reply;
+    if (!controlCall(inst, pluginscaler::ipc::ControlCommand::DispatchLegacy,
+                     0, payload.data(),
+                     static_cast<std::uint32_t>(payload.size()), reply) ||
+        reply.size() < sizeof(pluginscaler::ipc::LegacyDispatchResponse))
+        return false;
+
+    pluginscaler::ipc::LegacyDispatchResponse resp{};
+    std::memcpy(&resp, reply.data(), sizeof(resp));
+    if (resp.bufferBytes != bufferBytes ||
+        reply.size() != sizeof(resp) + static_cast<std::size_t>(resp.bufferBytes))
+        return false;
+
+    returnValue = static_cast<VstIntPtr>(resp.returnValue);
+    if (bufferBytes && buffer)
+        std::memcpy(buffer, reply.data() + sizeof(resp), bufferBytes);
+    return true;
+}
+
 void refreshParametersFromHelper(ProxyInstance* inst) {
     if (!inst) return;
     std::vector<std::uint8_t> reply;
@@ -1162,6 +1205,61 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->callbackWindow = nullptr;
         delete inst;
         return 1;
+
+    case EffSetProgram: {
+        if (!startBridge(inst))
+            return 0;
+        VstIntPtr result = 0;
+        if (!legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result))
+            return 0;
+        refreshParametersFromHelper(inst);
+        return result;
+    }
+
+    case EffGetProgram: {
+        if (!startBridge(inst))
+            return 0;
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+            ? result : 0;
+    }
+
+    case EffSetProgramName:
+    case EffString2Parameter: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        char buffer[64]{};
+        strcpy_s(buffer, static_cast<const char*>(ptr));
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value,
+                                  buffer, sizeof(buffer), opt, result)
+            ? result : 0;
+    }
+
+    case EffGetProgramName:
+    case EffGetProgramNameIndexed:
+    case EffGetParamLabel:
+    case EffGetParamDisplay:
+    case EffGetParamName: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        char buffer[64]{};
+        VstIntPtr result = 0;
+        if (!legacyDispatchCall(inst, opcode, index, value,
+                                buffer, sizeof(buffer), opt, result))
+            return 0;
+        std::memcpy(ptr, buffer, sizeof(buffer));
+        static_cast<char*>(ptr)[63] = '\0';
+        return result;
+    }
+
+    case EffCanBeAutomated: {
+        if (!startBridge(inst))
+            return 0;
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+            ? result : 0;
+    }
 
     case EffSetSampleRate:
         inst->sampleRate = opt > 0.0f ? static_cast<double>(opt) : 48000.0;
