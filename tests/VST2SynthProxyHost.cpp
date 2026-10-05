@@ -13,6 +13,9 @@ using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 
+int gIoChangedCount = 0;
+int gUpdateDisplayCount = 0;
+
 LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -66,6 +69,12 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     case AudioMasterGetSampleRate: return 48000;
     case AudioMasterGetBlockSize: return 64;
     case AudioMasterGetVendorVersion: return 1000;
+    case AudioMasterIOChanged:
+        ++gIoChangedCount;
+        return 1;
+    case AudioMasterUpdateDisplay:
+        ++gUpdateDisplayCount;
+        return 1;
     default: return 0;
     }
 }
@@ -321,6 +330,20 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << "legacy-idle-proxy="
                   << (legacyIdleOk ? "PASS" : "FAIL") << "\n";
         ok = ok && legacyIdleOk;
+    }
+
+    if (ok) {
+        const auto callbackTrigger =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1262, 0, nullptr, 0.0f);
+        pumpMessagesFor(120);
+        const bool callbacksOk =
+            callbackTrigger != 0 &&
+            gIoChangedCount == 1 &&
+            gUpdateDisplayCount == 1;
+        std::cout << "host-callback-forwarding="
+                  << (callbacksOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && callbacksOk;
     }
 
     if (ok)

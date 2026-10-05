@@ -235,6 +235,15 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return gRealtimeProcessLevelVerified ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
+        if (index == 0x1262) {
+            if (!gHostCallback)
+                return 0;
+            const auto ioChanged = gHostCallback(
+                effect, AudioMasterIOChanged, 0, 0, nullptr, 0.0f);
+            const auto updateDisplay = gHostCallback(
+                effect, AudioMasterUpdateDisplay, 0, 0, nullptr, 0.0f);
+            return (ioChanged != 0 && updateDisplay != 0) ? 1 : 0;
+        }
         if (!state)
             return 0;
         if (index == 0x125B)

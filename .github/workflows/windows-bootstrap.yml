@@ -178,6 +178,12 @@ jobs:
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
           }
+          if ($joined -notmatch "legacy-idle-proxy=PASS") {
+            throw "Legacy idle proxy marker missing"
+          }
+          if ($joined -notmatch "host-callback-forwarding=PASS") {
+            throw "Host callback forwarding marker missing"
+          }
           if ($joined -notmatch "synth-note-on=PASS") {
             throw "Synth note-on marker missing"
           }
@@ -275,6 +281,8 @@ jobs:
             "editor-native-mouse=PASS",
             "editor-native-drag=PASS",
             "editor-close=PASS",
+            "legacy-idle-proxy=PASS",
+            "host-callback-forwarding=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
             "synth=PASS"
@@ -324,6 +332,8 @@ jobs:
             "editor-native-mouse=PASS",
             "editor-native-drag=PASS",
             "editor-close=PASS",
+            "legacy-idle-proxy=PASS",
+            "host-callback-forwarding=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
             "synth=PASS"
