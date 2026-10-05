@@ -1215,7 +1215,12 @@ bool startBridge(ProxyInstance* inst) {
     if (inst->bridgeStarted) {
         if (!helperProcessExited(inst))
             return true;
+
+        // A dead helper discovered at block entry is isolated for this block.
+        // Do not launch a replacement from the same realtime call; return
+        // silence now and let the next block perform normal bridge startup.
         discardDeadBridge(inst);
+        return false;
     }
 
     const std::wstring& helper = inst->settings.helper;
