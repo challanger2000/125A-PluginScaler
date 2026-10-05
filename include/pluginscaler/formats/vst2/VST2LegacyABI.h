@@ -66,7 +66,37 @@ struct VstTimeInfo {
     VstInt32 samplesToNextClock;
     VstInt32 flags;
 };
+
+struct VstPatchChunkInfo {
+    VstInt32 version;
+    VstInt32 pluginUniqueID;
+    VstInt32 pluginVersion;
+    VstInt32 numElements;
+    char future[48];
+};
+
+struct VstParameterProperties {
+    float stepFloat;
+    float smallStepFloat;
+    float largeStepFloat;
+    char label[64];
+    VstInt32 flags;
+    VstInt32 minInteger;
+    VstInt32 maxInteger;
+    VstInt32 stepInteger;
+    VstInt32 largeStepInteger;
+    char shortLabel[8];
+    std::int16_t displayIndex;
+    std::int16_t category;
+    std::int16_t numParametersInCategory;
+    std::int16_t reserved;
+    char categoryLabel[24];
+    char future[16];
+};
 #pragma pack(pop)
+
+static_assert(sizeof(VstPatchChunkInfo) == 64);
+static_assert(sizeof(VstParameterProperties) == 152);
 
 inline constexpr VstInt32 kVstMidiType = 1;
 
@@ -153,10 +183,18 @@ enum DispatcherOpcode : VstInt32 {
     EffGetVendorString = 47,
     EffGetProductString = 48,
     EffGetVendorVersion = 49,
+    EffVendorSpecific = 50,
     EffCanDo = 51,
+    EffGetTailSize = 52,
+    EffGetParameterProperties = 56,
     EffGetVstVersion = 58,
+    EffBeginSetProgram = 67,
+    EffEndSetProgram = 68,
+    EffStartProcess = 71,
+    EffStopProcess = 72,
     EffBeginLoadBank = 75,
     EffBeginLoadProgram = 76,
+    EffSetProcessPrecision = 77,
     EffGetNumMidiInputChannels = 78,
     EffGetNumMidiOutputChannels = 79
 };
