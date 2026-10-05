@@ -246,6 +246,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 effect, AudioMasterUpdateDisplay, 0, 0, nullptr, 0.0f);
             return (ioChanged != 0 && updateDisplay != 0) ? 1 : 0;
         }
+        if (index == 0x1263) {
+            Sleep(800);
+            return 1;
+        }
         if (!state)
             return 0;
         if (index == 0x125B)

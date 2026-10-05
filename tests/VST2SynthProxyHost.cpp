@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace pluginscaler::formats::vst2abi;
@@ -360,6 +361,30 @@ int wmain(int argc, wchar_t** argv) {
 
     if (ok)
         ok = processSilence(effect, 64);
+
+    if (ok) {
+        VstIntPtr slowDispatchResult = 0;
+        std::thread slowOwnerCall([&] {
+            slowDispatchResult =
+                effect->dispatcher(effect, EffVendorSpecific,
+                                   0x1263, 0, nullptr, 0.0f);
+        });
+
+        Sleep(120);
+        const ULONGLONG audioStart = GetTickCount64();
+        const bool silentDuringOwnerWork = processSilence(effect, 64);
+        const ULONGLONG audioElapsedMs = GetTickCount64() - audioStart;
+        slowOwnerCall.join();
+
+        const bool rtContentionOk =
+            slowDispatchResult == 1 &&
+            silentDuringOwnerWork &&
+            audioElapsedMs < 400;
+        std::cout << "rt-contention-ms=" << audioElapsedMs << "\n";
+        std::cout << "rt-contention-nonblocking="
+                  << (rtContentionOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && rtContentionOk;
+    }
 
     const float gain = effect ? effect->getParameter(effect, 0) : 0.0f;
     const bool automationOk = std::fabs(gain - 0.75f) < 0.00001f;

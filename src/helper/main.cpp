@@ -1716,8 +1716,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
         parentWatchdog.detach();
     }
 
-    std::int32_t configuredBlockSize = 512;
-    std::uint32_t configuredSampleRate = 48000;
     std::uint32_t appliedParameterGeneration = 0;
 
     EditorGuiContext guiContext{};
@@ -1934,6 +1932,29 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                   reinterpret_cast<LPARAM>(&call)) ||
                     !call.ok)
                     resp.status = ipc::ControlStatus::PluginError;
+            } else if (req.command == ipc::ControlCommand::Reconfigure) {
+                if (payload.size() != sizeof(ipc::ReconfigurePayload)) {
+                    resp.status = ipc::ControlStatus::InvalidRequest;
+                } else {
+                    ipc::ReconfigurePayload request{};
+                    std::memcpy(&request, payload.data(), sizeof(request));
+                    if (request.sampleRate <= 0.0 || request.blockSize <= 0) {
+                        resp.status = ipc::ControlStatus::InvalidRequest;
+                    } else {
+                        PluginMainThreadRequest call{};
+                        call.op = PluginMainThreadOp::Reconfigure;
+                        call.sampleRate = request.sampleRate;
+                        call.blockSize = request.blockSize;
+                        const bool changed =
+                            SendMessageW(guiContext.surrogate,
+                                         kPluginMainThreadMessage, 0,
+                                         reinterpret_cast<LPARAM>(&call)) != 0 &&
+                            call.ok;
+                        resp.status = changed
+                            ? ipc::ControlStatus::Ok
+                            : ipc::ControlStatus::PluginError;
+                    }
+                }
             } else if (req.command == ipc::ControlCommand::DispatchLegacy) {
                 if (payload.size() < sizeof(ipc::LegacyDispatchRequest)) {
                     resp.status = ipc::ControlStatus::InvalidRequest;
@@ -2142,34 +2163,21 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                   std::memory_order_release);
 
         bool ok = true;
+        bool realtimeDeferred = false;
         {
-            std::unique_lock<std::mutex> lock(moduleMutex);
-
-            const auto requestedBlockSize = static_cast<std::int32_t>(block->header.frames);
-            const auto requestedSampleRate = block->header.sampleRateHz;
-            if (configuredBlockSize != requestedBlockSize ||
-                configuredSampleRate != requestedSampleRate) {
-                // effMainsChanged/effSetSampleRate/effSetBlockSize are legacy
-                // lifecycle dispatcher calls. Execute them on the helper's
-                // Win32 main thread, not on the realtime audio thread.
-                lock.unlock();
-                PluginMainThreadRequest call{};
-                call.op = PluginMainThreadOp::Reconfigure;
-                call.sampleRate = static_cast<double>(requestedSampleRate);
-                call.blockSize = requestedBlockSize;
-                const bool reconfigured =
-                    SendMessageW(guiContext.surrogate,
-                                 kPluginMainThreadMessage, 0,
-                                 reinterpret_cast<LPARAM>(&call)) != 0 &&
-                    call.ok;
-                lock.lock();
-
-                if (!reconfigured) {
-                    std::cerr << "error=vst2-reconfigure\n";
-                    ok = false;
-                } else {
-                    configuredBlockSize = requestedBlockSize;
-                    configuredSampleRate = requestedSampleRate;
+            // The realtime/audio server thread must never wait behind GUI,
+            // preset/state or other owner-thread VST2 dispatcher work. If the
+            // plug-in is temporarily owned elsewhere, return a silent/deferred
+            // block immediately. The proxy retains queued MIDI/parameters and
+            // retries them on the next successful block.
+            std::unique_lock<std::mutex> lock(moduleMutex, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                realtimeDeferred = true;
+                for (std::uint32_t ch = 0;
+                     ch < block->header.outputChannels; ++ch) {
+                    std::fill(block->outputs[ch],
+                              block->outputs[ch] + block->header.frames,
+                              0.0f);
                 }
             }
 
@@ -2188,9 +2196,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
             hostTime.smpteFrameRate = block->hostTime.smpteFrameRate;
             hostTime.samplesToNextClock = block->hostTime.samplesToNextClock;
             hostTime.flags = block->hostTime.flags;
-            module.setHostTimeInfo(hostTime);
+            if (!realtimeDeferred)
+                module.setHostTimeInfo(hostTime);
 
-            if (ok && block->header.parameterCount > 0 &&
+            if (!realtimeDeferred && ok && block->header.parameterCount > 0 &&
                 appliedParameterGeneration != block->header.parameterGeneration) {
                 for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
                     if (!module.setParameter(static_cast<std::int32_t>(i),
@@ -2203,7 +2212,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     appliedParameterGeneration = block->header.parameterGeneration;
             }
 
-            if (ok && block->header.midiEventCount > 0) {
+            if (!realtimeDeferred && ok && block->header.midiEventCount > 0) {
                 std::array<formats::vst2abi::VstMidiEvent, ipc::kMaxMidiEvents> midi{};
                 for (std::uint32_t i = 0; i < block->header.midiEventCount; ++i) {
                     auto& dst = midi[static_cast<std::size_t>(i)];
@@ -2223,7 +2232,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     static_cast<std::int32_t>(block->header.midiEventCount));
             }
 
-            if (ok) {
+            if (!realtimeDeferred && ok) {
                 const auto inCount =
                     std::max<std::uint32_t>(1, block->header.inputChannels);
                 const auto outCount =
@@ -2241,10 +2250,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
             }
         }
 
-        block->header.errorCode = ok ? 0u : 103u;
+        block->header.errorCode =
+            realtimeDeferred ? 104u : (ok ? 0u : 103u);
         block->header.state.store(static_cast<std::uint32_t>(
-                                      ok ? ipc::AudioBlockState::OutputReady
-                                         : ipc::AudioBlockState::Error),
+                                      (ok || realtimeDeferred)
+                                          ? ipc::AudioBlockState::OutputReady
+                                          : ipc::AudioBlockState::Error),
                                   std::memory_order_release);
         channel.signalOutput();
     }

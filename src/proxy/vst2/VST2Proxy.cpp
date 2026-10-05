@@ -1156,6 +1156,20 @@ void stopBridge(ProxyInstance* inst) noexcept {
     }
 }
 
+
+bool reconfigureBridge(ProxyInstance* inst) {
+    if (!inst || !inst->bridgeStarted)
+        return false;
+
+    pluginscaler::ipc::ReconfigurePayload request{};
+    request.sampleRate = inst->sampleRate;
+    request.blockSize = inst->blockSize;
+
+    std::vector<std::uint8_t> ignored;
+    return controlCall(inst, pluginscaler::ipc::ControlCommand::Reconfigure,
+                       0, &request, sizeof(request), ignored);
+}
+
 bool startBridge(ProxyInstance* inst) {
     if (!inst) return false;
     if (inst->bridgeStarted) return true;
@@ -1260,6 +1274,11 @@ bool startBridge(ProxyInstance* inst) {
             stopBridge(inst);
             return false;
         }
+    }
+
+    if (!reconfigureBridge(inst)) {
+        stopBridge(inst);
+        return false;
     }
 
     if (inst->currentProgramValid &&
@@ -1530,11 +1549,11 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffSetSampleRate:
         inst->sampleRate = opt > 0.0f ? static_cast<double>(opt) : 48000.0;
-        return 1;
+        return !inst->bridgeStarted || reconfigureBridge(inst) ? 1 : 0;
 
     case EffSetBlockSize:
         inst->blockSize = value > 0 ? static_cast<VstInt32>(value) : 512;
-        return 1;
+        return !inst->bridgeStarted || reconfigureBridge(inst) ? 1 : 0;
 
     case EffMainsChanged: {
         inst->mainsOn = value != 0;

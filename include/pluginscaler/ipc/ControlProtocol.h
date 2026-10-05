@@ -19,7 +19,8 @@ enum class ControlCommand : std::uint16_t {
     CaptureEditor = 8,
     SendEditorMouse = 9,
     SetMains = 10,
-    DispatchLegacy = 11
+    DispatchLegacy = 11,
+    Reconfigure = 12
 };
 
 #pragma pack(push, 1)
@@ -61,6 +62,12 @@ struct LegacyDispatchResponse {
     std::int64_t returnValue{0};
     std::uint32_t bufferBytes{0};
 };
+
+struct ReconfigurePayload {
+    double sampleRate{48000.0};
+    std::int32_t blockSize{512};
+    std::int32_t reserved{0};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(EditorRectPayload) == 16);
@@ -69,6 +76,7 @@ static_assert(sizeof(EditorBitmapHeader) == 16);
 static_assert(sizeof(EditorMousePayload) == 16);
 static_assert(sizeof(LegacyDispatchRequest) == 24);
 static_assert(sizeof(LegacyDispatchResponse) == 12);
+static_assert(sizeof(ReconfigurePayload) == 16);
 
 enum class ControlStatus : std::uint32_t {
     Ok = 0,
