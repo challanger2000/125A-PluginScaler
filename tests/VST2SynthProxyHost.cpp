@@ -47,6 +47,18 @@ int childCount(HWND parent) {
     return count;
 }
 
+void pumpMessagesFor(DWORD milliseconds) {
+    const ULONGLONG deadline = GetTickCount64() + milliseconds;
+    MSG msg{};
+    while (GetTickCount64() < deadline) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        Sleep(10);
+    }
+}
+
 VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
                                VstIntPtr, void*, float) {
     switch (opcode) {
@@ -183,33 +195,40 @@ int wmain(int argc, wchar_t** argv) {
 
         ShowWindow(editorHost, SW_SHOW);
         UpdateWindow(editorHost);
-        Sleep(100);
+        pumpMessagesFor(200);
 
         const int children = childCount(editorHost);
-        HWND surface = FindWindowExW(editorHost, nullptr,
-                                     L"125A_MockVST2SynthEditor", nullptr);
+        HWND anchor = FindWindowExW(editorHost, nullptr,
+                                    L"125A_PluginScaler_ScaledSurface", nullptr);
+        HWND forbiddenCrossProcessChild =
+            FindWindowExW(editorHost, nullptr,
+                          L"125A_MockVST2SynthEditor", nullptr);
+        HWND surrogate =
+            FindWindowW(L"125A_PluginScaler_EditorSurrogate", nullptr);
+        HWND nativeEditor = surrogate
+            ? FindWindowExW(surrogate, nullptr,
+                            L"125A_MockVST2SynthEditor", nullptr)
+            : nullptr;
+
+        DWORD nativePid = 0;
+        if (nativeEditor)
+            GetWindowThreadProcessId(nativeEditor, &nativePid);
 
         COLORREF pixel = CLR_INVALID;
-        if (surface) {
-            RedrawWindow(surface, nullptr, nullptr,
+        if (nativeEditor) {
+            RedrawWindow(nativeEditor, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-            HDC dc = GetDC(surface);
+            HDC dc = GetDC(nativeEditor);
             pixel = GetPixel(dc, 50, 40);
-            ReleaseDC(surface, dc);
+            ReleaseDC(nativeEditor, dc);
         }
 
         std::cout << "editor-rect=" << rectWidth << "x" << rectHeight << "\n";
         std::cout << "editor-open-result=" << openResult << "\n";
-        std::cout << "editor-children=" << children << "\n";
-        std::cout << "editor-surface=" << (surface ? 1 : 0) << "\n";
-        std::cout << "editor-pixel=";
-        if (pixel == CLR_INVALID) {
-            std::cout << "INVALID\n";
-        } else {
-            std::cout << static_cast<unsigned>(GetRValue(pixel)) << ","
-                      << static_cast<unsigned>(GetGValue(pixel)) << ","
-                      << static_cast<unsigned>(GetBValue(pixel)) << "\n";
-        }
+        std::cout << "editor-anchor=" << (anchor ? 1 : 0) << "\n";
+        std::cout << "editor-cross-process-child="
+                  << (forbiddenCrossProcessChild ? 1 : 0) << "\n";
+        std::cout << "editor-native-sidecar=" << (nativeEditor ? 1 : 0) << "\n";
 
         ok = editorHost != nullptr &&
              rectResult != 0 &&
@@ -218,50 +237,61 @@ int wmain(int argc, wchar_t** argv) {
              rectHeight == 180 &&
              openResult != 0 &&
              children >= 1 &&
-             surface != nullptr &&
+             anchor != nullptr &&
+             forbiddenCrossProcessChild == nullptr &&
+             nativeEditor != nullptr &&
+             nativePid != 0 &&
+             nativePid != GetCurrentProcessId() &&
              pixel != CLR_INVALID &&
              GetRValue(pixel) > 180 &&
              GetGValue(pixel) < 120 &&
              GetBValue(pixel) < 100;
 
-        std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << "\n";
+        std::cout << "editor-no-reparent=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
 
-        if (ok && surface) {
-            SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
-            SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40));
-            RedrawWindow(surface, nullptr, nullptr,
+        if (ok && nativeEditor) {
+            SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
+                         MAKELPARAM(50, 40));
+            SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
+                         MAKELPARAM(50, 40));
+            RedrawWindow(nativeEditor, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
-            HDC dc = GetDC(surface);
+            HDC dc = GetDC(nativeEditor);
             const COLORREF mappedPixel = GetPixel(dc, 50, 40);
-            ReleaseDC(surface, dc);
+            ReleaseDC(nativeEditor, dc);
 
             const bool mappingOk =
                 mappedPixel != CLR_INVALID &&
                 GetRValue(mappedPixel) < 100 &&
                 GetGValue(mappedPixel) > 170 &&
                 GetBValue(mappedPixel) < 120;
-            std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << "\n";
+            std::cout << "editor-native-mouse="
+                      << (mappingOk ? "PASS" : "FAIL") << "\n";
             ok = ok && mappingOk;
 
             if (ok) {
-                SendMessageW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40));
-                SendMessageW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(70, 20));
-                SendMessageW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20));
-                RedrawWindow(surface, nullptr, nullptr,
+                SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
+                             MAKELPARAM(50, 40));
+                SendMessageW(nativeEditor, WM_MOUSEMOVE, MK_LBUTTON,
+                             MAKELPARAM(70, 20));
+                SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
+                             MAKELPARAM(70, 20));
+                RedrawWindow(nativeEditor, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
-                HDC dragDc = GetDC(surface);
+                HDC dragDc = GetDC(nativeEditor);
                 const COLORREF dragPixel = GetPixel(dragDc, 140, 100);
-                ReleaseDC(surface, dragDc);
+                ReleaseDC(nativeEditor, dragDc);
 
                 const bool dragOk =
                     dragPixel != CLR_INVALID &&
                     GetRValue(dragPixel) > 180 &&
                     GetGValue(dragPixel) > 170 &&
                     GetBValue(dragPixel) < 100;
-                std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << "\n";
+                std::cout << "editor-native-drag="
+                          << (dragOk ? "PASS" : "FAIL") << "\n";
                 ok = ok && dragOk;
             }
         }
@@ -269,8 +299,15 @@ int wmain(int argc, wchar_t** argv) {
 
     if (ok) {
         ok = effect->dispatcher(effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
-        Sleep(50);
-        ok = ok && childCount(editorHost) == 0;
+        pumpMessagesFor(100);
+        HWND remainingSurrogate =
+            FindWindowW(L"125A_PluginScaler_EditorSurrogate", nullptr);
+        HWND remainingNative = remainingSurrogate
+            ? FindWindowExW(remainingSurrogate, nullptr,
+                            L"125A_MockVST2SynthEditor", nullptr)
+            : nullptr;
+        ok = ok && childCount(editorHost) == 0 &&
+             remainingNative == nullptr;
         std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << "\n";
     }
     if (editorHost)

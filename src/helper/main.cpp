@@ -1852,10 +1852,19 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 if (!payload.empty()) {
                     resp.status = ipc::ControlStatus::InvalidRequest;
                 } else {
+                    const bool nativeSidecar = req.arg0 == 1;
                     guiContext.gdiScalePercent =
                         req.arg0 >= 100 && req.arg0 <= 400
                             ? static_cast<int>(req.arg0)
                             : 0;
+                    LONG_PTR surrogateEx =
+                        GetWindowLongPtrW(guiContext.surrogate, GWL_EXSTYLE);
+                    if (nativeSidecar)
+                        surrogateEx &= ~static_cast<LONG_PTR>(WS_EX_NOACTIVATE);
+                    else
+                        surrogateEx |= static_cast<LONG_PTR>(WS_EX_NOACTIVATE);
+                    SetWindowLongPtrW(guiContext.surrogate, GWL_EXSTYLE,
+                                      surrogateEx);
                     const LRESULT editorResult = SendMessageW(
                         guiContext.surrogate, kEditorOpenMessage, 0, 0);
                     HWND editor = reinterpret_cast<HWND>(editorResult);

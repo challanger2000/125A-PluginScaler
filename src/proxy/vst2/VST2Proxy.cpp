@@ -112,6 +112,7 @@ struct ProxyInstance {
     std::deque<pluginscaler::ipc::VST2CallbackEvent> callbackQueue;
     HWND callbackWindow{nullptr};
     std::vector<std::uint8_t> stateChunk;
+    VstInt32 stateChunkIndex{0};
     VstRect editorRect{};
     HWND editorWindow{nullptr};
     HWND editorSurrogate{nullptr};
@@ -332,8 +333,11 @@ ProxySettings loadSettings() {
                 std::transform(mode.begin(), mode.end(), mode.begin(),
                                [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
                 settings.directEditor = (mode == L"direct" || mode == L"integrated");
-                settings.magEditor = (mode == L"mag" || mode == L"magnifier");
-                settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
+                settings.magEditor = false;
+                settings.graphicsEditor =
+                    (mode == L"graphics" || mode == L"gfx" ||
+                     mode == L"wgc" || mode == L"mag" ||
+                     mode == L"magnifier");
                 settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
                 if (!settings.directEditor && !settings.magEditor &&
                     !settings.graphicsEditor && !settings.gdiEditor)
@@ -362,8 +366,11 @@ ProxySettings loadSettings() {
         std::transform(mode.begin(), mode.end(), mode.begin(),
                        [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
         settings.directEditor = (mode == L"direct" || mode == L"integrated");
-        settings.magEditor = (mode == L"mag" || mode == L"magnifier");
-        settings.graphicsEditor = (mode == L"graphics" || mode == L"gfx" || mode == L"wgc");
+        settings.magEditor = false;
+        settings.graphicsEditor =
+            (mode == L"graphics" || mode == L"gfx" ||
+             mode == L"wgc" || mode == L"mag" ||
+             mode == L"magnifier");
         settings.gdiEditor = (mode == L"gdi" || mode == L"gdiblit");
         if (!settings.directEditor && !settings.magEditor &&
             !settings.graphicsEditor && !settings.gdiEditor)
@@ -905,6 +912,30 @@ bool updateMagnifierSource(ProxyInstance* inst) {
     return MagSetWindowSource(inst->editorMagnifier, source) != FALSE;
 }
 
+void syncNativeSidecar(ProxyInstance* inst) noexcept {
+    if (!inst || !inst->settings.directEditor ||
+        !inst->editorHost || !IsWindow(inst->editorHost) ||
+        !inst->editorSurrogate || !IsWindow(inst->editorSurrogate) ||
+        !inst->editorWindow || !IsWindow(inst->editorWindow))
+        return;
+
+    POINT origin{0, 0};
+    if (!ClientToScreen(inst->editorHost, &origin))
+        return;
+
+    RECT native{};
+    if (!GetClientRect(inst->editorWindow, &native))
+        return;
+    const int width = native.right - native.left;
+    const int height = native.bottom - native.top;
+    if (width <= 0 || height <= 0)
+        return;
+
+    SetWindowPos(inst->editorSurrogate, nullptr,
+                 origin.x, origin.y, width, height,
+                 SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+}
+
 LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* inst = reinterpret_cast<ProxyInstance*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -922,6 +953,10 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_TIMER:
+        if (inst->settings.directEditor) {
+            syncNativeSidecar(inst);
+            return 0;
+        }
         if (inst->settings.magEditor) {
             (void)updateMagnifierSource(inst);
             return 0;
@@ -957,6 +992,13 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc{};
         GetClientRect(hwnd, &rc);
+
+        if (inst->settings.directEditor) {
+            FillRect(dc, &rc,
+                     reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
 
         if (inst->settings.magEditor) {
             EndPaint(hwnd, &ps);
@@ -1056,12 +1098,8 @@ void stopBridge(ProxyInstance* inst) noexcept {
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
-            if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
-                inst->editorWindow && IsWindow(inst->editorWindow) &&
-                inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
-                ShowWindow(inst->editorWindow, SW_HIDE);
-                SetParent(inst->editorWindow, inst->editorSurrogate);
-            }
+            // The real legacy editor always remains parented to the x86
+            // helper surrogate. Never reparent it across the process boundary.
             stopGraphicsCapture(inst);
             if (inst->editorSurface && IsWindow(inst->editorSurface))
                 KillTimer(inst->editorSurface, 0x125A);
@@ -1211,10 +1249,24 @@ bool startBridge(ProxyInstance* inst) {
     inst->helperProcess = pi;
     inst->bridgeStarted = true;
 
+    // Restore control state while suspended. The helper opens its VST2
+    // instance ready for processing, so explicitly suspend before touching
+    // programs/chunks and only resume after restoration.
     {
         std::vector<std::uint8_t> ignored;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
-                         inst->mainsOn ? 1 : 0, nullptr, 0, ignored)) {
+                         0, nullptr, 0, ignored)) {
+            stopBridge(inst);
+            return false;
+        }
+    }
+
+    if (inst->currentProgram >= 0 &&
+        inst->currentProgram < inst->manifest.numPrograms) {
+        VstIntPtr ignoredResult = 0;
+        if (!legacyDispatchCall(inst, EffSetProgram, 0,
+                                inst->currentProgram, nullptr, 0,
+                                0.0f, ignoredResult)) {
             stopBridge(inst);
             return false;
         }
@@ -1222,10 +1274,24 @@ bool startBridge(ProxyInstance* inst) {
 
     if (!inst->stateChunk.empty()) {
         std::vector<std::uint8_t> ignored;
-        if (controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
-                        0, inst->stateChunk.data(),
-                        static_cast<std::uint32_t>(inst->stateChunk.size()), ignored))
-            refreshParametersFromHelper(inst);
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetState,
+                         inst->stateChunkIndex,
+                         inst->stateChunk.data(),
+                         static_cast<std::uint32_t>(inst->stateChunk.size()),
+                         ignored)) {
+            stopBridge(inst);
+            return false;
+        }
+        refreshParametersFromHelper(inst);
+    }
+
+    if (inst->mainsOn) {
+        std::vector<std::uint8_t> ignored;
+        if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
+                         1, nullptr, 0, ignored)) {
+            stopBridge(inst);
+            return false;
+        }
     }
 
     return true;
@@ -1499,8 +1565,11 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffEditOpen: {
         if (!ptr || !startBridge(inst)) return 0;
         std::vector<std::uint8_t> reply;
+        const std::int32_t editorModeArg =
+            inst->settings.directEditor ? 1 :
+            (inst->settings.gdiEditor ? 100 : 0);
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                         inst->settings.gdiEditor ? 100 : 0,
+                         editorModeArg,
                          nullptr, 0, reply) ||
             reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
             return 0;
@@ -1522,6 +1591,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->dragActive = false;
 
         if (inst->settings.directEditor) {
+            if (!ensureScalerSurfaceClass())
+                return 0;
+
             RECT rc{};
             if (!GetClientRect(editor, &rc))
                 return 0;
@@ -1530,24 +1602,27 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (width <= 0 || height <= 0)
                 return 0;
 
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
+            // Native compatibility mode: keep the actual legacy editor exactly
+            // where effEditOpen created it, inside the x86 helper. The x64 DAW
+            // receives only an anchor surface; the helper-owned sidecar is
+            // positioned over that anchor without any cross-process SetParent.
+            HWND surface = CreateWindowExW(
+                0, L"125A_PluginScaler_ScaledSurface", L"",
+                WS_CHILD | WS_VISIBLE,
+                0, 0, width, height,
+                parent, nullptr, GetModuleHandleW(nullptr), inst);
+            if (!surface)
                 return 0;
 
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-
-            inst->editorSurface = nullptr;
+            inst->editorSurface = surface;
             inst->editorMagnifier = nullptr;
+            inst->editorBitmapWidth = static_cast<std::uint32_t>(width);
+            inst->editorBitmapHeight = static_cast<std::uint32_t>(height);
+            inst->editorBitmapStride = static_cast<std::uint32_t>(width * 4);
             inst->editorOpen = true;
+
+            syncNativeSidecar(inst);
+            SetTimer(surface, 0x125A, 50, nullptr);
             return 1;
         }
 
@@ -1611,29 +1686,13 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 scaledWidth <= 0 || scaledHeight <= 0)
                 return 0;
 
-            // Reuse the proven Direct-mode topology: the real x86 editor is
-            // embedded in the DAW at its native size. The Graphics surface is
-            // only a scaled live view placed above it.
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
+            // Capture the actual helper-owned editor HWND without changing
+            // its parent or thread/process ownership.
+            SetWindowPos(surrogate, nullptr, -32000, -32000,
+                         nativeWidth, nativeHeight,
+                         SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+            if (!startGraphicsCapture(inst, editor))
                 return 0;
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-            SetWindowPos(editor, HWND_BOTTOM, 0, 0, nativeWidth, nativeHeight,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-
-            // Capture the actual plugin HWND, not the surrogate or desktop.
-            if (!startGraphicsCapture(inst, editor)) {
-                ShowWindow(editor, SW_HIDE);
-                SetParent(editor, surrogate);
-                return 0;
-            }
 
             HWND surface = CreateWindowExW(
                 0, L"125A_PluginScaler_ScaledSurface", L"",
@@ -1642,8 +1701,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 parent, nullptr, GetModuleHandleW(nullptr), inst);
             if (!surface) {
                 stopGraphicsCapture(inst);
-                ShowWindow(editor, SW_HIDE);
-                SetParent(editor, surrogate);
                 return 0;
             }
 
@@ -1684,19 +1741,8 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (!surface)
                 return 0;
 
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, surface);
-            if (!previousParent && GetLastError() != 0) {
-                DestroyWindow(surface);
-                return 0;
-            }
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-            SetWindowPos(editor, HWND_BOTTOM, 0, 0, nativeWidth, nativeHeight,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            // Magnifier compatibility path also leaves the real editor in
+            // the helper-owned HWND hierarchy. No cross-process SetParent.
 
             HWND mag = CreateWindowExW(
                 WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
@@ -1705,8 +1751,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 0, 0, scaledWidth, scaledHeight,
                 surface, nullptr, GetModuleHandleW(nullptr), nullptr);
             if (!mag) {
-                ShowWindow(editor, SW_HIDE);
-                SetParent(editor, surrogate);
                 DestroyWindow(surface);
                 return 0;
             }
@@ -1718,8 +1762,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             transform.v[2][2] = 1.0f;
             if (!MagSetWindowTransform(mag, &transform)) {
                 DestroyWindow(mag);
-                ShowWindow(editor, SW_HIDE);
-                SetParent(editor, surrogate);
                 DestroyWindow(surface);
                 return 0;
             }
@@ -1763,12 +1805,8 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
-            inst->editorWindow && IsWindow(inst->editorWindow) &&
-            inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
-            ShowWindow(inst->editorWindow, SW_HIDE);
-            SetParent(inst->editorWindow, inst->editorSurrogate);
-        }
+        // The helper owns the real editor for its entire lifetime.
+        // No cross-process reparenting is performed on close.
 
         stopGraphicsCapture(inst);
         if (inst->editorSurface && IsWindow(inst->editorSurface))
@@ -1798,6 +1836,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             reply.empty())
             return 0;
         inst->stateChunk = std::move(reply);
+        inst->stateChunkIndex = index;
         *static_cast<void**>(ptr) = inst->stateChunk.data();
         return static_cast<VstIntPtr>(inst->stateChunk.size());
     }
@@ -1813,6 +1852,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->stateChunk.assign(static_cast<const std::uint8_t*>(ptr),
                                 static_cast<const std::uint8_t*>(ptr) +
                                     static_cast<std::size_t>(value));
+        inst->stateChunkIndex = index;
         refreshParametersFromHelper(inst);
         return 1;
     }
