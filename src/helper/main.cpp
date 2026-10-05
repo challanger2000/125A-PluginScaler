@@ -1412,15 +1412,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
     std::uint32_t configuredSampleRate = 48000;
     std::uint32_t appliedParameterGeneration = 0;
 
-    {
-        std::lock_guard<std::mutex> lock(moduleMutex);
-        std::string error;
-        if (!module.openForProcessing(path, 48000.0, 512, error)) {
-            std::cerr << "error=" << error << '\n';
-            return 12;
-        }
-    }
-
     EditorGuiContext guiContext{};
     guiContext.module = &module;
     guiContext.moduleMutex = &moduleMutex;
@@ -1429,7 +1420,24 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (!guiReady)
         return 15;
 
+    std::atomic<int> guiInitResult{0};
+
     std::thread guiThread([&] {
+        // Legacy VST2 expects lifecycle/GUI dispatcher calls to originate from
+        // one stable Win32 "main" thread. Initialize the plug-in on this same
+        // thread that owns the editor/message loop rather than on the audio
+        // server thread.
+        {
+            std::lock_guard<std::mutex> lock(moduleMutex);
+            std::string error;
+            if (!module.openForProcessing(path, 48000.0, 512, error)) {
+                std::cerr << "error=" << error << '\n';
+                guiInitResult.store(12, std::memory_order_release);
+                SetEvent(guiReady);
+                return;
+            }
+        }
+
         static const wchar_t* kClassName = L"125A_PluginScaler_EditorSurrogate";
         WNDCLASSW wc{};
         wc.lpfnWndProc = editorSurrogateProc;
@@ -1459,6 +1467,11 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
     WaitForSingleObject(guiReady, 3000);
     CloseHandle(guiReady);
+    const int initFailure = guiInitResult.load(std::memory_order_acquire);
+    if (initFailure != 0) {
+        if (guiThread.joinable()) guiThread.join();
+        return initFailure;
+    }
     if (!guiContext.surrogate) {
         if (guiThread.joinable()) guiThread.join();
         return 16;
