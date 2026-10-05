@@ -173,7 +173,8 @@ enum class PluginMainThreadOp : std::uint32_t {
     GetState,
     SetState,
     GetParameters,
-    GetEditorRect
+    GetEditorRect,
+    DispatchLegacy
 };
 
 struct PluginMainThreadRequest {
@@ -187,6 +188,12 @@ struct PluginMainThreadRequest {
     std::vector<std::uint8_t>* bytes{nullptr};
     std::vector<float>* floats{nullptr};
     pluginscaler::formats::vst2abi::VstRect* rect{nullptr};
+    std::int32_t opcode{0};
+    std::int32_t index{0};
+    pluginscaler::formats::vst2abi::VstIntPtr value{0};
+    float opt{0.0f};
+    void* ptr{nullptr};
+    pluginscaler::formats::vst2abi::VstIntPtr result{0};
 };
 
 struct EditorCaptureRequest {
@@ -1229,6 +1236,12 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             request->ok = request->rect &&
                 ctx->module->editorRect(*request->rect);
             break;
+        case PluginMainThreadOp::DispatchLegacy:
+            request->result = ctx->module->dispatch(
+                request->opcode, request->index, request->value,
+                request->ptr, request->opt);
+            request->ok = true;
+            break;
         }
         return request->ok ? 1 : 0;
     }
@@ -1770,6 +1783,61 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                   reinterpret_cast<LPARAM>(&call)) ||
                     !call.ok)
                     resp.status = ipc::ControlStatus::PluginError;
+            } else if (req.command == ipc::ControlCommand::DispatchLegacy) {
+                if (payload.size() < sizeof(ipc::LegacyDispatchRequest)) {
+                    resp.status = ipc::ControlStatus::InvalidRequest;
+                } else {
+                    ipc::LegacyDispatchRequest dispatch{};
+                    std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
+                    const std::size_t expected =
+                        sizeof(dispatch) + static_cast<std::size_t>(dispatch.bufferBytes);
+                    const bool allowedOpcode =
+                        dispatch.opcode == formats::vst2abi::EffSetProgram ||
+                        dispatch.opcode == formats::vst2abi::EffGetProgram ||
+                        dispatch.opcode == formats::vst2abi::EffSetProgramName ||
+                        dispatch.opcode == formats::vst2abi::EffGetProgramName ||
+                        dispatch.opcode == formats::vst2abi::EffGetParamLabel ||
+                        dispatch.opcode == formats::vst2abi::EffGetParamDisplay ||
+                        dispatch.opcode == formats::vst2abi::EffGetParamName ||
+                        dispatch.opcode == formats::vst2abi::EffCanBeAutomated ||
+                        dispatch.opcode == formats::vst2abi::EffString2Parameter ||
+                        dispatch.opcode == formats::vst2abi::EffGetProgramNameIndexed;
+                    if (!allowedOpcode || expected != payload.size() ||
+                        dispatch.bufferBytes > 1024u) {
+                        resp.status = ipc::ControlStatus::InvalidRequest;
+                    } else {
+                        std::vector<std::uint8_t> buffer(dispatch.bufferBytes, 0);
+                        if (dispatch.bufferBytes) {
+                            std::memcpy(buffer.data(),
+                                        payload.data() + sizeof(dispatch),
+                                        dispatch.bufferBytes);
+                        }
+                        PluginMainThreadRequest call{};
+                        call.op = PluginMainThreadOp::DispatchLegacy;
+                        call.opcode = dispatch.opcode;
+                        call.index = dispatch.index;
+                        call.value = static_cast<formats::vst2abi::VstIntPtr>(
+                            dispatch.value);
+                        call.opt = dispatch.opt;
+                        call.ptr = buffer.empty() ? nullptr : buffer.data();
+                        if (!SendMessageW(guiContext.surrogate,
+                                          kPluginMainThreadMessage, 0,
+                                          reinterpret_cast<LPARAM>(&call)) ||
+                            !call.ok) {
+                            resp.status = ipc::ControlStatus::PluginError;
+                        } else {
+                            ipc::LegacyDispatchResponse out{};
+                            out.returnValue = static_cast<std::int64_t>(call.result);
+                            out.bufferBytes = dispatch.bufferBytes;
+                            reply.resize(sizeof(out) + buffer.size());
+                            std::memcpy(reply.data(), &out, sizeof(out));
+                            if (!buffer.empty()) {
+                                std::memcpy(reply.data() + sizeof(out),
+                                            buffer.data(), buffer.size());
+                            }
+                        }
+                    }
+                }
             } else if (req.command == ipc::ControlCommand::Shutdown) {
                 controlStop.store(true, std::memory_order_release);
             } else {
