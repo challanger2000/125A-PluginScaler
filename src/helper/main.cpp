@@ -1129,9 +1129,19 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case WM_TIMER:
         if (wp == kEditorIdleTimer && ctx->editor && IsWindow(ctx->editor)) {
-            std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
-            (void)ctx->module->editorIdle();
-            UpdateWindow(ctx->editor);
+            // Never block the GUI thread behind the audio thread. Some legacy
+            // instruments can synchronously coordinate GUI/preset changes with
+            // their DSP. Waiting here while processReplacing holds moduleMutex
+            // can complete a GUI<->audio deadlock cycle during preset changes.
+            std::unique_lock<std::mutex> lock(*ctx->moduleMutex, std::try_to_lock);
+            if (lock.owns_lock())
+                (void)ctx->module->editorIdle();
+
+            // Direct/native editors repaint themselves from their own window
+            // procedure. Forcing a synchronous UpdateWindow every 30 ms adds
+            // needless re-entrancy while a preset is being switched.
+            if (ctx->gdiScalePercent > 0)
+                UpdateWindow(ctx->editor);
             return 0;
         }
         break;
