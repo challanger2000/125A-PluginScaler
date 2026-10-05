@@ -128,7 +128,13 @@ inline constexpr VstInt32 kEffectMagic = 0x56737450; // VstP
 enum DispatcherOpcode : VstInt32 {
     EffOpen = 0,
     EffClose = 1,
+    EffSetProgram = 2,
     EffGetProgram = 3,
+    EffSetProgramName = 4,
+    EffGetProgramName = 5,
+    EffGetParamLabel = 6,
+    EffGetParamDisplay = 7,
+    EffGetParamName = 8,
     EffSetSampleRate = 10,
     EffSetBlockSize = 11,
     EffMainsChanged = 12,
