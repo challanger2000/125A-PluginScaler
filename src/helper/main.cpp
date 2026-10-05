@@ -1696,16 +1696,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
                                      static_cast<WPARAM>(mouse.keyFlags), coords);
                     }
                 }
-            } else if (req.command == ipc::ControlCommand::PullHostCallbacks) {
-                const auto callbacks = module.drainHostCallbacks();
-                reply.resize(callbacks.size() * sizeof(ipc::HostCallbackPayload));
-                auto* out = reinterpret_cast<ipc::HostCallbackPayload*>(reply.data());
-                for (std::size_t i = 0; i < callbacks.size(); ++i) {
-                    out[i].opcode = callbacks[i].opcode;
-                    out[i].index = callbacks[i].index;
-                    out[i].value = static_cast<std::int64_t>(callbacks[i].value);
-                    out[i].opt = callbacks[i].opt;
-                }
             } else if (req.command == ipc::ControlCommand::SetMains) {
                 PluginMainThreadRequest call{};
                 call.op = PluginMainThreadOp::SetMains;
