@@ -31,6 +31,10 @@ struct VST2ProbeResult {
     bool receivesVstMidiEvents{false};
     bool wantsMidi{false};
     std::vector<float> parameterDefaults;
+    std::vector<std::string> parameterNames;
+    std::vector<std::string> parameterLabels;
+    std::vector<bool> parameterAutomatable;
+    std::vector<std::string> programNames;
     std::string error;
 };
 
