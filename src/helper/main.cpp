@@ -1390,7 +1390,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         const std::wstring& mappingName,
                         const std::wstring& inputEvent,
                         const std::wstring& outputEvent,
-                        const std::wstring& controlPipeName) {
+                        const std::wstring& controlPipeName,
+                        DWORD parentProcessId) {
     using namespace pluginscaler;
 
     ipc::AudioSharedChannel channel;
@@ -1407,6 +1408,22 @@ int runSharedVst2Server(const std::filesystem::path& path,
     std::vector<std::uint8_t> persistedChunk;
     std::int32_t persistedChunkIndex = 0;
     std::atomic<bool> controlStop{false};
+
+    // The helper must never survive its owning DAW/proxy process. A legacy
+    // plug-in can deadlock inside the helper before normal Shutdown handling
+    // runs, so keep an independent parent-process watchdog that does not take
+    // any plug-in locks.
+    HANDLE parentProcess = parentProcessId
+        ? OpenProcess(SYNCHRONIZE, FALSE, parentProcessId)
+        : nullptr;
+    std::thread parentWatchdog;
+    if (parentProcess) {
+        parentWatchdog = std::thread([parentProcess] {
+            if (WaitForSingleObject(parentProcess, INFINITE) == WAIT_OBJECT_0)
+                TerminateProcess(GetCurrentProcess(), 0x125A);
+        });
+        parentWatchdog.detach();
+    }
 
     std::int32_t configuredBlockSize = 512;
     std::uint32_t configuredSampleRate = 48000;
@@ -1850,8 +1867,16 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 4 && std::wstring_view(argv[1]) == L"--write-vst2-manifest")
         return writeVst2Manifest(argv[2], argv[3]);
 
-    if (argc == 7 && std::wstring_view(argv[1]) == L"--serve-vst2-shm")
-        return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5], argv[6]);
+    if (argc == 8 && std::wstring_view(argv[1]) == L"--serve-vst2-shm") {
+        DWORD parentPid = 0;
+        try {
+            parentPid = static_cast<DWORD>(std::stoul(argv[7]));
+        } catch (...) {
+            return 23;
+        }
+        return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5], argv[6],
+                                   parentPid);
+    }
 
     std::cout << "125A PluginScaler Helper\n"
               << "protocol=" << pluginscaler::ipc::kProtocolMajor << "."
@@ -1860,6 +1885,6 @@ int wmain(int argc, wchar_t** argv) {
               << "  PluginScalerHelper --probe-vst2 <plugin.dll>\n"
               << "  PluginScalerHelper --probe-vst2-audio <plugin.dll>\n"
               << "  PluginScalerHelper --write-vst2-manifest <plugin.dll> <manifest.txt>\n"
-              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event> <control-pipe>\n";
+              << "  PluginScalerHelper --serve-vst2-shm <plugin.dll> <map> <in-event> <out-event> <control-pipe> <parent-pid>\n";
     return 0;
 }
