@@ -1,4 +1,5 @@
 #include "pluginscaler/ipc/AudioSharedChannel.h"
+#include "pluginscaler/ipc/ControlProtocol.h"
 
 #include <windows.h>
 
@@ -7,11 +8,85 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
 std::wstring quote(const std::wstring& s) {
     return L"\"" + s + L"\"";
+}
+
+
+bool readExact(HANDLE pipe, void* data, DWORD bytes) {
+    auto* p = static_cast<std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD got = 0;
+        if (!ReadFile(pipe, p + done, bytes - done, &got, nullptr) || got == 0)
+            return false;
+        done += got;
+    }
+    return true;
+}
+
+bool writeExact(HANDLE pipe, const void* data, DWORD bytes) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    DWORD done = 0;
+    while (done < bytes) {
+        DWORD sent = 0;
+        if (!WriteFile(pipe, p + done, bytes - done, &sent, nullptr) || sent == 0)
+            return false;
+        done += sent;
+    }
+    return true;
+}
+
+HANDLE connectControlPipe(const std::wstring& pipeName) {
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        HANDLE pipe = CreateFileW(
+            pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+            OPEN_EXISTING, 0, nullptr);
+        if (pipe != INVALID_HANDLE_VALUE)
+            return pipe;
+        if (GetLastError() != ERROR_PIPE_BUSY &&
+            GetLastError() != ERROR_FILE_NOT_FOUND)
+            break;
+        Sleep(20);
+    }
+    return INVALID_HANDLE_VALUE;
+}
+
+bool reconfigureHelper(HANDLE pipe, double sampleRate, std::int32_t blockSize) {
+    if (pipe == INVALID_HANDLE_VALUE)
+        return false;
+
+    pluginscaler::ipc::ReconfigurePayload payload{};
+    payload.sampleRate = sampleRate;
+    payload.blockSize = blockSize;
+
+    pluginscaler::ipc::ControlMessageHeader request{};
+    request.command = pluginscaler::ipc::ControlCommand::Reconfigure;
+    request.payloadBytes = sizeof(payload);
+
+    if (!writeExact(pipe, &request, sizeof(request)) ||
+        !writeExact(pipe, &payload, sizeof(payload)))
+        return false;
+
+    pluginscaler::ipc::ControlMessageHeader response{};
+    if (!readExact(pipe, &response, sizeof(response)))
+        return false;
+
+    if (response.responseBytes > 0) {
+        std::vector<std::uint8_t> ignored(response.responseBytes);
+        if (!readExact(pipe, ignored.data(), response.responseBytes))
+            return false;
+    }
+
+    return response.magic == pluginscaler::ipc::kControlMagic &&
+           response.version == pluginscaler::ipc::kControlVersion &&
+           response.command == pluginscaler::ipc::ControlCommand::Reconfigure &&
+           response.status == pluginscaler::ipc::ControlStatus::Ok;
 }
 
 } // namespace
@@ -51,6 +126,17 @@ int wmain(int argc, wchar_t** argv) {
 
     CloseHandle(pi.hThread);
 
+    HANDLE controlPipe = connectControlPipe(controlPipeName);
+    if (controlPipe == INVALID_HANDLE_VALUE ||
+        !reconfigureHelper(controlPipe, 48000.0, 64)) {
+        if (controlPipe != INVALID_HANDLE_VALUE)
+            CloseHandle(controlPipe);
+        TerminateProcess(pi.hProcess, 7);
+        WaitForSingleObject(pi.hProcess, 3000);
+        CloseHandle(pi.hProcess);
+        return 7;
+    }
+
     auto cleanup = [&] {
         auto* block = channel.block();
         if (block) {
@@ -58,6 +144,10 @@ int wmain(int argc, wchar_t** argv) {
                 static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::Shutdown),
                 std::memory_order_release);
             channel.signalInput();
+        }
+        if (controlPipe != INVALID_HANDLE_VALUE) {
+            CloseHandle(controlPipe);
+            controlPipe = INVALID_HANDLE_VALUE;
         }
         WaitForSingleObject(pi.hProcess, 3000);
         CloseHandle(pi.hProcess);
