@@ -924,7 +924,8 @@ bool startBridge(ProxyInstance* inst) {
         quote(mapName) + L" " +
         quote(inEvent) + L" " +
         quote(outEvent) + L" " +
-        quote(controlPipeName);
+        quote(controlPipeName) + L" " +
+        std::to_wstring(GetCurrentProcessId());
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
