@@ -1501,7 +1501,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
     std::int32_t configuredBlockSize = 512;
     std::uint32_t configuredSampleRate = 48000;
     std::uint32_t appliedParameterGeneration = 0;
-    std::uint32_t publishedAutomationGeneration = 0;
 
     EditorGuiContext guiContext{};
     guiContext.module = &module;
@@ -1943,19 +1942,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 ok = module.processReplacing(
                     inputs.data(), outputs.data(),
                     static_cast<std::int32_t>(block->header.frames));
-            }
-        }
-
-        if (ok) {
-            std::int32_t automationIndex = -1;
-            float automationValue = 0.0f;
-            if (module.readAutomation(publishedAutomationGeneration,
-                                      automationIndex,
-                                      automationValue)) {
-                block->header.automationGeneration =
-                    publishedAutomationGeneration;
-                block->header.automationIndex = automationIndex;
-                block->header.automationValue = automationValue;
             }
         }
 

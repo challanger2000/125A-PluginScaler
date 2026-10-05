@@ -129,7 +129,6 @@ struct ProxyInstance {
     std::uint32_t pendingMidiCount{0};
     std::vector<float> parameterValues;
     std::uint32_t parameterGeneration{0};
-    std::uint32_t automationGeneration{0};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -1570,19 +1569,6 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     }
 
     inst->pendingMidiCount = 0;
-
-    if (block->header.automationGeneration != 0 &&
-        block->header.automationGeneration != inst->automationGeneration &&
-        block->header.automationIndex >= 0 &&
-        block->header.automationIndex < inst->effect.numParams &&
-        inst->host) {
-        inst->automationGeneration = block->header.automationGeneration;
-        const auto index = block->header.automationIndex;
-        const auto value = std::clamp(block->header.automationValue, 0.0f, 1.0f);
-        if (static_cast<std::size_t>(index) < inst->parameterValues.size())
-            inst->parameterValues[static_cast<std::size_t>(index)] = value;
-        (void)inst->host(effect, AudioMasterAutomate, index, 0, nullptr, value);
-    }
 
     for (std::uint32_t ch = 0; ch < outChannels; ++ch) {
         if (outputs && outputs[ch])

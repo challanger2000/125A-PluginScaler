@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 #include <cstddef>
-#include <atomic>
 
 namespace pluginscaler::formats {
 
@@ -74,10 +73,6 @@ public:
     std::int32_t blockSize() const noexcept { return blockSize_; }
     void noteWantMidiRequest() noexcept { wantsMidi_ = true; }
     bool wantsMidi() const noexcept { return wantsMidi_; }
-    void noteAutomation(std::int32_t index, float value) noexcept;
-    bool readAutomation(std::uint32_t& generation,
-                        std::int32_t& index,
-                        float& value) const noexcept;
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -106,9 +101,6 @@ private:
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};
     vst2abi::VstTimeInfo timeInfo_{};
-    std::atomic<std::uint32_t> automationGeneration_{0};
-    std::atomic<std::int32_t> automationIndex_{-1};
-    std::atomic<std::uint32_t> automationValueBits_{0};
 };
 
 } // namespace pluginscaler::formats
