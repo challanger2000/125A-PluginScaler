@@ -450,6 +450,19 @@ float VST2PluginModule::getParameter(std::int32_t index) const noexcept {
     return callGetParameterSafely(effect_, index);
 }
 
+VstIntPtr VST2PluginModule::dispatch(std::int32_t opcode,
+                                     std::int32_t index,
+                                     VstIntPtr value,
+                                     void* ptr,
+                                     float opt) noexcept {
+    if (!effect_ || !effect_->dispatcher)
+        return 0;
+    VstIntPtr result = 0;
+    if (!callDispatcherSafely(effect_, opcode, index, value, ptr, opt, &result))
+        return 0;
+    return result;
+}
+
 bool VST2PluginModule::getChunk(std::int32_t index,
                                 std::vector<std::uint8_t>& data) noexcept {
     data.clear();
