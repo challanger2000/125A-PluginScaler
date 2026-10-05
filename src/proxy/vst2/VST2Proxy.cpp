@@ -143,6 +143,7 @@ struct ProxyInstance {
     std::vector<float> parameterValues;
     std::uint32_t parameterGeneration{0};
     VstInt32 currentProgram{0};
+    bool currentProgramValid{false};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -1261,7 +1262,8 @@ bool startBridge(ProxyInstance* inst) {
         }
     }
 
-    if (inst->currentProgram >= 0 &&
+    if (inst->currentProgramValid &&
+        inst->currentProgram >= 0 &&
         inst->currentProgram < inst->manifest.numPrograms) {
         VstIntPtr ignoredResult = 0;
         if (!legacyDispatchCall(inst, EffSetProgram, 0,
@@ -1283,6 +1285,15 @@ bool startBridge(ProxyInstance* inst) {
             return false;
         }
         refreshParametersFromHelper(inst);
+
+        VstIntPtr restoredProgram = 0;
+        if (legacyDispatchCall(inst, EffGetProgram, 0, 0,
+                               nullptr, 0, 0.0f, restoredProgram) &&
+            restoredProgram >= 0 &&
+            restoredProgram < inst->manifest.numPrograms) {
+            inst->currentProgram = static_cast<VstInt32>(restoredProgram);
+            inst->currentProgramValid = true;
+        }
     }
 
     if (inst->mainsOn) {
@@ -1328,12 +1339,13 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffSetProgram: {
         if (value < 0 || value >= inst->manifest.numPrograms)
             return 0;
-        inst->currentProgram = static_cast<VstInt32>(value);
         if (!startBridge(inst))
             return 0;
         VstIntPtr result = 0;
         if (!legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result))
             return 0;
+        inst->currentProgram = static_cast<VstInt32>(value);
+        inst->currentProgramValid = true;
         refreshParametersFromHelper(inst);
         return result;
     }
@@ -1345,6 +1357,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result))
             return inst->currentProgram;
         inst->currentProgram = static_cast<VstInt32>(result);
+        inst->currentProgramValid = true;
         return result;
     }
 
@@ -1854,6 +1867,15 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                                     static_cast<std::size_t>(value));
         inst->stateChunkIndex = index;
         refreshParametersFromHelper(inst);
+
+        VstIntPtr restoredProgram = 0;
+        if (legacyDispatchCall(inst, EffGetProgram, 0, 0,
+                               nullptr, 0, 0.0f, restoredProgram) &&
+            restoredProgram >= 0 &&
+            restoredProgram < inst->manifest.numPrograms) {
+            inst->currentProgram = static_cast<VstInt32>(restoredProgram);
+            inst->currentProgramValid = true;
+        }
         return 1;
     }
 

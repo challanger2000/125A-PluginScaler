@@ -163,8 +163,8 @@ jobs:
           if ($joined -notmatch "synth-metadata=PASS") {
             throw "Synth metadata marker missing"
           }
-          if ($joined -notmatch "editor-direct=PASS") {
-            throw "Native direct editor marker missing"
+          if ($joined -notmatch "editor-no-reparent=PASS") {
+            throw "Native no-reparent editor marker missing"
           }
           if ($joined -notmatch "editor-open=PASS") {
             throw "Cross-process editor open marker missing"
