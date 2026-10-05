@@ -14,6 +14,8 @@ namespace {
 bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
+AudioMasterCallback gHostCallback = nullptr;
+AEffect* gEffectForCallback = nullptr;
 
 LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -25,6 +27,9 @@ LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (x == 50 && y == 40) {
             gMappedClickReceived = true;
             gDragArmed = true;
+            if (gHostCallback && gEffectForCallback)
+                (void)gHostCallback(gEffectForCallback, AudioMasterAutomate,
+                                    0, 0, nullptr, 0.75f);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 1;
@@ -295,6 +300,8 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numOutputs = 2;
     effect->flags = (1 << 4) | (1 << 5) | (1 << 8); // replacing, chunks, synth
     effect->object = new SynthState{};
+    gHostCallback = host;
+    gEffectForCallback = effect;
     effect->uniqueId = 0x53594E31; // "SYN1"
     effect->version = 1000;
     return effect;
