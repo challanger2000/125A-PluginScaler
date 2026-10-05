@@ -1548,10 +1548,10 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::InputReady),
         std::memory_order_release);
 
-    inst->pendingMidiCount = 0;
-
     if (!inst->channel.signalInput() ||
         !inst->channel.waitForOutput(std::chrono::milliseconds(1000))) {
+        // Keep queued MIDI on a failed bridge transaction. In particular, a
+        // Note-Off must not disappear merely because the helper was late.
         zeroOutputs(effect, outputs, frames);
         return;
     }
@@ -1561,9 +1561,13 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
 
     if (state != pluginscaler::ipc::AudioBlockState::OutputReady ||
         block->header.errorCode != 0) {
+        // The helper did not acknowledge this block, so retain its MIDI for a
+        // later successful transaction instead of creating stuck notes.
         zeroOutputs(effect, outputs, frames);
         return;
     }
+
+    inst->pendingMidiCount = 0;
 
     for (std::uint32_t ch = 0; ch < outChannels; ++ch) {
         if (outputs && outputs[ch])
