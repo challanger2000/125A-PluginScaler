@@ -1536,13 +1536,24 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (width <= 0 || height <= 0)
                 return 0;
 
-            // Legacy-safe topology:
-            // Studio One -> helper-owned stable container -> plugin editor.
-            // The plugin receives the helper-owned container during effEditOpen
-            // and its own HWND is never reparented afterwards.
-            if (GetParent(editor) != surrogate ||
-                GetParent(surrogate) != parent)
+            // Cross-process legacy topology:
+            // helper-owned container -> plugin editor stays unchanged.
+            // Only the helper-owned container is embedded into Studio One.
+            if (GetParent(editor) != surrogate)
                 return 0;
+
+            SetLastError(0);
+            HWND previousParent = SetParent(surrogate, parent);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+
+            LONG_PTR containerStyle = GetWindowLongPtrW(surrogate, GWL_STYLE);
+            containerStyle |= WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            containerStyle &= ~WS_POPUP;
+            SetWindowLongPtrW(surrogate, GWL_STYLE, containerStyle);
+
+            SetWindowPos(surrogate, HWND_TOP, 0, 0, width, height,
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 
             inst->editorSurface = nullptr;
             inst->editorMagnifier = nullptr;
