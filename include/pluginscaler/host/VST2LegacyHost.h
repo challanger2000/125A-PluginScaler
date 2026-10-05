@@ -75,6 +75,12 @@ public:
                                            WPARAM wParam, LPARAM lParam) noexcept;
 
 private:
+    static bool hostResizeThunk(void* context,
+                                std::int32_t width,
+                                std::int32_t height) noexcept;
+    bool resizeEditorHost(std::int32_t width,
+                          std::int32_t height) noexcept;
+
     struct MainThreadCall {
         std::function<void()> fn;
     };

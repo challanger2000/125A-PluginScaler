@@ -102,6 +102,7 @@ struct SynthState {
     std::uint8_t velocity{0};
     HWND editorWindow{nullptr};
     VstRect editorRect{0, 0, 180, 320};
+    bool resizeRequested{false};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
@@ -231,6 +232,16 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return 0;
         }
         return 0;
+    case EffEditIdle:
+        if (state && state->editorWindow && !state->resizeRequested &&
+            gHostCallback) {
+            state->resizeRequested = true;
+            SetWindowPos(state->editorWindow, nullptr, 0, 0, 400, 220,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            return gHostCallback(effect, AudioMasterSizeWindow,
+                                 400, 220, nullptr, 0.0f);
+        }
+        return 1;
     case EffEditClose:
         if (state && state->editorWindow) {
             DestroyWindow(state->editorWindow);

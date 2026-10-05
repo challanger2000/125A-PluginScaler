@@ -59,6 +59,9 @@ public:
                                       std::int32_t index,
                                       vst2abi::VstIntPtr value,
                                       float opt) noexcept;
+    using HostWindowResizeSink = bool (*)(void* context,
+                                         std::int32_t width,
+                                         std::int32_t height) noexcept;
 
     VST2PluginModule() = default;
     ~VST2PluginModule();
@@ -96,6 +99,17 @@ public:
                           std::int32_t index,
                           vst2abi::VstIntPtr value,
                           float opt) noexcept;
+    void setHostWindowResizeSink(HostWindowResizeSink sink,
+                                 void* context) noexcept {
+        hostWindowResizeSink_ = sink;
+        hostWindowResizeContext_ = context;
+    }
+    bool requestHostWindowResize(std::int32_t width,
+                                 std::int32_t height) noexcept {
+        return hostWindowResizeSink_
+            ? hostWindowResizeSink_(hostWindowResizeContext_, width, height)
+            : false;
+    }
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -134,6 +148,8 @@ private:
     vst2abi::VstTimeInfo timeInfo_{};
     HostCallbackSink hostCallbackSink_{nullptr};
     void* hostCallbackContext_{nullptr};
+    HostWindowResizeSink hostWindowResizeSink_{nullptr};
+    void* hostWindowResizeContext_{nullptr};
 };
 
 } // namespace pluginscaler::formats

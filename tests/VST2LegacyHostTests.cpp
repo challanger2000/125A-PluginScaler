@@ -59,15 +59,26 @@ int wmain(int argc, wchar_t** argv) {
 
     Sleep(100);
 
+    RECT resized{};
+    if (!GetClientRect(editorHost, &resized) ||
+        resized.right - resized.left != 400 ||
+        resized.bottom - resized.top != 220) {
+        std::cerr << "editor-resize=FAIL "
+                  << (resized.right - resized.left) << "x"
+                  << (resized.bottom - resized.top) << "\n";
+        return 8;
+    }
+    std::cout << "editor-resize=PASS\n";
+
     if (!host.closeEditor()) {
         std::cerr << "editor-close=FAIL\n";
-        return 8;
+        return 9;
     }
     std::cout << "editor-close=PASS\n";
 
     if (!host.closePlugin()) {
         std::cerr << "plugin-close=FAIL\n";
-        return 9;
+        return 10;
     }
     std::cout << "plugin-close=PASS\n";
 

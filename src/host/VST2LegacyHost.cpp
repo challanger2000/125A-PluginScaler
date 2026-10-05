@@ -33,7 +33,9 @@ bool registerWindowClasses() noexcept {
 
 } // namespace
 
-VST2LegacyHost::VST2LegacyHost() = default;
+VST2LegacyHost::VST2LegacyHost() {
+    module_.setHostWindowResizeSink(&VST2LegacyHost::hostResizeThunk, this);
+}
 
 VST2LegacyHost::~VST2LegacyHost() {
     stop();
@@ -307,6 +309,33 @@ bool VST2LegacyHost::closeEditor() noexcept {
 
 HWND VST2LegacyHost::editorHostWindow() const noexcept {
     return editorHost_;
+}
+
+bool VST2LegacyHost::hostResizeThunk(void* context,
+                                     std::int32_t width,
+                                     std::int32_t height) noexcept {
+    auto* self = static_cast<VST2LegacyHost*>(context);
+    return self ? self->resizeEditorHost(width, height) : false;
+}
+
+bool VST2LegacyHost::resizeEditorHost(std::int32_t width,
+                                      std::int32_t height) noexcept {
+    if (width <= 0 || height <= 0 || !ownerWindow_ || !editorHost_ ||
+        !IsWindow(ownerWindow_) || !IsWindow(editorHost_))
+        return false;
+
+    DWORD ownerThreadId = GetWindowThreadProcessId(ownerWindow_, nullptr);
+    if (ownerThreadId == 0 || GetCurrentThreadId() != ownerThreadId)
+        return false;
+
+    RECT frame{0, 0, width, height};
+    if (!AdjustWindowRectEx(&frame, WS_OVERLAPPEDWINDOW, FALSE, 0))
+        return false;
+
+    return SetWindowPos(editorHost_, nullptr, 0, 0,
+                        frame.right - frame.left,
+                        frame.bottom - frame.top,
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
 }
 
 bool VST2LegacyHost::processReplacing(float** inputs,

@@ -56,6 +56,12 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         // The helper owns a Win32 message loop and calls effEditIdle
         // periodically while the editor is open.
         return 1;
+    case AudioMasterSizeWindow:
+        return module &&
+               module->requestHostWindowResize(
+                   index, static_cast<std::int32_t>(value))
+            ? 1
+            : 0;
     case AudioMasterAutomate:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
