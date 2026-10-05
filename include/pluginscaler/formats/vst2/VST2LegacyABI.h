@@ -167,12 +167,20 @@ enum AudioMasterOpcode : VstInt32 {
     AudioMasterWantMidi = 6,
     AudioMasterGetTime = 7,
     AudioMasterProcessEvents = 8,
+    AudioMasterIOChanged = 13,
+    AudioMasterNeedIdle = 14,
+    AudioMasterSizeWindow = 15,
     AudioMasterGetSampleRate = 16,
     AudioMasterGetBlockSize = 17,
+    AudioMasterGetCurrentProcessLevel = 23,
+    AudioMasterGetAutomationState = 24,
     AudioMasterGetVendorString = 32,
     AudioMasterGetProductString = 33,
     AudioMasterGetVendorVersion = 34,
-    AudioMasterCanDo = 37
+    AudioMasterCanDo = 37,
+    AudioMasterUpdateDisplay = 42,
+    AudioMasterBeginEdit = 43,
+    AudioMasterEndEdit = 44
 };
 
 } // namespace pluginscaler::formats::vst2abi
