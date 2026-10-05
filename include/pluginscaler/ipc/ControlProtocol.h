@@ -18,7 +18,8 @@ enum class ControlCommand : std::uint16_t {
     CloseEditor = 7,
     CaptureEditor = 8,
     SendEditorMouse = 9,
-    SetMains = 10
+    SetMains = 10,
+    PullHostCallbacks = 11
 };
 
 #pragma pack(push, 1)
@@ -47,12 +48,20 @@ struct EditorMousePayload {
     std::int32_t y{0};
     std::uint32_t keyFlags{0};
 };
+
+struct HostCallbackPayload {
+    std::int32_t opcode{0};
+    std::int32_t index{0};
+    std::int64_t value{0};
+    float opt{0.0f};
+};
 #pragma pack(pop)
 
 static_assert(sizeof(EditorRectPayload) == 16);
 static_assert(sizeof(EditorOpenResult) == 16);
 static_assert(sizeof(EditorBitmapHeader) == 16);
 static_assert(sizeof(EditorMousePayload) == 16);
+static_assert(sizeof(HostCallbackPayload) == 20);
 
 enum class ControlStatus : std::uint32_t {
     Ok = 0,
