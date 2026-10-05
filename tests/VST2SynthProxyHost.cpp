@@ -47,6 +47,31 @@ int childCount(HWND parent) {
     return count;
 }
 
+struct FindClassContext {
+    const wchar_t* className{nullptr};
+    HWND found{nullptr};
+};
+
+BOOL CALLBACK findClassProc(HWND hwnd, LPARAM param) {
+    auto* ctx = reinterpret_cast<FindClassContext*>(param);
+    if (!ctx || !ctx->className)
+        return FALSE;
+
+    wchar_t className[128]{};
+    if (GetClassNameW(hwnd, className, static_cast<int>(std::size(className))) > 0 &&
+        std::wstring_view(className) == ctx->className) {
+        ctx->found = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+HWND findDescendantByClass(HWND parent, const wchar_t* className) {
+    FindClassContext ctx{className, nullptr};
+    EnumChildWindows(parent, findClassProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.found;
+}
+
 VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
                                VstIntPtr, void*, float) {
     switch (opcode) {
@@ -186,8 +211,8 @@ int wmain(int argc, wchar_t** argv) {
         Sleep(100);
 
         const int children = childCount(editorHost);
-        HWND surface = FindWindowExW(editorHost, nullptr,
-                                     L"125A_MockVST2SynthEditor", nullptr);
+        HWND surface = findDescendantByClass(
+            editorHost, L"125A_MockVST2SynthEditor");
 
         COLORREF pixel = CLR_INVALID;
         if (surface) {
