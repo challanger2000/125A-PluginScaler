@@ -141,6 +141,7 @@ struct ProxyInstance {
     std::uint32_t pendingMidiCount{0};
     std::vector<float> parameterValues;
     std::uint32_t parameterGeneration{0};
+    VstInt32 currentProgram{0};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -1259,6 +1260,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
 
     case EffSetProgram: {
+        if (value < 0 || value >= inst->manifest.numPrograms)
+            return 0;
+        inst->currentProgram = static_cast<VstInt32>(value);
         if (!startBridge(inst))
             return 0;
         VstIntPtr result = 0;
@@ -1269,16 +1273,20 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffGetProgram: {
-        if (!startBridge(inst))
-            return 0;
+        if (!inst->bridgeStarted)
+            return inst->currentProgram;
         VstIntPtr result = 0;
-        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
-            ? result : 0;
+        if (!legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result))
+            return inst->currentProgram;
+        inst->currentProgram = static_cast<VstInt32>(result);
+        return result;
     }
 
     case EffSetProgramName: {
-        if (!ptr || !startBridge(inst))
+        if (!ptr)
             return 0;
+        if (!inst->bridgeStarted)
+            return 1;
         char buffer[24]{};
         strncpy_s(buffer, static_cast<const char*>(ptr), _TRUNCATE);
         VstIntPtr result = 0;
@@ -1288,7 +1296,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffString2Parameter: {
-        if (!ptr || !startBridge(inst))
+        if (!ptr || !inst->bridgeStarted)
             return 0;
         char buffer[64]{};
         strncpy_s(buffer, static_cast<const char*>(ptr), _TRUNCATE);
@@ -1300,7 +1308,22 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffGetProgramName:
     case EffGetProgramNameIndexed: {
-        if (!ptr || !startBridge(inst))
+        if (!ptr)
+            return 0;
+        const VstInt32 programIndex =
+            opcode == EffGetProgramName ? inst->currentProgram : index;
+        if (programIndex >= 0 &&
+            programIndex < static_cast<VstInt32>(inst->manifest.programNames.size())) {
+            const auto& cached =
+                inst->manifest.programNames[static_cast<std::size_t>(programIndex)];
+            if (!cached.empty()) {
+                char buffer[24]{};
+                strncpy_s(buffer, cached.c_str(), _TRUNCATE);
+                std::memcpy(ptr, buffer, sizeof(buffer));
+                return 1;
+            }
+        }
+        if (!inst->bridgeStarted)
             return 0;
         char buffer[24]{};
         VstIntPtr result = 0;
@@ -1312,10 +1335,21 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return result;
     }
 
-    case EffGetParamLabel:
-    case EffGetParamDisplay:
-    case EffGetParamName: {
-        if (!ptr || !startBridge(inst))
+    case EffGetParamName:
+    case EffGetParamLabel: {
+        if (!ptr || index < 0 || index >= inst->manifest.numParams)
+            return 0;
+        const auto pos = static_cast<std::size_t>(index);
+        const auto& cached = opcode == EffGetParamName
+            ? inst->manifest.parameterNames[pos]
+            : inst->manifest.parameterLabels[pos];
+        if (!cached.empty()) {
+            char buffer[8]{};
+            strncpy_s(buffer, cached.c_str(), _TRUNCATE);
+            std::memcpy(ptr, buffer, sizeof(buffer));
+            return 1;
+        }
+        if (!inst->bridgeStarted)
             return 0;
         char buffer[8]{};
         VstIntPtr result = 0;
@@ -1327,29 +1361,59 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return result;
     }
 
-    case EffCanBeAutomated: {
-        if (!startBridge(inst))
+    case EffGetParamDisplay: {
+        if (!ptr || index < 0 || index >= inst->manifest.numParams)
             return 0;
+        if (!inst->bridgeStarted) {
+            char buffer[8]{};
+            const float current =
+                inst->parameterValues[static_cast<std::size_t>(index)];
+            _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, "%.3f",
+                        static_cast<double>(current));
+            std::memcpy(ptr, buffer, sizeof(buffer));
+            return 1;
+        }
+        char buffer[8]{};
         VstIntPtr result = 0;
-        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
-            ? result : 0;
+        if (!legacyDispatchCall(inst, opcode, index, value,
+                                buffer, sizeof(buffer), opt, result))
+            return 0;
+        std::memcpy(ptr, buffer, sizeof(buffer));
+        static_cast<char*>(ptr)[7] = '\0';
+        return result;
+    }
+
+    case EffCanBeAutomated: {
+        if (index < 0 || index >= inst->manifest.numParams)
+            return 0;
+        return inst->manifest.parameterAutomatable[static_cast<std::size_t>(index)]
+            ? 1 : 0;
     }
 
     case EffGetTailSize:
+        if (!inst->bridgeStarted)
+            return 0;
+        {
+            VstIntPtr result = 0;
+            return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+                ? result : 0;
+        }
+
     case EffBeginSetProgram:
     case EffEndSetProgram:
     case EffStartProcess:
     case EffStopProcess:
-    case EffSetProcessPrecision: {
-        if (!startBridge(inst))
-            return 0;
-        VstIntPtr result = 0;
-        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
-            ? result : 0;
-    }
+    case EffSetProcessPrecision:
+        if (!inst->bridgeStarted)
+            return 1;
+        {
+            VstIntPtr result = 0;
+            return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+                ? result : 0;
+        }
 
     case EffGetParameterProperties: {
-        if (!ptr || !startBridge(inst))
+        if (!ptr || !inst->bridgeStarted)
             return 0;
         VstParameterProperties properties{};
         VstIntPtr result = 0;
@@ -1378,7 +1442,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         // across a 32/64-bit boundary. Data-less vendor calls can be forwarded
         // generically; pointer-bearing calls must remain unsupported until a
         // concrete ABI is known.
-        if (ptr || !startBridge(inst))
+        if (ptr || !inst->bridgeStarted)
             return 0;
         VstIntPtr result = 0;
         return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
