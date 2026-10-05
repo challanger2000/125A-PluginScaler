@@ -104,6 +104,10 @@ struct SynthState {
     HWND editorWindow{nullptr};
     VstRect editorRect{0, 0, 180, 320};
     bool resizeRequested{false};
+    int beginSetProgramCount{0};
+    int endSetProgramCount{0};
+    int beginLoadBankCount{0};
+    int beginLoadProgramCount{0};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
@@ -182,15 +186,25 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         }
         return 0;
     case EffBeginSetProgram:
+        if (state) ++state->beginSetProgramCount;
+        return 1;
     case EffEndSetProgram:
+        if (state) ++state->endSetProgramCount;
+        return 1;
     case EffStartProcess:
     case EffStopProcess:
         return 1;
     case EffBeginLoadBank:
     case EffBeginLoadProgram:
-        if (ptr) {
+        if (ptr && state) {
             const auto* info = static_cast<const VstPatchChunkInfo*>(ptr);
-            return info->pluginUniqueID == effect->uniqueId ? 1 : -1;
+            if (info->pluginUniqueID != effect->uniqueId)
+                return -1;
+            if (opcode == EffBeginLoadBank)
+                ++state->beginLoadBankCount;
+            else
+                ++state->beginLoadProgramCount;
+            return 1;
         }
         return 0;
     case EffSetProcessPrecision:
@@ -198,7 +212,26 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffGetTailSize:
         return 1;
     case EffVendorSpecific:
-        return index == 0x125A && gTimeInfoVerified ? 1 : 0;
+        if (index == 0x125A)
+            return gTimeInfoVerified ? 1 : 0;
+        if (!state)
+            return 0;
+        if (index == 0x125B)
+            return state->beginSetProgramCount == 1 &&
+                   state->endSetProgramCount == 1 &&
+                   state->currentProgram == 2
+                ? 1 : 0;
+        if (index == 0x125C)
+            return state->beginLoadBankCount == 1 &&
+                   state->beginSetProgramCount == 2 &&
+                   state->endSetProgramCount == 2
+                ? 1 : 0;
+        if (index == 0x125D)
+            return state->beginLoadProgramCount == 1 &&
+                   state->beginSetProgramCount == 3 &&
+                   state->endSetProgramCount == 3
+                ? 1 : 0;
+        return 0;
     case EffSetSampleRate:
         if (state) state->sampleRate = opt;
         return 1;

@@ -58,23 +58,53 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "time-info=PASS\n";
 
+    (void)host.dispatchOnMainThread(
+        pluginscaler::formats::vst2abi::EffSetProgram, 0, 2);
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125B) != 1) {
+        std::cerr << "program-lifecycle=FAIL\n";
+        return 6;
+    }
+    std::cout << "program-lifecycle=PASS\n";
+
+    std::vector<std::uint8_t> chunk;
+    if (!host.getChunkOnMainThread(0, chunk) || chunk.empty() ||
+        !host.setChunkOnMainThread(0, chunk.data(), chunk.size()) ||
+        host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125C) != 1) {
+        std::cerr << "bank-chunk-lifecycle=FAIL\n";
+        return 7;
+    }
+    std::cout << "bank-chunk-lifecycle=PASS\n";
+
+    if (!host.setChunkOnMainThread(1, chunk.data(), chunk.size()) ||
+        host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125D) != 1) {
+        std::cerr << "program-chunk-lifecycle=FAIL\n";
+        return 8;
+    }
+    std::cout << "program-chunk-lifecycle=PASS\n";
+
     if (!host.openEditor(error)) {
         std::cerr << "editor-open=FAIL " << error << "\n";
-        return 6;
+        return 9;
     }
     std::cout << "editor-open=PASS\n";
 
     HWND editorHost = host.editorHostWindow();
     if (!editorHost || !IsWindow(editorHost)) {
         std::cerr << "editor-host=FAIL\n";
-        return 7;
+        return 10;
     }
     std::cout << "editor-host=PASS\n";
 
     HWND child = GetWindow(editorHost, GW_CHILD);
     if (!child || !IsWindow(child)) {
         std::cerr << "editor-child=FAIL\n";
-        return 8;
+        return 11;
     }
     std::cout << "editor-child=PASS\n";
 
@@ -87,19 +117,19 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << "editor-resize=FAIL "
                   << (resized.right - resized.left) << "x"
                   << (resized.bottom - resized.top) << "\n";
-        return 9;
+        return 12;
     }
     std::cout << "editor-resize=PASS\n";
 
     if (!host.closeEditor()) {
         std::cerr << "editor-close=FAIL\n";
-        return 10;
+        return 13;
     }
     std::cout << "editor-close=PASS\n";
 
     if (!host.closePlugin()) {
         std::cerr << "plugin-close=FAIL\n";
-        return 11;
+        return 14;
     }
     std::cout << "plugin-close=PASS\n";
 

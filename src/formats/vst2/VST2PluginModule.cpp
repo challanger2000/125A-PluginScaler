@@ -547,6 +547,21 @@ VstIntPtr VST2PluginModule::dispatch(std::int32_t opcode,
                                      float opt) noexcept {
     if (!effect_ || !effect_->dispatcher)
         return 0;
+
+    if (opcode == EffSetProgram) {
+        VstIntPtr ignored = 0;
+        (void)callDispatcherSafely(
+            effect_, EffBeginSetProgram, 0, 0, nullptr, 0.0f, &ignored);
+
+        VstIntPtr result = 0;
+        const bool ok = callDispatcherSafely(
+            effect_, EffSetProgram, index, value, ptr, opt, &result);
+
+        (void)callDispatcherSafely(
+            effect_, EffEndSetProgram, 0, 0, nullptr, 0.0f, &ignored);
+        return ok ? result : 0;
+    }
+
     VstIntPtr result = 0;
     if (!callDispatcherSafely(effect_, opcode, index, value, ptr, opt, &result))
         return 0;
@@ -575,11 +590,39 @@ bool VST2PluginModule::setChunk(std::int32_t index, const void* data,
     if (!effect_ || !effect_->dispatcher || !data || bytes == 0 ||
         bytes > static_cast<std::size_t>(INTPTR_MAX))
         return false;
+
+    VstPatchChunkInfo info{};
+    info.version = 1;
+    info.pluginUniqueID = effect_->uniqueId;
+    info.pluginVersion = effect_->version;
+    info.numElements = index != 0 ? 1 : effect_->numPrograms;
+
+    VstIntPtr beginLoadResult = 0;
+    const auto beginLoadOpcode =
+        index != 0 ? EffBeginLoadProgram : EffBeginLoadBank;
+    if (!callDispatcherSafely(effect_, beginLoadOpcode, 0, 0,
+                              &info, 0.0f, &beginLoadResult))
+        return false;
+
+    // VST2 uses a negative return as an explicit rejection. Zero must remain
+    // compatible with older plugins that simply do not implement this hint.
+    if (beginLoadResult < 0)
+        return false;
+
+    VstIntPtr ignored = 0;
+    (void)callDispatcherSafely(
+        effect_, EffBeginSetProgram, 0, 0, nullptr, 0.0f, &ignored);
+
     VstIntPtr result = 0;
-    return callDispatcherSafely(effect_, EffSetChunk, index,
-                                static_cast<VstIntPtr>(bytes),
-                                const_cast<void*>(data), 0.0f, &result) &&
-           result != 0;
+    const bool dispatched = callDispatcherSafely(
+        effect_, EffSetChunk, index,
+        static_cast<VstIntPtr>(bytes),
+        const_cast<void*>(data), 0.0f, &result);
+
+    (void)callDispatcherSafely(
+        effect_, EffEndSetProgram, 0, 0, nullptr, 0.0f, &ignored);
+
+    return dispatched && result != 0;
 }
 
 bool VST2PluginModule::editorRect(VstRect& rect) noexcept {
