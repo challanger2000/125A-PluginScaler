@@ -1224,12 +1224,22 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             ? result : 0;
     }
 
-    case EffSetProgramName:
+    case EffSetProgramName: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        char buffer[24]{};
+        strncpy_s(buffer, static_cast<const char*>(ptr), _TRUNCATE);
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value,
+                                  buffer, sizeof(buffer), opt, result)
+            ? result : 0;
+    }
+
     case EffString2Parameter: {
         if (!ptr || !startBridge(inst))
             return 0;
         char buffer[64]{};
-        strcpy_s(buffer, static_cast<const char*>(ptr));
+        strncpy_s(buffer, static_cast<const char*>(ptr), _TRUNCATE);
         VstIntPtr result = 0;
         return legacyDispatchCall(inst, opcode, index, value,
                                   buffer, sizeof(buffer), opt, result)
@@ -1237,24 +1247,86 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffGetProgramName:
-    case EffGetProgramNameIndexed:
-    case EffGetParamLabel:
-    case EffGetParamDisplay:
-    case EffGetParamName: {
+    case EffGetProgramNameIndexed: {
         if (!ptr || !startBridge(inst))
             return 0;
-        char buffer[64]{};
+        char buffer[24]{};
         VstIntPtr result = 0;
         if (!legacyDispatchCall(inst, opcode, index, value,
                                 buffer, sizeof(buffer), opt, result))
             return 0;
         std::memcpy(ptr, buffer, sizeof(buffer));
-        static_cast<char*>(ptr)[63] = '\0';
+        static_cast<char*>(ptr)[23] = '\0';
+        return result;
+    }
+
+    case EffGetParamLabel:
+    case EffGetParamDisplay:
+    case EffGetParamName: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        char buffer[8]{};
+        VstIntPtr result = 0;
+        if (!legacyDispatchCall(inst, opcode, index, value,
+                                buffer, sizeof(buffer), opt, result))
+            return 0;
+        std::memcpy(ptr, buffer, sizeof(buffer));
+        static_cast<char*>(ptr)[7] = '\0';
         return result;
     }
 
     case EffCanBeAutomated: {
         if (!startBridge(inst))
+            return 0;
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+            ? result : 0;
+    }
+
+    case EffGetTailSize:
+    case EffBeginSetProgram:
+    case EffEndSetProgram:
+    case EffStartProcess:
+    case EffStopProcess:
+    case EffSetProcessPrecision: {
+        if (!startBridge(inst))
+            return 0;
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+            ? result : 0;
+    }
+
+    case EffGetParameterProperties: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        VstParameterProperties properties{};
+        VstIntPtr result = 0;
+        if (!legacyDispatchCall(inst, opcode, index, value,
+                                &properties, sizeof(properties), opt, result))
+            return 0;
+        if (result)
+            std::memcpy(ptr, &properties, sizeof(properties));
+        return result;
+    }
+
+    case EffBeginLoadBank:
+    case EffBeginLoadProgram: {
+        if (!ptr || !startBridge(inst))
+            return 0;
+        VstPatchChunkInfo info{};
+        std::memcpy(&info, ptr, sizeof(info));
+        VstIntPtr result = 0;
+        return legacyDispatchCall(inst, opcode, index, value,
+                                  &info, sizeof(info), opt, result)
+            ? result : 0;
+    }
+
+    case EffVendorSpecific: {
+        // Pointer payload size is vendor-defined and cannot be inferred safely
+        // across a 32/64-bit boundary. Data-less vendor calls can be forwarded
+        // generically; pointer-bearing calls must remain unsupported until a
+        // concrete ABI is known.
+        if (ptr || !startBridge(inst))
             return 0;
         VstIntPtr result = 0;
         return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
