@@ -27,6 +27,22 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "plugin-open=PASS\n";
 
+    Sleep(160);
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x1261) != 1) {
+        std::cerr << "legacy-idle=FAIL\n";
+        return 4;
+    }
+    Sleep(100);
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x1261) != 1) {
+        std::cerr << "legacy-idle-stop=FAIL\n";
+        return 4;
+    }
+    std::cout << "legacy-idle=PASS\n";
+
     if (host.dispatchOnMainThread(
             pluginscaler::formats::vst2abi::EffVendorSpecific,
             0x125E) != 1) {

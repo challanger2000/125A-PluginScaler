@@ -80,8 +80,8 @@ void VST2LegacyHost::stop() noexcept {
 
     if (ownerWindow_ && IsWindow(ownerWindow_)) {
         (void)invokeMainThread([this] {
+            KillTimer(ownerWindow_, kEditorIdleTimer);
             if (editorOpen_.load(std::memory_order_acquire)) {
-                KillTimer(ownerWindow_, kEditorIdleTimer);
                 (void)module_.closeEditor();
                 editorOpen_.store(false, std::memory_order_release);
             }
@@ -118,9 +118,9 @@ bool VST2LegacyHost::openPlugin(const std::filesystem::path& path,
     std::string localError;
     if (!invokeMainThread([&] {
             processing_.store(false, std::memory_order_release);
+            KillTimer(ownerWindow_, kEditorIdleTimer);
 
             if (editorOpen_.load(std::memory_order_acquire)) {
-                KillTimer(ownerWindow_, kEditorIdleTimer);
                 (void)module_.closeEditor();
                 editorOpen_.store(false, std::memory_order_release);
             }
@@ -135,6 +135,8 @@ bool VST2LegacyHost::openPlugin(const std::filesystem::path& path,
             ok = module_.openForProcessing(path, sampleRate, blockSize, localError);
             pluginOpen_.store(ok, std::memory_order_release);
             processing_.store(ok, std::memory_order_release);
+            if (ok)
+                SetTimer(ownerWindow_, kEditorIdleTimer, kEditorIdleMs, nullptr);
         })) {
         error = "failed to marshal plugin open to VST2 owner thread";
         return false;
@@ -152,8 +154,8 @@ bool VST2LegacyHost::closePlugin() noexcept {
     processing_.store(false, std::memory_order_release);
     bool ok = true;
     if (!invokeMainThread([&] {
+            KillTimer(ownerWindow_, kEditorIdleTimer);
             if (editorOpen_.load(std::memory_order_acquire)) {
-                KillTimer(ownerWindow_, kEditorIdleTimer);
                 ok = module_.closeEditor() && ok;
                 editorOpen_.store(false, std::memory_order_release);
             }
@@ -276,9 +278,8 @@ bool VST2LegacyHost::openEditor(std::string& error) {
             ShowWindow(host, SW_SHOWNA);
             UpdateWindow(host);
 
-            // Conservative legacy behaviour: call effEditIdle from the same
-            // owner/GUI thread while the editor exists.
-            SetTimer(ownerWindow_, kEditorIdleTimer, kEditorIdleMs, nullptr);
+            // effEditIdle shares the existing owner-thread timer with the
+            // deprecated effIdle service.
             editorOpen_.store(true, std::memory_order_release);
             ok = true;
         }))
@@ -293,7 +294,6 @@ bool VST2LegacyHost::closeEditor() noexcept {
 
     bool ok = true;
     if (!invokeMainThread([&] {
-            KillTimer(ownerWindow_, kEditorIdleTimer);
             if (editorOpen_.load(std::memory_order_acquire))
                 ok = module_.closeEditor();
             editorOpen_.store(false, std::memory_order_release);
@@ -487,8 +487,11 @@ LRESULT CALLBACK VST2LegacyHost::hostWindowProc(
     }
 
     if (message == WM_TIMER && wParam == kEditorIdleTimer) {
-        if (self && self->editorOpen_.load(std::memory_order_acquire))
-            (void)self->module_.editorIdle();
+        if (self) {
+            (void)self->module_.serviceLegacyIdle();
+            if (self->editorOpen_.load(std::memory_order_acquire))
+                (void)self->module_.editorIdle();
+        }
         return 0;
     }
 

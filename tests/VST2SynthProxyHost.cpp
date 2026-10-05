@@ -313,6 +313,16 @@ int wmain(int argc, wchar_t** argv) {
     if (editorHost)
         DestroyWindow(editorHost);
 
+    if (ok) {
+        pumpMessagesFor(120);
+        const bool legacyIdleOk =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1261, 0, nullptr, 0.0f) == 1;
+        std::cout << "legacy-idle-proxy="
+                  << (legacyIdleOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && legacyIdleOk;
+    }
+
     if (ok)
         ok = effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f) != 0 &&
              effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f) != 0 &&

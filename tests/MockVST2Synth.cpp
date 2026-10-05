@@ -113,6 +113,7 @@ struct SynthState {
     int mainsOffCount{0};
     int startProcessCount{0};
     int stopProcessCount{0};
+    int legacyIdleCount{0};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
@@ -120,6 +121,9 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
     switch (opcode) {
     case EffOpen:
+        if (gHostCallback)
+            (void)gHostCallback(
+                effect, AudioMasterNeedIdle, 0, 0, nullptr, 0.0f);
         return 1;
     case EffClose:
         delete state;
@@ -219,11 +223,18 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return value == 0 ? 1 : 0;
     case EffGetTailSize:
         return 1;
+    case EffIdle:
+        if (!state)
+            return 0;
+        ++state->legacyIdleCount;
+        return state->legacyIdleCount < 3 ? 1 : 0;
     case EffVendorSpecific:
         if (index == 0x125A)
             return gTimeInfoVerified ? 1 : 0;
         if (index == 0x1260)
             return gRealtimeProcessLevelVerified ? 1 : 0;
+        if (index == 0x1261)
+            return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (!state)
             return 0;
         if (index == 0x125B)

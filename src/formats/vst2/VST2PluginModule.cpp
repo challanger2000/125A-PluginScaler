@@ -87,17 +87,19 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case AudioMasterCurrentId:
         return module ? static_cast<VstIntPtr>(module->uniqueId()) : 0;
     case AudioMasterIdle:
-        if (module)
-            (void)module->editorIdle();
+        // The plug-in is yielding to the host (for example during a modal
+        // editor loop). Never recurse into the plug-in dispatcher here.
         return 0;
     case AudioMasterWantMidi:
         if (module)
             module->noteWantMidiRequest();
         return 1;
     case AudioMasterNeedIdle:
-        // The helper owns a Win32 message loop and calls effEditIdle
-        // periodically while the editor is open.
-        return 1;
+        // Deprecated VST2 idle contract: schedule effIdle from the host owner
+        // thread until the plug-in returns 0. This is distinct from effEditIdle.
+        if (module)
+            module->requestLegacyIdle();
+        return module ? 1 : 0;
     case AudioMasterSizeWindow:
         return module &&
                module->requestHostWindowResize(
@@ -757,6 +759,25 @@ bool VST2PluginModule::editorIdle() noexcept {
     return ok;
 }
 
+bool VST2PluginModule::serviceLegacyIdle() noexcept {
+    if (!effect_ || !effect_->dispatcher)
+        return false;
+    if (!legacyIdleRequested_.load(std::memory_order_acquire))
+        return true;
+
+    if (legacyIdleActive_.test_and_set(std::memory_order_acquire))
+        return true;
+
+    VstIntPtr result = 0;
+    const bool ok = callDispatcherSafely(
+        effect_, EffIdle, 0, 0, nullptr, 0.0f, &result);
+    if (!ok || result == 0)
+        legacyIdleRequested_.store(false, std::memory_order_release);
+
+    legacyIdleActive_.clear(std::memory_order_release);
+    return ok;
+}
+
 std::int32_t VST2PluginModule::numParams() const noexcept {
     return effect_ ? effect_->numParams : 0;
 }
@@ -859,6 +880,8 @@ void VST2PluginModule::close() noexcept {
             effect, EffStopProcess, 0, 0, nullptr, 0.0f, &ignored);
     }
     processStarted_ = false;
+    legacyIdleRequested_.store(false, std::memory_order_release);
+    legacyIdleActive_.clear(std::memory_order_release);
 
     if (effect && mainsOn_ && effect->dispatcher)
         (void)callDispatcherSafely(

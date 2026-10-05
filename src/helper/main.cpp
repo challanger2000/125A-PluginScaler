@@ -1286,11 +1286,9 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             }
         }
 
-        SetTimer(hwnd, kEditorIdleTimer, 30, nullptr);
         return reinterpret_cast<LRESULT>(child);
     }
     case kEditorCloseMessage: {
-        KillTimer(hwnd, kEditorIdleTimer);
         {
             std::lock_guard<std::mutex> frameLock(g_gdiFrameMutex);
             g_gdiFramePixels.clear();
@@ -1354,19 +1352,17 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         return request->ok ? 1 : 0;
     }
     case WM_TIMER:
-        if (wp == kEditorIdleTimer && ctx->editor && IsWindow(ctx->editor)) {
-            // Never block the GUI thread behind the audio thread. Some legacy
-            // instruments can synchronously coordinate GUI/preset changes with
-            // their DSP. Waiting here while processReplacing holds moduleMutex
-            // can complete a GUI<->audio deadlock cycle during preset changes.
+        if (wp == kEditorIdleTimer) {
+            // Never block the GUI/owner thread behind audio/control work.
             std::unique_lock<std::mutex> lock(*ctx->moduleMutex, std::try_to_lock);
-            if (lock.owns_lock())
-                (void)ctx->module->editorIdle();
+            if (lock.owns_lock()) {
+                (void)ctx->module->serviceLegacyIdle();
+                if (ctx->editor && IsWindow(ctx->editor))
+                    (void)ctx->module->editorIdle();
+            }
 
-            // Direct/native editors repaint themselves from their own window
-            // procedure. Forcing a synchronous UpdateWindow every 30 ms adds
-            // needless re-entrancy while a preset is being switched.
-            if (ctx->gdiScalePercent > 0)
+            if (ctx->gdiScalePercent > 0 &&
+                ctx->editor && IsWindow(ctx->editor))
                 UpdateWindow(ctx->editor);
             return 0;
         }
@@ -1766,6 +1762,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
             L"125A PluginScaler Editor Surrogate",
             WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 32, 32,
             nullptr, nullptr, GetModuleHandleW(nullptr), &guiContext);
+        if (surrogate)
+            SetTimer(surrogate, kEditorIdleTimer, 30, nullptr);
         SetEvent(guiReady);
         if (!surrogate)
             return;

@@ -127,6 +127,10 @@ public:
     bool openEditor(void* parentWindow) noexcept;
     bool closeEditor() noexcept;
     bool editorIdle() noexcept;
+    bool serviceLegacyIdle() noexcept;
+    void requestLegacyIdle() noexcept {
+        legacyIdleRequested_.store(true, std::memory_order_release);
+    }
     std::int32_t numParams() const noexcept;
     std::int32_t numInputs() const noexcept;
     std::int32_t numOutputs() const noexcept;
@@ -147,6 +151,8 @@ private:
     bool wantsMidi_{false};
     std::string pluginDirectoryAnsi_;
     std::atomic<bool> editorOpen_{false};
+    std::atomic<bool> legacyIdleRequested_{false};
+    std::atomic_flag legacyIdleActive_ = ATOMIC_FLAG_INIT;
     std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
     vst2abi::VstTimeInfo timeInfoView_{};

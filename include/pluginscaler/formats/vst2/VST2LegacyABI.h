@@ -186,6 +186,7 @@ enum DispatcherOpcode : VstInt32 {
     EffVendorSpecific = 50,
     EffCanDo = 51,
     EffGetTailSize = 52,
+    EffIdle = 53,
     EffGetParameterProperties = 56,
     EffGetVstVersion = 58,
     EffBeginSetProgram = 67,
