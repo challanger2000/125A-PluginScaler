@@ -1755,7 +1755,9 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     auto& dst = midi[static_cast<std::size_t>(i)];
                     const auto& src = block->midiEvents[i];
                     dst.type = formats::vst2abi::kVstMidiType;
-                    dst.byteSize = sizeof(formats::vst2abi::VstMidiEvent);
+                    // VST2's historical MIDI-event ABI reports 24 here.
+                    // Several old instruments key off this exact convention.
+                    dst.byteSize = 24;
                     dst.deltaFrames = src.deltaFrames;
                     dst.flags = src.flags;
                     for (int b = 0; b < 4; ++b)
