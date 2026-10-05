@@ -1867,12 +1867,15 @@ int wmain(int argc, wchar_t** argv) {
     if (argc == 4 && std::wstring_view(argv[1]) == L"--write-vst2-manifest")
         return writeVst2Manifest(argv[2], argv[3]);
 
-    if (argc == 8 && std::wstring_view(argv[1]) == L"--serve-vst2-shm") {
+    if ((argc == 7 || argc == 8) &&
+        std::wstring_view(argv[1]) == L"--serve-vst2-shm") {
         DWORD parentPid = 0;
-        try {
-            parentPid = static_cast<DWORD>(std::stoul(argv[7]));
-        } catch (...) {
-            return 23;
+        if (argc == 8) {
+            try {
+                parentPid = static_cast<DWORD>(std::stoul(argv[7]));
+            } catch (...) {
+                return 23;
+            }
         }
         return runSharedVst2Server(argv[2], argv[3], argv[4], argv[5], argv[6],
                                    parentPid);
