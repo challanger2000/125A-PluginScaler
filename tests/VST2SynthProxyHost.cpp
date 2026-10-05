@@ -362,12 +362,16 @@ int wmain(int argc, wchar_t** argv) {
         ok = processSilence(effect, 64);
 
     const float gain = effect ? effect->getParameter(effect, 0) : 0.0f;
+    const bool automationOk = std::fabs(gain - 0.75f) < 0.00001f;
+    std::cout << "editor-automation="
+              << (automationOk ? "PASS" : "FAIL") << "\n";
+    ok = ok && automationOk;
+
     const float expectedAmplitude =
         (60.0f / 127.0f) * (100.0f / 127.0f) * gain;
 
     if (ok)
-        ok = std::fabs(gain - 0.5f) < 0.00001f &&
-             sendMidi(effect, 0x90, 60, 100, 7) &&
+        ok = sendMidi(effect, 0x90, 60, 100, 7) &&
              processNoteOnBlock(effect, 64, 7, expectedAmplitude);
     std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << "\n";
 

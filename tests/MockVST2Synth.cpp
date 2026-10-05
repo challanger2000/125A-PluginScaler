@@ -29,6 +29,8 @@ LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (x == 50 && y == 40) {
             gMappedClickReceived = true;
             gDragArmed = true;
+            if (gEffectForCallback && gEffectForCallback->setParameter)
+                gEffectForCallback->setParameter(gEffectForCallback, 0, 0.75f);
             if (gHostCallback && gEffectForCallback)
                 (void)gHostCallback(gEffectForCallback, AudioMasterAutomate,
                                     0, 0, nullptr, 0.75f);

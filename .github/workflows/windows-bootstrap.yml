@@ -184,6 +184,9 @@ jobs:
           if ($joined -notmatch "host-callback-forwarding=PASS") {
             throw "Host callback forwarding marker missing"
           }
+          if ($joined -notmatch "editor-automation=PASS") {
+            throw "Editor automation coherence marker missing"
+          }
           if ($joined -notmatch "synth-note-on=PASS") {
             throw "Synth note-on marker missing"
           }
@@ -283,6 +286,7 @@ jobs:
             "editor-close=PASS",
             "legacy-idle-proxy=PASS",
             "host-callback-forwarding=PASS",
+            "editor-automation=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
             "synth=PASS"
@@ -334,6 +338,7 @@ jobs:
             "editor-close=PASS",
             "legacy-idle-proxy=PASS",
             "host-callback-forwarding=PASS",
+            "editor-automation=PASS",
             "synth-note-on=PASS",
             "synth-note-off=PASS",
             "synth=PASS"
