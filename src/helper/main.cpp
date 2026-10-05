@@ -293,6 +293,11 @@ BOOL CALLBACK largestChildProc(HWND hwnd, LPARAM param) {
     if (!candidate || !IsWindow(hwnd))
         return TRUE;
 
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (processId != GetCurrentProcessId())
+        return TRUE;
+
     RECT rc{};
     if (!GetClientRect(hwnd, &rc))
         return TRUE;
@@ -1043,6 +1048,9 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     switch (msg) {
     case kEditorOpenMessage: {
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        HWND requestedParent = reinterpret_cast<HWND>(lp);
+        HWND editorParent =
+            requestedParent && IsWindow(requestedParent) ? requestedParent : hwnd;
         {
             std::lock_guard<std::mutex> frameLock(g_gdiFrameMutex);
             g_gdiFramePixels.clear();
@@ -1110,7 +1118,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             }
         }
 
-        const bool editorOpened = ctx->module->openEditor(hwnd);
+        const bool editorOpened = ctx->module->openEditor(editorParent);
 
         if (createHook)
             UnhookWindowsHookEx(createHook);
@@ -1121,7 +1129,7 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             return 0;
 
         EditorChildCandidate candidate{};
-        EnumChildWindows(hwnd, largestChildProc,
+        EnumChildWindows(editorParent, largestChildProc,
                          reinterpret_cast<LPARAM>(&candidate));
         HWND child = candidate.hwnd;
         if (!child || !IsWindow(child))
@@ -1131,11 +1139,13 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (GetClientRect(child, &rc)) {
             const int width = static_cast<int>((std::max)(1L, rc.right - rc.left));
             const int height = static_cast<int>((std::max)(1L, rc.bottom - rc.top));
-            SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (editorParent == hwnd) {
+                SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, width, height,
+                             SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                RedrawWindow(hwnd, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            }
             ShowWindow(child, SW_SHOWNA);
-            RedrawWindow(hwnd, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             UpdateWindow(child);
         }
 
@@ -1737,15 +1747,20 @@ int runSharedVst2Server(const std::filesystem::path& path,
             std::vector<std::uint8_t> reply;
 
             if (req.command == ipc::ControlCommand::OpenEditor) {
-                if (!payload.empty()) {
+                if (payload.size() != sizeof(ipc::EditorOpenRequest)) {
                     resp.status = ipc::ControlStatus::InvalidRequest;
                 } else {
+                    ipc::EditorOpenRequest openRequest{};
+                    std::memcpy(&openRequest, payload.data(), sizeof(openRequest));
                     guiContext.gdiScalePercent =
                         req.arg0 >= 100 && req.arg0 <= 400
                             ? static_cast<int>(req.arg0)
                             : 0;
+                    HWND requestedParent = reinterpret_cast<HWND>(
+                        static_cast<std::uintptr_t>(openRequest.hostParentWindow));
                     const LRESULT editorResult = SendMessageW(
-                        guiContext.surrogate, kEditorOpenMessage, 0, 0);
+                        guiContext.surrogate, kEditorOpenMessage, 0,
+                        reinterpret_cast<LPARAM>(requestedParent));
                     HWND editor = reinterpret_cast<HWND>(editorResult);
                     if (!editor || !IsWindow(editor)) {
                         resp.status = ipc::ControlStatus::PluginError;
