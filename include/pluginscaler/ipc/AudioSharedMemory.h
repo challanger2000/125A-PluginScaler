@@ -7,7 +7,7 @@ namespace pluginscaler::ipc {
 
 inline constexpr std::uint32_t kAudioSharedMagic = 0x41505341u; // "ASPA"
 inline constexpr std::uint32_t kAudioSharedVersion = 5;
-inline constexpr std::uint32_t kMaxParameters = 2048;
+inline constexpr std::uint32_t kMaxParameters = 4096;
 inline constexpr std::uint32_t kMaxMidiEvents = 256;
 inline constexpr std::uint32_t kMaxAudioChannels = 8;
 inline constexpr std::uint32_t kMaxAudioFrames = 2048;
