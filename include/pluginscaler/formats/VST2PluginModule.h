@@ -2,6 +2,7 @@
 
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -81,6 +82,10 @@ public:
     const vst2abi::VstTimeInfo* hostTimeInfo() const noexcept { return &timeInfo_; }
     double sampleRate() const noexcept { return sampleRate_; }
     std::int32_t blockSize() const noexcept { return blockSize_; }
+    std::int32_t uniqueId() const noexcept { return effect_ ? effect_->uniqueId : 0; }
+    const char* pluginDirectoryAnsi() const noexcept {
+        return pluginDirectoryAnsi_.empty() ? nullptr : pluginDirectoryAnsi_.c_str();
+    }
     void noteWantMidiRequest() noexcept { wantsMidi_ = true; }
     bool wantsMidi() const noexcept { return wantsMidi_; }
     void setHostCallbackSink(HostCallbackSink sink, void* context) noexcept {
@@ -123,6 +128,8 @@ private:
     double sampleRate_{48000.0};
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};
+    std::string pluginDirectoryAnsi_;
+    std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
     HostCallbackSink hostCallbackSink_{nullptr};
     void* hostCallbackContext_{nullptr};

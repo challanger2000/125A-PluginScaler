@@ -42,6 +42,12 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
     switch (opcode) {
     case AudioMasterVersion:
         return 2400;
+    case AudioMasterCurrentId:
+        return module ? static_cast<VstIntPtr>(module->uniqueId()) : 0;
+    case AudioMasterIdle:
+        if (module)
+            (void)module->editorIdle();
+        return 0;
     case AudioMasterWantMidi:
         if (module)
             module->noteWantMidiRequest();
@@ -86,6 +92,10 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return 1;
         }
         return 0;
+    case AudioMasterGetDirectory:
+        return module
+            ? reinterpret_cast<VstIntPtr>(module->pluginDirectoryAnsi())
+            : 0;
     case AudioMasterCanDo:
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
@@ -198,6 +208,20 @@ std::string win32Error(const char* prefix) {
     return std::string(prefix) + " (Win32=" + std::to_string(GetLastError()) + ")";
 }
 
+std::string wideToAnsi(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int bytes = WideCharToMultiByte(
+        CP_ACP, 0, text.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 1) return {};
+    std::string result(static_cast<std::size_t>(bytes), char{});
+    if (WideCharToMultiByte(
+            CP_ACP, 0, text.c_str(), -1, result.data(), bytes,
+            nullptr, nullptr) <= 0)
+        return {};
+    result.resize(static_cast<std::size_t>(bytes - 1));
+    return result;
+}
+
 } // namespace
 
 VST2PluginModule::~VST2PluginModule() {
@@ -212,6 +236,8 @@ bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::strin
         error = "empty plugin path";
         return false;
     }
+
+    pluginDirectoryAnsi_ = wideToAnsi(path.parent_path().wstring());
 
     HMODULE module = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!module) {
@@ -547,9 +573,11 @@ bool VST2PluginModule::editorRect(VstRect& rect) noexcept {
 
 bool VST2PluginModule::openEditor(void* parentWindow) noexcept {
     if (!effect_ || !effect_->dispatcher || !parentWindow) return false;
-    VstIntPtr result = 0;
-    return callDispatcherSafely(effect_, EffEditOpen, 0, 0, parentWindow, 0.0f, &result) &&
-           result != 0;
+
+    // Old VST2 editors may create their HWND successfully and still return 0.
+    VstIntPtr ignored = 0;
+    return callDispatcherSafely(effect_, EffEditOpen, 0, 0,
+                                parentWindow, 0.0f, &ignored);
 }
 
 bool VST2PluginModule::closeEditor() noexcept {
@@ -560,8 +588,15 @@ bool VST2PluginModule::closeEditor() noexcept {
 
 bool VST2PluginModule::editorIdle() noexcept {
     if (!effect_ || !effect_->dispatcher) return false;
+
+    if (editorIdleActive_.test_and_set(std::memory_order_acquire))
+        return true;
+
     VstIntPtr result = 0;
-    return callDispatcherSafely(effect_, EffEditIdle, 0, 0, nullptr, 0.0f, &result);
+    const bool ok = callDispatcherSafely(
+        effect_, EffEditIdle, 0, 0, nullptr, 0.0f, &result);
+    editorIdleActive_.clear(std::memory_order_release);
+    return ok;
 }
 
 std::int32_t VST2PluginModule::numParams() const noexcept {
@@ -671,6 +706,9 @@ void VST2PluginModule::close() noexcept {
         FreeLibrary(static_cast<HMODULE>(module_));
         module_ = nullptr;
     }
+
+    pluginDirectoryAnsi_.clear();
+    editorIdleActive_.clear(std::memory_order_release);
 }
 
 } // namespace pluginscaler::formats

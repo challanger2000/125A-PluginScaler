@@ -226,7 +226,9 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 WS_CHILD | WS_VISIBLE,
                 0, 0, 320, 180,
                 parent, nullptr, GetModuleHandleW(nullptr), nullptr);
-            return state->editorWindow ? 1 : 0;
+
+            // Legacy regression: editor exists although effEditOpen returns 0.
+            return 0;
         }
         return 0;
     case EffEditClose:

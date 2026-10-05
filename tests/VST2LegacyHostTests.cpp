@@ -50,17 +50,24 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "editor-host=PASS\n";
 
+    HWND child = GetWindow(editorHost, GW_CHILD);
+    if (!child || !IsWindow(child)) {
+        std::cerr << "editor-child=FAIL\n";
+        return 7;
+    }
+    std::cout << "editor-child=PASS\n";
+
     Sleep(100);
 
     if (!host.closeEditor()) {
         std::cerr << "editor-close=FAIL\n";
-        return 7;
+        return 8;
     }
     std::cout << "editor-close=PASS\n";
 
     if (!host.closePlugin()) {
         std::cerr << "plugin-close=FAIL\n";
-        return 8;
+        return 9;
     }
     std::cout << "plugin-close=PASS\n";
 
