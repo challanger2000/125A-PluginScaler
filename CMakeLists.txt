@@ -26,6 +26,7 @@ add_subdirectory(src/helper)
 add_subdirectory(src/proxy)
 add_subdirectory(src/formats/vst3)
 add_subdirectory(src/formats/vst2)
+add_subdirectory(src/host)
 
 if(PLUGINSCALER_BUILD_TESTS)
     enable_testing()
