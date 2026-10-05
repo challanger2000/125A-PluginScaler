@@ -1052,13 +1052,18 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         HWND requestedParent = reinterpret_cast<HWND>(lp);
         HWND editorParent = hwnd;
 
-        if (requestedParent && IsWindow(requestedParent)) {
+        if (requestedParent) {
+            // Cross-process legacy rule: never give the 32-bit plugin a
+            // foreign DAW HWND as its direct parent. Create a stable container
+            // owned by the helper process. The proxy may reparent only this
+            // container into the DAW after effEditOpen; the plugin's own HWND
+            // keeps the same parent for its entire lifetime.
             if (!ctx->editorHostContainer || !IsWindow(ctx->editorHostContainer)) {
                 ctx->editorHostContainer = CreateWindowExW(
                     0, L"125A_PluginScaler_EditorHost", L"",
                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     0, 0, 32, 32,
-                    requestedParent, nullptr, GetModuleHandleW(nullptr), nullptr);
+                    hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
             }
             if (!ctx->editorHostContainer || !IsWindow(ctx->editorHostContainer))
                 return 0;
