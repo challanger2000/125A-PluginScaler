@@ -28,6 +28,17 @@
 
 namespace {
 
+std::string hexEncode(std::string_view text) {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(text.size() * 2);
+    for (unsigned char c : text) {
+        out.push_back(digits[(c >> 4) & 0x0F]);
+        out.push_back(digits[c & 0x0F]);
+    }
+    return out;
+}
+
 struct HostCallbackPipeContext {
     HANDLE pipe{INVALID_HANDLE_VALUE};
     std::mutex mutex;
@@ -124,8 +135,21 @@ int writeVst2Manifest(const std::filesystem::path& path,
         << "receiveVstEvents=" << (result.receivesVstEvents ? 1 : 0) << "\n"
         << "receiveVstMidiEvent=" << (result.receivesVstMidiEvents ? 1 : 0) << "\n"
         << "wantMidi=" << (result.wantsMidi ? 1 : 0) << "\n";
-    for (std::size_t i = 0; i < result.parameterDefaults.size(); ++i)
+    for (std::size_t i = 0; i < result.parameterDefaults.size(); ++i) {
         out << "param." << i << "=" << result.parameterDefaults[i] << "\n";
+        if (i < result.parameterNames.size())
+            out << "paramName." << i << "="
+                << hexEncode(result.parameterNames[i]) << "\n";
+        if (i < result.parameterLabels.size())
+            out << "paramLabel." << i << "="
+                << hexEncode(result.parameterLabels[i]) << "\n";
+        if (i < result.parameterAutomatable.size())
+            out << "paramAutomatable." << i << "="
+                << (result.parameterAutomatable[i] ? 1 : 0) << "\n";
+    }
+    for (std::size_t i = 0; i < result.programNames.size(); ++i)
+        out << "programName." << i << "="
+            << hexEncode(result.programNames[i]) << "\n";
     return out ? 0 : 22;
 }
 
