@@ -1094,6 +1094,46 @@ bool ensureScalerSurfaceClass() {
     return true;
 }
 
+bool helperProcessExited(const ProxyInstance* inst) noexcept {
+    return inst && inst->helperProcess.hProcess &&
+           WaitForSingleObject(inst->helperProcess.hProcess, 0) == WAIT_OBJECT_0;
+}
+
+void discardDeadBridge(ProxyInstance* inst) noexcept {
+    if (!inst)
+        return;
+
+    inst->bridgeStarted = false;
+
+    if (inst->controlPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(inst->controlPipe);
+        inst->controlPipe = INVALID_HANDLE_VALUE;
+    }
+
+    inst->callbackStop.store(true, std::memory_order_release);
+    if (inst->callbackPipe != INVALID_HANDLE_VALUE) {
+        if (inst->callbackThread.joinable())
+            (void)CancelSynchronousIo(inst->callbackThread.native_handle());
+        CloseHandle(inst->callbackPipe);
+        inst->callbackPipe = INVALID_HANDLE_VALUE;
+    }
+    if (inst->callbackThread.joinable())
+        inst->callbackThread.join();
+
+    if (inst->helperProcess.hProcess)
+        CloseHandle(inst->helperProcess.hProcess);
+    if (inst->helperProcess.hThread)
+        CloseHandle(inst->helperProcess.hThread);
+    inst->helperProcess = {};
+
+    inst->channel.close();
+
+    inst->editorWindow = nullptr;
+    inst->editorSurrogate = nullptr;
+    inst->editorOpen = false;
+    inst->dragActive = false;
+}
+
 void stopBridge(ProxyInstance* inst) noexcept {
     if (!inst) return;
 
@@ -1172,7 +1212,11 @@ bool reconfigureBridge(ProxyInstance* inst) {
 
 bool startBridge(ProxyInstance* inst) {
     if (!inst) return false;
-    if (inst->bridgeStarted) return true;
+    if (inst->bridgeStarted) {
+        if (!helperProcessExited(inst))
+            return true;
+        discardDeadBridge(inst);
+    }
 
     const std::wstring& helper = inst->settings.helper;
     const std::wstring& target = inst->settings.target;
@@ -2074,10 +2118,34 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<std::uint32_t>(pluginscaler::ipc::AudioBlockState::InputReady),
         std::memory_order_release);
 
-    if (!inst->channel.signalInput() ||
-        !inst->channel.waitForOutput(std::chrono::milliseconds(1000))) {
-        // Keep queued MIDI on a failed bridge transaction. In particular, a
-        // Note-Off must not disappear merely because the helper was late.
+    if (!inst->channel.signalInput()) {
+        if (helperProcessExited(inst))
+            discardDeadBridge(inst);
+        zeroOutputs(effect, outputs, frames);
+        return;
+    }
+
+    HANDLE waitHandles[2]{
+        static_cast<HANDLE>(inst->channel.outputEventHandle()),
+        inst->helperProcess.hProcess
+    };
+    const DWORD waitResult =
+        (waitHandles[0] && waitHandles[1])
+            ? WaitForMultipleObjects(2, waitHandles, FALSE, 1000)
+            : WAIT_FAILED;
+
+    if (waitResult == WAIT_OBJECT_0 + 1) {
+        // Helper crashed/exited. Tear down only dead resources here; do not
+        // perform a restart in this audio call.
+        discardDeadBridge(inst);
+        zeroOutputs(effect, outputs, frames);
+        return;
+    }
+
+    if (waitResult != WAIT_OBJECT_0) {
+        // Keep queued MIDI on a failed/late bridge transaction. In
+        // particular, a Note-Off must not disappear merely because the helper
+        // was late.
         zeroOutputs(effect, outputs, frames);
         return;
     }

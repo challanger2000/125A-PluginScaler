@@ -30,6 +30,10 @@ public:
     bool waitForInput(std::chrono::milliseconds timeout) noexcept;
     bool waitForOutput(std::chrono::milliseconds timeout) noexcept;
 
+    // Non-owning native synchronization handle for callers that must wait on
+    // the audio output event together with another process/event handle.
+    void* outputEventHandle() const noexcept { return outputEvent_; }
+
 private:
     void* mapping_{nullptr};
     void* inputEvent_{nullptr};

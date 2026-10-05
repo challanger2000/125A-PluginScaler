@@ -1,6 +1,7 @@
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cmath>
 #include <cstddef>
@@ -91,6 +92,62 @@ bool sendNoteOff(AEffect* effect, std::uint8_t note) {
 bool configure(AEffect* effect, float sampleRate, VstInt32 blockSize) {
     return effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, sampleRate) != 0 &&
            effect->dispatcher(effect, EffSetBlockSize, 0, blockSize, nullptr, 0.0f) != 0;
+}
+
+DWORD findHelperChildProcess() {
+    const DWORD parentPid = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return 0;
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    DWORD found = 0;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ParentProcessID == parentPid &&
+                _wcsicmp(entry.szExeFile, L"PluginScalerHelper-x86.exe") == 0) {
+                found = entry.th32ProcessID;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+bool killHelperChild() {
+    const DWORD pid = findHelperChildProcess();
+    if (!pid)
+        return false;
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (!process)
+        return false;
+    const bool terminated = TerminateProcess(process, 0x125A) != FALSE &&
+                            WaitForSingleObject(process, 2000) == WAIT_OBJECT_0;
+    CloseHandle(process);
+    return terminated;
+}
+
+bool processAndExpectSilence(AEffect* effect, VstInt32 frames,
+                             ULONGLONG& elapsedMs) {
+    std::vector<float> inL(static_cast<std::size_t>(frames), 0.25f);
+    std::vector<float> inR(static_cast<std::size_t>(frames), 0.5f);
+    std::vector<float> outL(static_cast<std::size_t>(frames), 1.0f);
+    std::vector<float> outR(static_cast<std::size_t>(frames), 1.0f);
+    float* inputs[2]{inL.data(), inR.data()};
+    float* outputs[2]{outL.data(), outR.data()};
+
+    const ULONGLONG start = GetTickCount64();
+    effect->processReplacing(effect, inputs, outputs, frames);
+    elapsedMs = GetTickCount64() - start;
+
+    for (VstInt32 i = 0; i < frames; ++i) {
+        if (outL[static_cast<std::size_t>(i)] != 0.0f ||
+            outR[static_cast<std::size_t>(i)] != 0.0f)
+            return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -223,6 +280,28 @@ int wmain(int argc, wchar_t** argv) {
                  processAndCheck(effect, 128, 0.45f, 0.25f);
         }
         std::cout << "state=" << (ok ? "PASS" : "FAIL") << "\n";
+    }
+
+    if (ok) {
+        const bool killed = killHelperChild();
+        ULONGLONG crashBlockMs = 0;
+        const bool silentFast =
+            killed && processAndExpectSilence(effect, 128, crashBlockMs) &&
+            crashBlockMs < 250;
+        std::cout << "helper-crash-detect-ms=" << crashBlockMs << "\n";
+        std::cout << "helper-crash-isolation="
+                  << (silentFast ? "PASS" : "FAIL") << "\n";
+        ok = ok && silentFast;
+    }
+
+    if (ok) {
+        const bool recovered =
+            processAndCheck(effect, 128, 0.48f, 0.25f) &&
+            effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 3 &&
+            std::fabs(effect->getParameter(effect, 0) - 0.25f) < 0.00001f;
+        std::cout << "helper-restart-state="
+                  << (recovered ? "PASS" : "FAIL") << "\n";
+        ok = ok && recovered;
     }
 
     if (ok)

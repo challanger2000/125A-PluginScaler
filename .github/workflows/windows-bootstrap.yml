@@ -134,6 +134,12 @@ jobs:
           if ($joined -notmatch "state=PASS") {
             throw "Proxy state/control bridge marker missing"
           }
+          if ($joined -notmatch "helper-crash-isolation=PASS") {
+            throw "Helper crash isolation marker missing"
+          }
+          if ($joined -notmatch "helper-restart-state=PASS") {
+            throw "Helper restart state marker missing"
+          }
           if ($joined -notmatch "torture=PASS") {
             throw "Proxy lifecycle torture marker missing"
           }
@@ -168,7 +174,14 @@ jobs:
             throw "No-chunk fallback bridge failed with exit code $LASTEXITCODE"
           }
           $joined = ($output | Out-String)
-          foreach ($marker in @("metadata=PASS","parameter=PASS","state=PASS","torture=PASS")) {
+          foreach ($marker in @(
+            "metadata=PASS",
+            "parameter=PASS",
+            "state=PASS",
+            "helper-crash-isolation=PASS",
+            "helper-restart-state=PASS",
+            "torture=PASS"
+          )) {
             if ($joined -notmatch [regex]::Escape($marker)) {
               throw "No-chunk fallback marker missing: $marker"
             }
