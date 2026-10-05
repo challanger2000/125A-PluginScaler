@@ -1416,8 +1416,11 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         std::uint32_t written = inst->pendingMidiCount;
         for (std::uint32_t i = 0; i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
             auto* ev = eventPtrs[i];
-            if (!ev || ev->type != kVstMidiType ||
-                ev->byteSize < static_cast<VstInt32>(sizeof(VstMidiEvent)))
+            // Steinberg's legacy VST2 MIDI convention uses byteSize=24 even
+            // though the full VstMidiEvent structure is larger. Rejecting
+            // anything smaller than sizeof(VstMidiEvent) drops valid MIDI
+            // from hosts such as Studio One before it can reach the bridge.
+            if (!ev || ev->type != kVstMidiType || ev->byteSize < 24)
                 continue;
             auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
             auto& dst = inst->pendingMidi[written++];
