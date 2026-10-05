@@ -205,9 +205,13 @@ int wmain(int argc, wchar_t** argv) {
 
         if (ok) {
             effect->setParameter(effect, 0, 0.75f);
+            ok = processAndCheck(effect, 128, 0.40f, 0.75f);
+        }
+
+        if (ok) {
             ok = effect->dispatcher(effect, EffSetProgram, 0, 5, nullptr, 0.0f) != 0 &&
                  effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 5 &&
-                 processAndCheck(effect, 128, 0.40f, 0.75f);
+                 std::fabs(effect->getParameter(effect, 0) - 0.75f) < 0.00001f;
         }
 
         if (ok) {
