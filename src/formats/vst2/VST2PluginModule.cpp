@@ -46,6 +46,18 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
         if (module)
             module->noteWantMidiRequest();
         return 1;
+    case AudioMasterNeedIdle:
+        // The helper owns a Win32 message loop and calls effEditIdle
+        // periodically while the editor is open.
+        return 1;
+    case AudioMasterUpdateDisplay:
+    case AudioMasterBeginEdit:
+    case AudioMasterEndEdit:
+        // These are normal GUI/program-change notifications. The x86 helper
+        // currently has no automation backchannel to the x64 host yet, but the
+        // callback itself must be acknowledged so legacy editors do not wait
+        // for a host response that never comes.
+        return 1;
     case AudioMasterGetTime:
         return module
             ? reinterpret_cast<VstIntPtr>(module->hostTimeInfo())
