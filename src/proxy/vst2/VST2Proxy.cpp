@@ -2,6 +2,7 @@
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 #include "pluginscaler/ipc/AudioSharedChannel.h"
 #include "pluginscaler/ipc/ControlProtocol.h"
+#include "pluginscaler/ipc/VST2CallbackProtocol.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <deque>
 #include <memory>
 #include <fstream>
 #include <sstream>
@@ -99,6 +101,12 @@ struct ProxyInstance {
     pluginscaler::ipc::AudioSharedChannel channel;
     PROCESS_INFORMATION helperProcess{};
     HANDLE controlPipe{INVALID_HANDLE_VALUE};
+    HANDLE callbackPipe{INVALID_HANDLE_VALUE};
+    std::thread callbackThread;
+    std::atomic<bool> callbackStop{false};
+    std::mutex callbackMutex;
+    std::deque<pluginscaler::ipc::VST2CallbackEvent> callbackQueue;
+    HWND callbackWindow{nullptr};
     std::vector<std::uint8_t> stateChunk;
     VstRect editorRect{};
     HWND editorWindow{nullptr};
@@ -132,6 +140,86 @@ struct ProxyInstance {
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
+
+inline constexpr UINT kHostCallbackMessage = WM_APP + 0x52A;
+
+LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* inst = reinterpret_cast<ProxyInstance*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        inst = static_cast<ProxyInstance*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(inst));
+    }
+
+    if (msg == kHostCallbackMessage && inst) {
+        std::deque<pluginscaler::ipc::VST2CallbackEvent> events;
+        {
+            std::lock_guard<std::mutex> lock(inst->callbackMutex);
+            events.swap(inst->callbackQueue);
+        }
+
+        for (const auto& event : events) {
+            if (!inst->host)
+                continue;
+
+            if (event.opcode == AudioMasterAutomate &&
+                event.index >= 0 &&
+                event.index < static_cast<VstInt32>(inst->parameterValues.size())) {
+                inst->parameterValues[static_cast<std::size_t>(event.index)] =
+                    std::clamp(event.opt, 0.0f, 1.0f);
+            }
+
+            (void)inst->host(&inst->effect,
+                             event.opcode,
+                             event.index,
+                             static_cast<VstIntPtr>(event.value),
+                             nullptr,
+                             event.opt);
+        }
+        return 0;
+    }
+
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool ensureHostCallbackWindow(ProxyInstance* inst) {
+    if (!inst)
+        return false;
+    if (inst->callbackWindow && IsWindow(inst->callbackWindow))
+        return true;
+
+    static const wchar_t* kClassName = L"125A_PluginScaler_HostCallback";
+    static bool classReady = false;
+    if (!classReady) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = hostCallbackWindowProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kClassName;
+        const ATOM atom = RegisterClassW(&wc);
+        if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return false;
+        classReady = true;
+    }
+
+    inst->callbackWindow = CreateWindowExW(
+        0, kClassName, L"", 0,
+        0, 0, 0, 0, HWND_MESSAGE, nullptr,
+        GetModuleHandleW(nullptr), inst);
+    if (!inst->callbackWindow)
+        return false;
+
+    bool haveQueued = false;
+    {
+        std::lock_guard<std::mutex> lock(inst->callbackMutex);
+        haveQueued = !inst->callbackQueue.empty();
+    }
+    if (haveQueued)
+        PostMessageW(inst->callbackWindow, kHostCallbackMessage, 0, 0);
+    return true;
+}
+
 
 std::wstring getenvWide(const wchar_t* name) {
     const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
@@ -352,6 +440,34 @@ bool writeExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
         done += sent;
     }
     return true;
+}
+
+void receiveHostCallbacks(ProxyInstance* inst, HANDLE pipe) {
+    if (!inst || pipe == INVALID_HANDLE_VALUE)
+        return;
+
+    const BOOL connected = ConnectNamedPipe(pipe, nullptr)
+        ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+    if (!connected)
+        return;
+
+    while (!inst->callbackStop.load(std::memory_order_acquire)) {
+        pluginscaler::ipc::VST2CallbackEvent event{};
+        if (!readExact(pipe, &event, sizeof(event)))
+            break;
+        if (event.magic != pluginscaler::ipc::kVst2CallbackMagic ||
+            event.version != pluginscaler::ipc::kVst2CallbackVersion)
+            continue;
+
+        {
+            std::lock_guard<std::mutex> lock(inst->callbackMutex);
+            inst->callbackQueue.push_back(event);
+        }
+
+        HWND window = inst->callbackWindow;
+        if (window && IsWindow(window))
+            PostMessageW(window, kHostCallbackMessage, 0, 0);
+    }
 }
 
 bool controlCall(ProxyInstance* inst,
@@ -891,6 +1007,14 @@ void stopBridge(ProxyInstance* inst) noexcept {
         if (inst->helperProcess.hThread)
             CloseHandle(inst->helperProcess.hThread);
 
+        inst->callbackStop.store(true, std::memory_order_release);
+        if (inst->callbackThread.joinable())
+            inst->callbackThread.join();
+        if (inst->callbackPipe != INVALID_HANDLE_VALUE) {
+            CloseHandle(inst->callbackPipe);
+            inst->callbackPipe = INVALID_HANDLE_VALUE;
+        }
+
         inst->helperProcess = {};
         inst->channel.close();
         inst->bridgeStarted = false;
@@ -914,9 +1038,22 @@ bool startBridge(ProxyInstance* inst) {
     const std::wstring inEvent = L"Local\\125A_PluginScaler_Proxy_In_" + suffix;
     const std::wstring outEvent = L"Local\\125A_PluginScaler_Proxy_Out_" + suffix;
     const std::wstring controlPipeName = L"\\\\.\\pipe\\125A_PluginScaler_Control_" + suffix;
+    const std::wstring callbackPipeName = L"\\\\.\\pipe\\125A_PluginScaler_Callback_" + suffix;
 
     if (!inst->channel.create(mapName, inEvent, outEvent))
         return false;
+
+    HANDLE callbackServer = CreateNamedPipeW(
+        callbackPipeName.c_str(),
+        PIPE_ACCESS_INBOUND,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+        1, 64 * 1024, 64 * 1024, 0, nullptr);
+    if (callbackServer == INVALID_HANDLE_VALUE) {
+        inst->channel.close();
+        return false;
+    }
+    inst->callbackPipe = callbackServer;
+    inst->callbackStop.store(false, std::memory_order_release);
 
     std::wstring command =
         quote(helper) + L" --serve-vst2-shm " +
@@ -925,7 +1062,8 @@ bool startBridge(ProxyInstance* inst) {
         quote(inEvent) + L" " +
         quote(outEvent) + L" " +
         quote(controlPipeName) + L" " +
-        std::to_wstring(GetCurrentProcessId());
+        std::to_wstring(GetCurrentProcessId()) + L" " +
+        quote(callbackPipeName);
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -933,9 +1071,15 @@ bool startBridge(ProxyInstance* inst) {
 
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE,
                         CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(inst->callbackPipe);
+        inst->callbackPipe = INVALID_HANDLE_VALUE;
         inst->channel.close();
         return false;
     }
+
+    inst->callbackThread = std::thread([inst, callbackServer] {
+        receiveHostCallbacks(inst, callbackServer);
+    });
 
     HANDLE control = INVALID_HANDLE_VALUE;
     for (int attempt = 0; attempt < 100 && control == INVALID_HANDLE_VALUE; ++attempt) {
@@ -953,6 +1097,14 @@ bool startBridge(ProxyInstance* inst) {
 
     if (control == INVALID_HANDLE_VALUE) {
         TerminateProcess(pi.hProcess, 2);
+        WaitForSingleObject(pi.hProcess, 1000);
+        inst->callbackStop.store(true, std::memory_order_release);
+        if (inst->callbackThread.joinable())
+            inst->callbackThread.join();
+        if (inst->callbackPipe != INVALID_HANDLE_VALUE) {
+            CloseHandle(inst->callbackPipe);
+            inst->callbackPipe = INVALID_HANDLE_VALUE;
+        }
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         inst->channel.close();
@@ -990,6 +1142,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     switch (opcode) {
     case EffOpen:
+        // Created on the host's control/UI thread. Automation notifications
+        // received from the x86 helper are marshalled back onto this thread.
+        (void)ensureHostCallbackWindow(inst);
         if (inst->host &&
             (inst->manifest.wantsMidi ||
              inst->manifest.receivesVstEvents ||
@@ -1002,6 +1157,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffClose:
         stopBridge(inst);
+        if (inst->callbackWindow && IsWindow(inst->callbackWindow))
+            DestroyWindow(inst->callbackWindow);
+        inst->callbackWindow = nullptr;
         delete inst;
         return 1;
 
