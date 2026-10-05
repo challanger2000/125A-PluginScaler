@@ -124,7 +124,30 @@ inline constexpr UINT kEditorOpenMessage = WM_APP + 0x125;
 inline constexpr UINT kEditorCloseMessage = WM_APP + 0x126;
 inline constexpr UINT kEditorShutdownMessage = WM_APP + 0x127;
 inline constexpr UINT kEditorCaptureMessage = WM_APP + 0x128;
+inline constexpr UINT kPluginMainThreadMessage = WM_APP + 0x129;
 inline constexpr UINT_PTR kEditorIdleTimer = 0x125A;
+
+enum class PluginMainThreadOp : std::uint32_t {
+    SetMains,
+    Reconfigure,
+    GetState,
+    SetState,
+    GetParameters,
+    GetEditorRect
+};
+
+struct PluginMainThreadRequest {
+    PluginMainThreadOp op{};
+    bool ok{false};
+    std::uint32_t arg0{0};
+    double sampleRate{0.0};
+    std::int32_t blockSize{0};
+    const std::uint8_t* input{nullptr};
+    std::size_t inputBytes{0};
+    std::vector<std::uint8_t>* bytes{nullptr};
+    std::vector<float>* floats{nullptr};
+    pluginscaler::formats::vst2abi::VstRect* rect{nullptr};
+};
 
 struct EditorCaptureRequest {
     std::vector<std::uint8_t>* bytes{nullptr};
@@ -1127,6 +1150,48 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         ShowWindow(hwnd, SW_HIDE);
         return ok ? 1 : 0;
     }
+    case kPluginMainThreadMessage: {
+        auto* request = reinterpret_cast<PluginMainThreadRequest*>(lp);
+        if (!request || !ctx->module || !ctx->moduleMutex)
+            return 0;
+
+        std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+        switch (request->op) {
+        case PluginMainThreadOp::SetMains:
+            request->ok = ctx->module->setMains(request->arg0 != 0);
+            break;
+        case PluginMainThreadOp::Reconfigure:
+            request->ok = ctx->module->reconfigureProcessing(
+                request->sampleRate, request->blockSize);
+            break;
+        case PluginMainThreadOp::GetState:
+            request->ok = request->bytes &&
+                ctx->module->getChunk(request->arg0, *request->bytes);
+            break;
+        case PluginMainThreadOp::SetState:
+            request->ok = request->input && request->inputBytes > 0 &&
+                ctx->module->setChunk(request->arg0, request->input,
+                                      request->inputBytes);
+            break;
+        case PluginMainThreadOp::GetParameters:
+            if (request->floats) {
+                const auto count = std::max<std::int32_t>(
+                    0, ctx->module->numParams());
+                request->floats->resize(static_cast<std::size_t>(count));
+                request->ok = true;
+                for (std::int32_t i = 0; i < count; ++i) {
+                    (*request->floats)[static_cast<std::size_t>(i)] =
+                        ctx->module->getParameter(i);
+                }
+            }
+            break;
+        case PluginMainThreadOp::GetEditorRect:
+            request->ok = request->rect &&
+                ctx->module->editorRect(*request->rect);
+            break;
+        }
+        return request->ok ? 1 : 0;
+    }
     case WM_TIMER:
         if (wp == kEditorIdleTimer && ctx->editor && IsWindow(ctx->editor)) {
             // Never block the GUI thread behind the audio thread. Some legacy
@@ -1374,6 +1439,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case kEditorShutdownMessage:
         KillTimer(hwnd, kEditorIdleTimer);
+        {
+            std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
+            if (ctx->editor && IsWindow(ctx->editor)) {
+                (void)ctx->module->closeEditor();
+                ctx->editor = nullptr;
+            }
+            ctx->module->close();
+        }
         DestroyWindow(hwnd);
         return 1;
     case WM_DESTROY:
@@ -1624,16 +1697,27 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     }
                 }
             } else if (req.command == ipc::ControlCommand::SetMains) {
-                std::lock_guard<std::mutex> lock(moduleMutex);
-                if (!module.setMains(req.arg0 != 0))
+                PluginMainThreadRequest call{};
+                call.op = PluginMainThreadOp::SetMains;
+                call.arg0 = req.arg0;
+                if (!SendMessageW(guiContext.surrogate,
+                                  kPluginMainThreadMessage, 0,
+                                  reinterpret_cast<LPARAM>(&call)) ||
+                    !call.ok)
                     resp.status = ipc::ControlStatus::PluginError;
             } else if (req.command == ipc::ControlCommand::Shutdown) {
                 controlStop.store(true, std::memory_order_release);
             } else {
-                std::lock_guard<std::mutex> lock(moduleMutex);
                 switch (req.command) {
                 case ipc::ControlCommand::GetState: {
-                    if (!module.getChunk(req.arg0, reply)) {
+                    PluginMainThreadRequest call{};
+                    call.op = PluginMainThreadOp::GetState;
+                    call.arg0 = req.arg0;
+                    call.bytes = &reply;
+                    if (!SendMessageW(guiContext.surrogate,
+                                      kPluginMainThreadMessage, 0,
+                                      reinterpret_cast<LPARAM>(&call)) ||
+                        !call.ok) {
                         resp.status = ipc::ControlStatus::PluginError;
                     } else {
                         persistedChunk = reply;
@@ -1641,26 +1725,50 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     }
                     break;
                 }
-                case ipc::ControlCommand::SetState:
+                case ipc::ControlCommand::SetState: {
+                    PluginMainThreadRequest call{};
+                    call.op = PluginMainThreadOp::SetState;
+                    call.arg0 = req.arg0;
+                    call.input = payload.data();
+                    call.inputBytes = payload.size();
                     if (payload.empty() ||
-                        !module.setChunk(req.arg0, payload.data(), payload.size())) {
+                        !SendMessageW(guiContext.surrogate,
+                                      kPluginMainThreadMessage, 0,
+                                      reinterpret_cast<LPARAM>(&call)) ||
+                        !call.ok) {
                         resp.status = ipc::ControlStatus::PluginError;
                     } else {
                         persistedChunk = payload;
                         persistedChunkIndex = req.arg0;
                     }
                     break;
+                }
                 case ipc::ControlCommand::GetParameters: {
-                    const auto count = std::max<std::int32_t>(0, module.numParams());
-                    reply.resize(static_cast<std::size_t>(count) * sizeof(float));
-                    auto* values = reinterpret_cast<float*>(reply.data());
-                    for (std::int32_t i = 0; i < count; ++i)
-                        values[i] = module.getParameter(i);
+                    std::vector<float> values;
+                    PluginMainThreadRequest call{};
+                    call.op = PluginMainThreadOp::GetParameters;
+                    call.floats = &values;
+                    if (!SendMessageW(guiContext.surrogate,
+                                      kPluginMainThreadMessage, 0,
+                                      reinterpret_cast<LPARAM>(&call)) ||
+                        !call.ok) {
+                        resp.status = ipc::ControlStatus::PluginError;
+                    } else {
+                        reply.resize(values.size() * sizeof(float));
+                        if (!values.empty())
+                            std::memcpy(reply.data(), values.data(), reply.size());
+                    }
                     break;
                 }
                 case ipc::ControlCommand::GetEditorRect: {
                     formats::vst2abi::VstRect rect{};
-                    if (!module.editorRect(rect)) {
+                    PluginMainThreadRequest call{};
+                    call.op = PluginMainThreadOp::GetEditorRect;
+                    call.rect = &rect;
+                    if (!SendMessageW(guiContext.surrogate,
+                                      kPluginMainThreadMessage, 0,
+                                      reinterpret_cast<LPARAM>(&call)) ||
+                        !call.ok) {
                         resp.status = ipc::ControlStatus::PluginError;
                     } else {
                         ipc::EditorRectPayload out{};
@@ -1741,15 +1849,28 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
         bool ok = true;
         {
-            std::lock_guard<std::mutex> lock(moduleMutex);
+            std::unique_lock<std::mutex> lock(moduleMutex);
 
             const auto requestedBlockSize = static_cast<std::int32_t>(block->header.frames);
             const auto requestedSampleRate = block->header.sampleRateHz;
             if (configuredBlockSize != requestedBlockSize ||
                 configuredSampleRate != requestedSampleRate) {
-                if (!module.reconfigureProcessing(
-                        static_cast<double>(requestedSampleRate),
-                        requestedBlockSize)) {
+                // effMainsChanged/effSetSampleRate/effSetBlockSize are legacy
+                // lifecycle dispatcher calls. Execute them on the helper's
+                // Win32 main thread, not on the realtime audio thread.
+                lock.unlock();
+                PluginMainThreadRequest call{};
+                call.op = PluginMainThreadOp::Reconfigure;
+                call.sampleRate = static_cast<double>(requestedSampleRate);
+                call.blockSize = requestedBlockSize;
+                const bool reconfigured =
+                    SendMessageW(guiContext.surrogate,
+                                 kPluginMainThreadMessage, 0,
+                                 reinterpret_cast<LPARAM>(&call)) != 0 &&
+                    call.ok;
+                lock.lock();
+
+                if (!reconfigured) {
                     std::cerr << "error=vst2-reconfigure\n";
                     ok = false;
                 } else {
@@ -1848,10 +1969,6 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (guiThread.joinable())
         guiThread.join();
 
-    {
-        std::lock_guard<std::mutex> lock(moduleMutex);
-        module.close();
-    }
     return resultCode;
 }
 
