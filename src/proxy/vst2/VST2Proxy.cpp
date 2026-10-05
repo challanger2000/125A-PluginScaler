@@ -133,21 +133,6 @@ struct ProxyInstance {
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
 
-void appendMidiDiagnostic(const std::wstring& line) {
-    std::filesystem::path dir = std::filesystem::current_path();
-    if (g_moduleHandle) {
-        std::wstring buffer(32768, L'\0');
-        const DWORD written = GetModuleFileNameW(
-            g_moduleHandle, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (written > 0 && written < buffer.size()) {
-            buffer.resize(written);
-            dir = std::filesystem::path(buffer).parent_path();
-        }
-    }
-    std::wofstream out(dir / L"PluginScaler-MidiDiagnostics.txt", std::ios::app);
-    if (out) out << line << L"\n";
-}
-
 std::wstring getenvWide(const wchar_t* name) {
     const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
     if (needed == 0) return {};
@@ -1416,10 +1401,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         std::uint32_t written = inst->pendingMidiCount;
         for (std::uint32_t i = 0; i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
             auto* ev = eventPtrs[i];
-            // Steinberg's legacy VST2 MIDI convention uses byteSize=24 even
-            // though the full VstMidiEvent structure is larger. Rejecting
-            // anything smaller than sizeof(VstMidiEvent) drops valid MIDI
-            // from hosts such as Studio One before it can reach the bridge.
+            // Studio One has been observed to deliver valid VST2 MIDI with a
+            // 24-byte payload size. Accept that host-side legacy form here,
+            // then normalize it before forwarding to the x86 plug-in.
             if (!ev || ev->type != kVstMidiType || ev->byteSize < 24)
                 continue;
             auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
@@ -1430,19 +1414,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 dst.data[b] = static_cast<std::uint8_t>(midi->midiData[b]);
         }
         inst->pendingMidiCount = written;
-        {
-            std::wstringstream ss;
-            ss << L"proxy effProcessEvents received=" << events->numEvents
-               << L" queued=" << written;
-            if (written > 0) {
-                const auto& m = inst->pendingMidi[written - 1];
-                ss << L" last=" << static_cast<unsigned>(m.data[0])
-                   << L"," << static_cast<unsigned>(m.data[1])
-                   << L"," << static_cast<unsigned>(m.data[2])
-                   << L" delta=" << m.deltaFrames;
-            }
-            appendMidiDiagnostic(ss.str());
-        }
         return 1;
     }
 
