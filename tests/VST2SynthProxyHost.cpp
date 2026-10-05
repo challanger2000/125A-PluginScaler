@@ -188,6 +188,15 @@ int wmain(int argc, wchar_t** argv) {
         (effect->flags & (1 << 8)) != 0;
     std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << "\n";
 
+    // Exercise the proxy in the real VST2 lifecycle order. EffOpen creates
+    // the host callback marshalling window on this UI thread before any
+    // editor/control operation can cause asynchronous plug-in callbacks.
+    if (ok)
+        ok = effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f) != 0 &&
+             effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f) != 0 &&
+             effect->dispatcher(effect, EffSetBlockSize, 0, 64, nullptr, 0.0f) != 0 &&
+             effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0;
+
     HWND editorHost = nullptr;
     if (ok) {
         editorHost = createHostWindow();
@@ -341,16 +350,13 @@ int wmain(int argc, wchar_t** argv) {
             callbackTrigger != 0 &&
             gIoChangedCount == 1 &&
             gUpdateDisplayCount == 1;
+        std::cout << "host-callback-trigger=" << callbackTrigger << "\n";
+        std::cout << "host-callback-counts="
+                  << gIoChangedCount << "," << gUpdateDisplayCount << "\n";
         std::cout << "host-callback-forwarding="
                   << (callbacksOk ? "PASS" : "FAIL") << "\n";
         ok = ok && callbacksOk;
     }
-
-    if (ok)
-        ok = effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f) != 0 &&
-             effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f) != 0 &&
-             effect->dispatcher(effect, EffSetBlockSize, 0, 64, nullptr, 0.0f) != 0 &&
-             effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0;
 
     if (ok)
         ok = processSilence(effect, 64);
