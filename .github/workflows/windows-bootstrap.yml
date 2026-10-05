@@ -271,7 +271,7 @@ jobs:
           $joined = ($output | Out-String)
           foreach ($marker in @(
             "synth-metadata=PASS",
-            "editor-direct=PASS",
+            "editor-no-reparent=PASS",
             "editor-native-mouse=PASS",
             "editor-native-drag=PASS",
             "editor-close=PASS",
@@ -320,7 +320,7 @@ jobs:
           $joined = ($output | Out-String)
           foreach ($marker in @(
             "synth-metadata=PASS",
-            "editor-direct=PASS",
+            "editor-no-reparent=PASS",
             "editor-native-mouse=PASS",
             "editor-native-drag=PASS",
             "editor-close=PASS",
