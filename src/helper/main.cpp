@@ -1802,8 +1802,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         resp.status = ipc::ControlStatus::PluginError;
                     } else {
                         ipc::EditorOpenResult result{};
+                        HWND editorHost = guiContext.editorHostContainer &&
+                                          IsWindow(guiContext.editorHostContainer)
+                            ? guiContext.editorHostContainer
+                            : guiContext.surrogate;
                         result.surrogateWindow = static_cast<std::uint64_t>(
-                            reinterpret_cast<std::uintptr_t>(guiContext.surrogate));
+                            reinterpret_cast<std::uintptr_t>(editorHost));
                         result.editorWindow = static_cast<std::uint64_t>(
                             reinterpret_cast<std::uintptr_t>(editor));
                         reply.resize(sizeof(result));
