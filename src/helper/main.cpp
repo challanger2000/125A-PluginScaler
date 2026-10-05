@@ -1154,26 +1154,34 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             }
         }
 
-        HHOOK createHook = nullptr;
-        if (ctx->gdiScalePercent > 100) {
-            // DPI-style virtualization for the legacy editor: establish the
-            // scaled parent geometry before effEditOpen and resize the direct
-            // child in the CBT create callback, before its first visible paint.
+        // A legacy VST2 editor must receive its final, usable host HWND at
+        // effEditOpen time. In particular after effEditClose the surrogate is
+        // hidden; recreating the plug-in child under that hidden 32x32 window
+        // makes creation-time GDI paints unreliable. Restore the host geometry
+        // and visibility before every editor-open cycle.
+        if (ctx->gdiScalePercent > 0) {
             pluginscaler::formats::vst2abi::VstRect nativeRect{};
             if (ctx->module->editorRect(nativeRect)) {
                 const int nativeWidth = nativeRect.right - nativeRect.left;
                 const int nativeHeight = nativeRect.bottom - nativeRect.top;
-                const int scaledWidth = MulDiv(
+                const int hostWidth = MulDiv(
                     nativeWidth, ctx->gdiScalePercent, 100);
-                const int scaledHeight = MulDiv(
+                const int hostHeight = MulDiv(
                     nativeHeight, ctx->gdiScalePercent, 100);
-                if (scaledWidth > 0 && scaledHeight > 0) {
-                    SetWindowPos(hwnd, HWND_BOTTOM, 0, 0,
-                                 scaledWidth, scaledHeight,
-                                 SWP_NOACTIVATE | SWP_NOZORDER);
+                if (hostWidth > 0 && hostHeight > 0) {
+                    SetWindowPos(
+                        hwnd, HWND_BOTTOM, 0, 0, hostWidth, hostHeight,
+                        SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+                    RedrawWindow(hwnd, nullptr, nullptr,
+                                 RDW_INVALIDATE | RDW_UPDATENOW);
                 }
             }
+        }
 
+        HHOOK createHook = nullptr;
+        if (ctx->gdiScalePercent > 100) {
+            // DPI-style virtualization: resize the direct child during
+            // creation, before its first visible paint.
             g_gdiCreateParent = hwnd;
             g_gdiCreateScalePercent = ctx->gdiScalePercent;
             createHook = SetWindowsHookExW(
