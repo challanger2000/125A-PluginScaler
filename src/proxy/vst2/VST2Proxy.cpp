@@ -1536,22 +1536,13 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (width <= 0 || height <= 0)
                 return 0;
 
-            // In Direct mode the helper now calls effEditOpen() with Studio
-            // One's actual parent HWND. Avoid the old open-under-surrogate then
-            // SetParent() sequence: legacy editors can cache the original
-            // parent/DC during effEditOpen and stop repainting after reparent.
-            if (GetParent(editor) != parent)
+            // Legacy-safe topology:
+            // Studio One -> helper-owned stable container -> plugin editor.
+            // The plugin receives the helper-owned container during effEditOpen
+            // and its own HWND is never reparented afterwards.
+            if (GetParent(editor) != surrogate ||
+                GetParent(surrogate) != parent)
                 return 0;
-
-            LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
-            style |= WS_CHILD | WS_VISIBLE;
-            style &= ~WS_POPUP;
-            SetWindowLongPtrW(editor, GWL_STYLE, style);
-
-            SetWindowPos(editor, HWND_TOP, 0, 0, width, height,
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            RedrawWindow(editor, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
             inst->editorSurface = nullptr;
             inst->editorMagnifier = nullptr;
