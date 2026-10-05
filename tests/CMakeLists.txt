@@ -85,3 +85,27 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     target_compile_features(PluginScalerVST2SynthProxyHost PRIVATE cxx_std_20)
     pluginscaler_enable_warnings(PluginScalerVST2SynthProxyHost)
 endif()
+
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_executable(PluginScalerVST2LegacyHostTests
+        VST2LegacyHostTests.cpp
+    )
+    target_include_directories(PluginScalerVST2LegacyHostTests PRIVATE
+        "${PROJECT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(PluginScalerVST2LegacyHostTests PRIVATE
+        PluginScalerVST2Host
+    )
+    target_compile_features(PluginScalerVST2LegacyHostTests PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2LegacyHostTests)
+
+    add_test(
+        NAME PluginScaler.VST2LegacyHost
+        COMMAND PluginScalerVST2LegacyHostTests $<TARGET_FILE:MockVST2Synth>
+    )
+    set_tests_properties(PluginScaler.VST2LegacyHost PROPERTIES
+        PASS_REGULAR_EXPRESSION "host-start=PASS;plugin-open=PASS;audio=PASS;editor-open=PASS;editor-host=PASS;editor-close=PASS;plugin-close=PASS;host-stop=PASS;legacy-host=PASS"
+        TIMEOUT 20
+    )
+endif()
