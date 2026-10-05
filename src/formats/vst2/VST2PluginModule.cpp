@@ -311,11 +311,53 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     result.wantsMidi = wantsMidi_;
 
     if (effect_->numParams > 0 && effect_->getParameter) {
-        result.parameterDefaults.resize(static_cast<std::size_t>(effect_->numParams));
-        for (VstInt32 i = 0; i < effect_->numParams; ++i)
-            result.parameterDefaults[static_cast<std::size_t>(i)] =
-                callGetParameterSafely(effect_, i);
+        const auto count = static_cast<std::size_t>(effect_->numParams);
+        result.parameterDefaults.resize(count);
+        result.parameterNames.resize(count);
+        result.parameterLabels.resize(count);
+        result.parameterAutomatable.resize(count, true);
+
+        for (VstInt32 i = 0; i < effect_->numParams; ++i) {
+            const auto pos = static_cast<std::size_t>(i);
+            result.parameterDefaults[pos] = callGetParameterSafely(effect_, i);
+
+            std::array<char, 8> name{};
+            VstIntPtr nameResult = 0;
+            if (callDispatcherSafely(effect_, EffGetParamName, i, 0,
+                                     name.data(), 0.0f, &nameResult)) {
+                name.back() = '\0';
+                result.parameterNames[pos] = name.data();
+            }
+
+            std::array<char, 8> label{};
+            VstIntPtr labelResult = 0;
+            if (callDispatcherSafely(effect_, EffGetParamLabel, i, 0,
+                                     label.data(), 0.0f, &labelResult)) {
+                label.back() = '\0';
+                result.parameterLabels[pos] = label.data();
+            }
+
+            VstIntPtr automateResult = 1;
+            if (callDispatcherSafely(effect_, EffCanBeAutomated, i, 0,
+                                     nullptr, 0.0f, &automateResult))
+                result.parameterAutomatable[pos] = automateResult != 0;
+        }
     }
+
+    if (effect_->numPrograms > 0) {
+        result.programNames.resize(static_cast<std::size_t>(effect_->numPrograms));
+        for (VstInt32 i = 0; i < effect_->numPrograms; ++i) {
+            std::array<char, 24> name{};
+            VstIntPtr programResult = 0;
+            if (callDispatcherSafely(effect_, EffGetProgramNameIndexed, i, 0,
+                                     name.data(), 0.0f, &programResult) &&
+                programResult != 0) {
+                name.back() = '\0';
+                result.programNames[static_cast<std::size_t>(i)] = name.data();
+            }
+        }
+    }
+
     result.effectName = queryString(effect_, EffGetEffectName);
     result.vendor = queryString(effect_, EffGetVendorString);
     result.product = queryString(effect_, EffGetProductString);
