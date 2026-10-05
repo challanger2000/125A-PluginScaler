@@ -49,6 +49,14 @@ struct VST2AudioProbeResult {
 
 class VST2PluginModule {
 public:
+    using HostCallbackForwarder = vst2abi::VstIntPtr (*)(
+        void* context,
+        std::int32_t opcode,
+        std::int32_t index,
+        vst2abi::VstIntPtr value,
+        void* ptr,
+        float opt) noexcept;
+
     VST2PluginModule() = default;
     ~VST2PluginModule();
 
@@ -73,6 +81,16 @@ public:
     std::int32_t blockSize() const noexcept { return blockSize_; }
     void noteWantMidiRequest() noexcept { wantsMidi_ = true; }
     bool wantsMidi() const noexcept { return wantsMidi_; }
+    void setHostCallbackForwarder(HostCallbackForwarder forwarder,
+                                  void* context) noexcept {
+        hostCallbackForwarder_ = forwarder;
+        hostCallbackContext_ = context;
+    }
+    vst2abi::VstIntPtr forwardHostCallback(std::int32_t opcode,
+                                           std::int32_t index,
+                                           vst2abi::VstIntPtr value,
+                                           void* ptr,
+                                           float opt) noexcept;
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -101,6 +119,8 @@ private:
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};
     vst2abi::VstTimeInfo timeInfo_{};
+    HostCallbackForwarder hostCallbackForwarder_{nullptr};
+    void* hostCallbackContext_{nullptr};
 };
 
 } // namespace pluginscaler::formats
