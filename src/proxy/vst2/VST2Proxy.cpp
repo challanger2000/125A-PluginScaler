@@ -58,6 +58,10 @@ struct ProxyManifest {
     bool receivesVstMidiEvents{false};
     bool wantsMidi{false};
     std::vector<float> parameterDefaults;
+    std::vector<std::string> parameterNames;
+    std::vector<std::string> parameterLabels;
+    std::vector<bool> parameterAutomatable;
+    std::vector<std::string> programNames;
     bool valid{false};
 };
 
@@ -220,6 +224,27 @@ bool ensureHostCallbackWindow(ProxyInstance* inst) {
     return true;
 }
 
+
+std::string hexDecode(std::string_view hex) {
+    if ((hex.size() & 1u) != 0)
+        return {};
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    std::string out;
+    out.reserve(hex.size() / 2);
+    for (std::size_t i = 0; i < hex.size(); i += 2) {
+        const int hi = nibble(hex[i]);
+        const int lo = nibble(hex[i + 1]);
+        if (hi < 0 || lo < 0)
+            return {};
+        out.push_back(static_cast<char>((hi << 4) | lo));
+    }
+    return out;
+}
 
 std::wstring getenvWide(const wchar_t* name) {
     const DWORD needed = GetEnvironmentVariableW(name, nullptr, 0);
@@ -390,6 +415,26 @@ ProxyManifest loadManifest(const std::wstring& manifestPath) {
                 if (m.parameterDefaults.size() <= index)
                     m.parameterDefaults.resize(index + 1, 0.0f);
                 m.parameterDefaults[index] = std::stof(value);
+            } else if (key.rfind("paramName.", 0) == 0) {
+                const auto index = static_cast<std::size_t>(std::stoul(key.substr(10)));
+                if (m.parameterNames.size() <= index)
+                    m.parameterNames.resize(index + 1);
+                m.parameterNames[index] = hexDecode(value);
+            } else if (key.rfind("paramLabel.", 0) == 0) {
+                const auto index = static_cast<std::size_t>(std::stoul(key.substr(11)));
+                if (m.parameterLabels.size() <= index)
+                    m.parameterLabels.resize(index + 1);
+                m.parameterLabels[index] = hexDecode(value);
+            } else if (key.rfind("paramAutomatable.", 0) == 0) {
+                const auto index = static_cast<std::size_t>(std::stoul(key.substr(17)));
+                if (m.parameterAutomatable.size() <= index)
+                    m.parameterAutomatable.resize(index + 1, true);
+                m.parameterAutomatable[index] = std::stol(value) != 0;
+            } else if (key.rfind("programName.", 0) == 0) {
+                const auto index = static_cast<std::size_t>(std::stoul(key.substr(12)));
+                if (m.programNames.size() <= index)
+                    m.programNames.resize(index + 1);
+                m.programNames[index] = hexDecode(value);
             }
         } catch (...) {
             return ProxyManifest{};
@@ -400,8 +445,15 @@ ProxyManifest loadManifest(const std::wstring& manifestPath) {
         m.numPrograms >= 0 && m.numParams >= 0 &&
         m.numInputs >= 0 && m.numOutputs >= 0 &&
         m.numParams <= static_cast<VstInt32>(pluginscaler::ipc::kMaxParameters);
-    if (m.valid)
-        m.parameterDefaults.resize(static_cast<std::size_t>(m.numParams), 0.0f);
+    if (m.valid) {
+        const auto paramCount = static_cast<std::size_t>(m.numParams);
+        const auto programCount = static_cast<std::size_t>(m.numPrograms);
+        m.parameterDefaults.resize(paramCount, 0.0f);
+        m.parameterNames.resize(paramCount);
+        m.parameterLabels.resize(paramCount);
+        m.parameterAutomatable.resize(paramCount, true);
+        m.programNames.resize(programCount);
+    }
     return m;
 }
 
