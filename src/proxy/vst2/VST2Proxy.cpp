@@ -1498,10 +1498,16 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffEditOpen: {
         if (!ptr || !startBridge(inst)) return 0;
+        pluginscaler::ipc::EditorOpenRequest openRequest{};
+        if (inst->settings.directEditor) {
+            openRequest.hostParentWindow = static_cast<std::uint64_t>(
+                reinterpret_cast<std::uintptr_t>(static_cast<HWND>(ptr)));
+        }
+
         std::vector<std::uint8_t> reply;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
                          inst->settings.gdiEditor ? 100 : 0,
-                         nullptr, 0, reply) ||
+                         &openRequest, sizeof(openRequest), reply) ||
             reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
             return 0;
 
@@ -1530,9 +1536,11 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (width <= 0 || height <= 0)
                 return 0;
 
-            SetLastError(0);
-            HWND previousParent = SetParent(editor, parent);
-            if (!previousParent && GetLastError() != 0)
+            // In Direct mode the helper now calls effEditOpen() with Studio
+            // One's actual parent HWND. Avoid the old open-under-surrogate then
+            // SetParent() sequence: legacy editors can cache the original
+            // parent/DC during effEditOpen and stop repainting after reparent.
+            if (GetParent(editor) != parent)
                 return 0;
 
             LONG_PTR style = GetWindowLongPtrW(editor, GWL_STYLE);
