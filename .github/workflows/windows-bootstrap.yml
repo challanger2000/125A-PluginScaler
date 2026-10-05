@@ -225,6 +225,12 @@ jobs:
           if ($joined -notmatch "editor-native-drag=PASS") {
             throw "Native editor drag marker missing"
           }
+          if ($joined -notmatch "editor-crash-cleanup=PASS") {
+            throw "Editor crash cleanup marker missing"
+          }
+          if ($joined -notmatch "editor-crash-reopen=PASS") {
+            throw "Editor crash reopen marker missing"
+          }
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
           }

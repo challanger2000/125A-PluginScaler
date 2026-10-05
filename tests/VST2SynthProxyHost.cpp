@@ -1,6 +1,7 @@
 #include "pluginscaler/formats/vst2/VST2LegacyABI.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cmath>
 #include <cstddef>
@@ -143,6 +144,44 @@ bool processNoteOffBlock(AEffect* effect, VstInt32 frames,
             return false;
     }
     return true;
+}
+
+DWORD findHelperChildProcess() {
+    const DWORD parentPid = GetCurrentProcessId();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return 0;
+
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    DWORD found = 0;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (entry.th32ParentProcessID == parentPid &&
+                _wcsicmp(entry.szExeFile, L"PluginScalerHelper-x86.exe") == 0) {
+                found = entry.th32ProcessID;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
+bool killHelperChild() {
+    const DWORD pid = findHelperChildProcess();
+    if (!pid)
+        return false;
+
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    if (!process)
+        return false;
+
+    const bool killed =
+        TerminateProcess(process, 0x125A) != FALSE &&
+        WaitForSingleObject(process, 2000) == WAIT_OBJECT_0;
+    CloseHandle(process);
+    return killed;
 }
 
 } // namespace
@@ -314,6 +353,58 @@ int wmain(int argc, wchar_t** argv) {
                 ok = ok && dragOk;
             }
         }
+    }
+
+    if (ok) {
+        const bool killed = killHelperChild();
+        const bool silentCrashBlock = killed && processSilence(effect, 64);
+        pumpMessagesFor(150);
+
+        HWND staleAnchor = FindWindowExW(
+            editorHost, nullptr, L"125A_PluginScaler_ScaledSurface", nullptr);
+        HWND staleSurrogate =
+            FindWindowW(L"125A_PluginScaler_EditorSurrogate", nullptr);
+
+        const bool cleanupOk =
+            silentCrashBlock &&
+            staleAnchor == nullptr &&
+            staleSurrogate == nullptr &&
+            childCount(editorHost) == 0;
+        std::cout << "editor-crash-cleanup="
+                  << (cleanupOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && cleanupOk;
+    }
+
+    if (ok) {
+        VstRect* reopenedRect = nullptr;
+        const auto rectResult =
+            effect->dispatcher(effect, EffEditGetRect, 0, 0,
+                               &reopenedRect, 0.0f);
+        const auto reopenResult =
+            (rectResult && reopenedRect)
+                ? effect->dispatcher(effect, EffEditOpen, 0, 0,
+                                     editorHost, 0.0f)
+                : 0;
+        pumpMessagesFor(200);
+
+        HWND reopenedAnchor = FindWindowExW(
+            editorHost, nullptr, L"125A_PluginScaler_ScaledSurface", nullptr);
+        HWND reopenedSurrogate =
+            FindWindowW(L"125A_PluginScaler_EditorSurrogate", nullptr);
+        HWND reopenedNative = reopenedSurrogate
+            ? FindWindowExW(reopenedSurrogate, nullptr,
+                            L"125A_MockVST2SynthEditor", nullptr)
+            : nullptr;
+
+        const bool reopenOk =
+            reopenResult != 0 &&
+            reopenedAnchor != nullptr &&
+            reopenedSurrogate != nullptr &&
+            reopenedNative != nullptr &&
+            childCount(editorHost) >= 1;
+        std::cout << "editor-crash-reopen="
+                  << (reopenOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && reopenOk;
     }
 
     if (ok) {

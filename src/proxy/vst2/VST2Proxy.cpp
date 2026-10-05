@@ -148,7 +148,10 @@ struct ProxyInstance {
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
 
+void cleanupLocalEditor(ProxyInstance* inst) noexcept;
+
 inline constexpr UINT kHostCallbackMessage = WM_APP + 0x52A;
+inline constexpr UINT kBridgeDeadMessage = WM_APP + 0x52B;
 
 LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* inst = reinterpret_cast<ProxyInstance*>(
@@ -158,6 +161,11 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         inst = static_cast<ProxyInstance*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(inst));
+    }
+
+    if (msg == kBridgeDeadMessage && inst) {
+        cleanupLocalEditor(inst);
+        return 0;
     }
 
     if (msg == kHostCallbackMessage && inst) {
@@ -895,6 +903,34 @@ void stopGraphicsCapture(ProxyInstance* inst) noexcept {
     }
 }
 
+void cleanupLocalEditor(ProxyInstance* inst) noexcept {
+    if (!inst)
+        return;
+
+    stopGraphicsCapture(inst);
+
+    if (inst->editorSurface && IsWindow(inst->editorSurface))
+        KillTimer(inst->editorSurface, 0x125A);
+
+    if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
+        DestroyWindow(inst->editorMagnifier);
+    inst->editorMagnifier = nullptr;
+
+    if (inst->editorSurface && IsWindow(inst->editorSurface))
+        DestroyWindow(inst->editorSurface);
+    inst->editorSurface = nullptr;
+
+    inst->editorBitmap.clear();
+    inst->editorBitmapWidth = 0;
+    inst->editorBitmapHeight = 0;
+    inst->editorBitmapStride = 0;
+    inst->gdiCaptureNotBefore = 0;
+    inst->editorWindow = nullptr;
+    inst->editorSurrogate = nullptr;
+    inst->editorOpen = false;
+    inst->dragActive = false;
+}
+
 bool ensureMagnifierRuntime() {
     static const bool initialized = MagInitialize() != FALSE;
     return initialized;
@@ -1128,10 +1164,16 @@ void discardDeadBridge(ProxyInstance* inst) noexcept {
 
     inst->channel.close();
 
-    inst->editorWindow = nullptr;
-    inst->editorSurrogate = nullptr;
-    inst->editorOpen = false;
-    inst->dragActive = false;
+    // Window/capture teardown belongs to the UI thread. The message-only
+    // callback window is created on the host's UI/control thread in EffOpen.
+    if (inst->callbackWindow && IsWindow(inst->callbackWindow)) {
+        PostMessageW(inst->callbackWindow, kBridgeDeadMessage, 0, 0);
+    } else {
+        inst->editorWindow = nullptr;
+        inst->editorSurrogate = nullptr;
+        inst->editorOpen = false;
+        inst->dragActive = false;
+    }
 }
 
 void stopBridge(ProxyInstance* inst) noexcept {
@@ -1883,29 +1925,22 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffEditClose: {
-        if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
+        const bool canNotifyHelper =
+            inst->bridgeStarted &&
+            inst->controlPipe != INVALID_HANDLE_VALUE;
+
+        // Always tear down the local x64 editor resources on the host UI
+        // thread, even if the x86 helper already crashed.
+        cleanupLocalEditor(inst);
+
+        if (!canNotifyHelper)
             return 1;
 
         // The helper owns the real editor for its entire lifetime.
         // No cross-process reparenting is performed on close.
-
-        stopGraphicsCapture(inst);
-        if (inst->editorSurface && IsWindow(inst->editorSurface))
-            KillTimer(inst->editorSurface, 0x125A);
-        if (inst->editorMagnifier && IsWindow(inst->editorMagnifier))
-            DestroyWindow(inst->editorMagnifier);
-        inst->editorMagnifier = nullptr;
-        if (inst->editorSurface && IsWindow(inst->editorSurface))
-            DestroyWindow(inst->editorSurface);
-        inst->editorSurface = nullptr;
-
         std::vector<std::uint8_t> ignored;
         const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::CloseEditor,
                                     0, nullptr, 0, ignored);
-        inst->editorWindow = nullptr;
-        inst->editorSurrogate = nullptr;
-        inst->dragActive = false;
-        inst->editorOpen = false;
         return ok ? 1 : 0;
     }
 
