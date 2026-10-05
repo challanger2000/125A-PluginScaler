@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 #include <cstddef>
-#include <mutex>
 
 namespace pluginscaler::formats {
 
@@ -33,13 +32,6 @@ struct VST2ProbeResult {
     bool wantsMidi{false};
     std::vector<float> parameterDefaults;
     std::string error;
-};
-
-struct VST2HostCallbackEvent {
-    std::int32_t opcode{0};
-    std::int32_t index{0};
-    std::intptr_t value{0};
-    float opt{0.0f};
 };
 
 struct VST2AudioProbeResult {
@@ -81,9 +73,6 @@ public:
     std::int32_t blockSize() const noexcept { return blockSize_; }
     void noteWantMidiRequest() noexcept { wantsMidi_ = true; }
     bool wantsMidi() const noexcept { return wantsMidi_; }
-    void enqueueHostCallback(std::int32_t opcode, std::int32_t index,
-                             std::intptr_t value, float opt) noexcept;
-    std::vector<VST2HostCallbackEvent> drainHostCallbacks();
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
     bool processMidiEvents(const vst2abi::VstMidiEvent* events,
                            std::int32_t eventCount) noexcept;
@@ -112,8 +101,6 @@ private:
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};
     vst2abi::VstTimeInfo timeInfo_{};
-    std::mutex hostCallbackMutex_;
-    std::vector<VST2HostCallbackEvent> hostCallbacks_;
 };
 
 } // namespace pluginscaler::formats
