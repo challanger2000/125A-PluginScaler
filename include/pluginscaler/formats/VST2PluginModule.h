@@ -140,6 +140,8 @@ private:
     vst2abi::AEffect* effect_{nullptr};
     bool effOpenCalled_{false};
     bool mainsOn_{false};
+    bool supportsStartStopProcess_{false};
+    bool processStarted_{false};
     double sampleRate_{48000.0};
     std::int32_t blockSize_{512};
     bool wantsMidi_{false};

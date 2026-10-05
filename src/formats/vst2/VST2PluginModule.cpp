@@ -8,31 +8,73 @@
 #include <cstddef>
 #include <string>
 #include <vector>
-#include <mutex>
-#include <unordered_map>
 
 namespace pluginscaler::formats {
 namespace {
 
 using namespace vst2abi;
 
-std::mutex g_hostModuleMutex;
-std::unordered_map<AEffect*, VST2PluginModule*> g_hostModules;
-thread_local VST2PluginModule* g_constructingModule = nullptr;
+constexpr std::size_t kHostModuleSlots = 128;
+constexpr std::uintptr_t kClaimedHostSlot = 1;
 
-VST2PluginModule* moduleForHostCallback(AEffect* effect) {
+struct HostModuleSlot {
+    std::atomic<std::uintptr_t> effectKey{0};
+    std::atomic<VST2PluginModule*> module{nullptr};
+};
+
+std::array<HostModuleSlot, kHostModuleSlots> g_hostModuleSlots{};
+thread_local VST2PluginModule* g_constructingModule = nullptr;
+thread_local bool g_inRealtimeProcess = false;
+
+bool registerHostModule(AEffect* effect, VST2PluginModule* module) noexcept {
+    if (!effect || !module)
+        return false;
+    const auto key = reinterpret_cast<std::uintptr_t>(effect);
+    for (auto& slot : g_hostModuleSlots) {
+        std::uintptr_t expected = 0;
+        if (!slot.effectKey.compare_exchange_strong(
+                expected, kClaimedHostSlot,
+                std::memory_order_acq_rel,
+                std::memory_order_relaxed))
+            continue;
+        slot.module.store(module, std::memory_order_relaxed);
+        slot.effectKey.store(key, std::memory_order_release);
+        return true;
+    }
+    return false;
+}
+
+void unregisterHostModule(AEffect* effect) noexcept {
+    if (!effect)
+        return;
+    const auto key = reinterpret_cast<std::uintptr_t>(effect);
+    for (auto& slot : g_hostModuleSlots) {
+        if (slot.effectKey.load(std::memory_order_acquire) != key)
+            continue;
+        std::uintptr_t expected = key;
+        if (slot.effectKey.compare_exchange_strong(
+                expected, kClaimedHostSlot,
+                std::memory_order_acq_rel,
+                std::memory_order_relaxed)) {
+            slot.module.store(nullptr, std::memory_order_release);
+            slot.effectKey.store(0, std::memory_order_release);
+        }
+        return;
+    }
+}
+
+VST2PluginModule* moduleForHostCallback(AEffect* effect) noexcept {
     if (!effect)
         return g_constructingModule;
 
-    {
-        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
-        const auto it = g_hostModules.find(effect);
-        if (it != g_hostModules.end())
-            return it->second;
+    const auto key = reinterpret_cast<std::uintptr_t>(effect);
+    for (auto& slot : g_hostModuleSlots) {
+        if (slot.effectKey.load(std::memory_order_acquire) == key)
+            return slot.module.load(std::memory_order_acquire);
     }
 
     // Some VST2 plugins call the host with their non-null AEffect from inside
-    // VSTPluginMain(), before we can register that pointer in g_hostModules.
+    // VSTPluginMain(), before registration can happen.
     return g_constructingModule;
 }
 
@@ -65,16 +107,12 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case AudioMasterAutomate:
     case AudioMasterBeginEdit:
     case AudioMasterEndEdit:
-        // GUI gestures are notifications. Queue them to the proxy and return
-        // immediately; never block the legacy plugin waiting for the DAW.
+    case AudioMasterIOChanged:
+    case AudioMasterUpdateDisplay:
+        // Notifications are forwarded asynchronously by the helper. The
+        // callback itself must never wait for the x64 proxy/DAW.
         if (module)
             module->emitHostCallback(opcode, index, value, opt);
-        return 1;
-    case AudioMasterUpdateDisplay:
-        // These are normal GUI/program-change notifications. The x86 helper
-        // currently has no automation backchannel to the x64 host yet, but the
-        // callback itself must be acknowledged so legacy editors do not wait
-        // for a host response that never comes.
         return 1;
     case AudioMasterGetTime:
         return module
@@ -85,6 +123,8 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return module ? static_cast<VstIntPtr>(module->sampleRate()) : 48000;
     case AudioMasterGetBlockSize:
         return module ? static_cast<VstIntPtr>(module->blockSize()) : 512;
+    case AudioMasterGetCurrentProcessLevel:
+        return g_inRealtimeProcess ? 2 : 1;
     case AudioMasterGetVendorVersion:
         return 1000;
     case AudioMasterGetVendorString:
@@ -108,7 +148,8 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "sizeWindow") == 0)
             return 1;
         return 0;
     default:
@@ -278,9 +319,10 @@ bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::strin
         return false;
     }
     effect_ = effect;
-    {
-        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
-        g_hostModules[effect_] = this;
+    if (!registerHostModule(effect_, this)) {
+        error = "VST2 host instance registry is full";
+        close();
+        return false;
     }
 
     if (effect->magic != kEffectMagic) {
@@ -301,6 +343,14 @@ bool VST2PluginModule::loadAndOpen(const std::filesystem::path& path, std::strin
     }
 
     effOpenCalled_ = true;
+
+    VstIntPtr vstVersion = 0;
+    if (callDispatcherSafely(
+            effect_, EffGetVstVersion, 0, 0, nullptr, 0.0f, &vstVersion))
+        supportsStartStopProcess_ = vstVersion >= 2400;
+    else
+        supportsStartStopProcess_ = false;
+
     return true;
 }
 
@@ -432,13 +482,12 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
         return false;
     }
 
-    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 1, nullptr, 0.0f)) {
-        error = "exception during mains-on";
+    if (!setMains(true)) {
+        error = "exception during VST2 processing start";
         close();
         return false;
     }
 
-    mainsOn_ = true;
     return true;
 }
 
@@ -447,10 +496,38 @@ bool VST2PluginModule::setMains(bool active) noexcept {
         return false;
     if (mainsOn_ == active)
         return true;
-    if (!callDispatcherSafely(effect_, EffMainsChanged, 0,
-                              active ? 1 : 0, nullptr, 0.0f))
+
+    if (active) {
+        if (!callDispatcherSafely(
+                effect_, EffMainsChanged, 0, 1, nullptr, 0.0f))
+            return false;
+        mainsOn_ = true;
+
+        if (supportsStartStopProcess_) {
+            VstIntPtr ignored = 0;
+            if (!callDispatcherSafely(
+                    effect_, EffStartProcess, 0, 0, nullptr, 0.0f, &ignored)) {
+                (void)callDispatcherSafely(
+                    effect_, EffMainsChanged, 0, 0, nullptr, 0.0f);
+                mainsOn_ = false;
+                return false;
+            }
+            processStarted_ = true;
+        }
+        return true;
+    }
+
+    if (processStarted_) {
+        VstIntPtr ignored = 0;
+        (void)callDispatcherSafely(
+            effect_, EffStopProcess, 0, 0, nullptr, 0.0f, &ignored);
+        processStarted_ = false;
+    }
+
+    if (!callDispatcherSafely(
+            effect_, EffMainsChanged, 0, 0, nullptr, 0.0f))
         return false;
-    mainsOn_ = active;
+    mainsOn_ = false;
     return true;
 }
 
@@ -497,9 +574,15 @@ const VstTimeInfo* VST2PluginModule::hostTimeInfoForRequest(
     return &timeInfoView_;
 }
 
-bool VST2PluginModule::processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept {
-    if (!effect_ || !mainsOn_ || frames <= 0) return false;
-    return callProcessReplacingSafely(effect_, inputs, outputs, frames);
+bool VST2PluginModule::processReplacing(float** inputs, float** outputs,
+                                        std::int32_t frames) noexcept {
+    if (!effect_ || !mainsOn_ || frames <= 0)
+        return false;
+    g_inRealtimeProcess = true;
+    const bool ok = callProcessReplacingSafely(
+        effect_, inputs, outputs, frames);
+    g_inRealtimeProcess = false;
+    return ok;
 }
 
 bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
@@ -770,18 +853,27 @@ void VST2PluginModule::close() noexcept {
             effect, EffEditClose, 0, 0, nullptr, 0.0f);
     }
 
-    if (effect) {
-        std::lock_guard<std::mutex> lock(g_hostModuleMutex);
-        g_hostModules.erase(effect);
+    if (effect && effect->dispatcher && processStarted_) {
+        VstIntPtr ignored = 0;
+        (void)callDispatcherSafely(
+            effect, EffStopProcess, 0, 0, nullptr, 0.0f, &ignored);
     }
+    processStarted_ = false;
 
     if (effect && mainsOn_ && effect->dispatcher)
-        (void)callDispatcherSafely(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
+        (void)callDispatcherSafely(
+            effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
     mainsOn_ = false;
+    supportsStartStopProcess_ = false;
 
     if (effect && effOpenCalled_ && effect->dispatcher)
         (void)callDispatcherSafely(effect, EffClose, 0, 0, nullptr, 0.0f);
     effOpenCalled_ = false;
+
+    // Keep the callback registration alive through stop/mains-off/effClose;
+    // legacy plugins may still call the host during those lifecycle calls.
+    if (effect)
+        unregisterHostModule(effect);
 
     if (module_) {
         FreeLibrary(static_cast<HMODULE>(module_));

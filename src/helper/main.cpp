@@ -39,9 +39,29 @@ std::string hexEncode(std::string_view text) {
     return out;
 }
 
+constexpr std::size_t kHostCallbackQueueCapacity = 256;
+static_assert((kHostCallbackQueueCapacity &
+               (kHostCallbackQueueCapacity - 1)) == 0);
+
+struct HostCallbackQueueCell {
+    std::atomic<std::size_t> sequence{0};
+    pluginscaler::ipc::VST2CallbackEvent event{};
+};
+
 struct HostCallbackPipeContext {
     HANDLE pipe{INVALID_HANDLE_VALUE};
-    std::mutex mutex;
+    HANDLE available{nullptr};
+    std::array<HostCallbackQueueCell, kHostCallbackQueueCapacity> cells{};
+    std::atomic<std::size_t> enqueuePos{0};
+    std::atomic<std::size_t> dequeuePos{0};
+    std::atomic<bool> accepting{false};
+    std::atomic<bool> stop{false};
+    std::thread writer;
+
+    HostCallbackPipeContext() {
+        for (std::size_t i = 0; i < cells.size(); ++i)
+            cells[i].sequence.store(i, std::memory_order_relaxed);
+    }
 };
 
 bool callbackWriteExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
@@ -56,13 +76,71 @@ bool callbackWriteExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
     return true;
 }
 
+bool enqueueHostCallback(
+    HostCallbackPipeContext& context,
+    const pluginscaler::ipc::VST2CallbackEvent& event) noexcept {
+    std::size_t pos = context.enqueuePos.load(std::memory_order_relaxed);
+    for (;;) {
+        auto& cell = context.cells[pos & (kHostCallbackQueueCapacity - 1)];
+        const std::size_t seq =
+            cell.sequence.load(std::memory_order_acquire);
+        const auto diff = static_cast<std::intptr_t>(seq) -
+                          static_cast<std::intptr_t>(pos);
+        if (diff == 0) {
+            if (context.enqueuePos.compare_exchange_weak(
+                    pos, pos + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                cell.event = event;
+                cell.sequence.store(pos + 1, std::memory_order_release);
+                if (context.available)
+                    ReleaseSemaphore(context.available, 1, nullptr);
+                return true;
+            }
+        } else if (diff < 0) {
+            return false;
+        } else {
+            pos = context.enqueuePos.load(std::memory_order_relaxed);
+        }
+    }
+}
+
+bool dequeueHostCallback(
+    HostCallbackPipeContext& context,
+    pluginscaler::ipc::VST2CallbackEvent& event) noexcept {
+    std::size_t pos = context.dequeuePos.load(std::memory_order_relaxed);
+    for (;;) {
+        auto& cell = context.cells[pos & (kHostCallbackQueueCapacity - 1)];
+        const std::size_t seq =
+            cell.sequence.load(std::memory_order_acquire);
+        const auto diff = static_cast<std::intptr_t>(seq) -
+                          static_cast<std::intptr_t>(pos + 1);
+        if (diff == 0) {
+            if (context.dequeuePos.compare_exchange_weak(
+                    pos, pos + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                event = cell.event;
+                cell.sequence.store(
+                    pos + kHostCallbackQueueCapacity,
+                    std::memory_order_release);
+                return true;
+            }
+        } else if (diff < 0) {
+            return false;
+        } else {
+            pos = context.dequeuePos.load(std::memory_order_relaxed);
+        }
+    }
+}
+
 void queueLegacyHostCallback(void* opaque,
                              std::int32_t opcode,
                              std::int32_t index,
                              pluginscaler::formats::vst2abi::VstIntPtr value,
                              float opt) noexcept {
     auto* context = static_cast<HostCallbackPipeContext*>(opaque);
-    if (!context || context->pipe == INVALID_HANDLE_VALUE)
+    if (!context || !context->accepting.load(std::memory_order_acquire))
         return;
 
     pluginscaler::ipc::VST2CallbackEvent event{};
@@ -71,11 +149,9 @@ void queueLegacyHostCallback(void* opaque,
     event.value = static_cast<std::int64_t>(value);
     event.opt = opt;
 
-    // One-way notification: never wait for the DAW to answer from inside the
-    // legacy plugin callback. This mirrors established hosts that postpone
-    // automation notifications during state/program changes.
-    std::lock_guard<std::mutex> lock(context->mutex);
-    (void)callbackWriteExact(context->pipe, &event, sizeof(event));
+    // Bounded lock-free handoff. A saturated notification queue drops the
+    // event rather than blocking a plug-in's realtime/audio callback.
+    (void)enqueueHostCallback(*context, event);
 }
 
 int runVst2Probe(const std::filesystem::path& path) {
@@ -1576,7 +1652,43 @@ int runSharedVst2Server(const std::filesystem::path& path,
             std::cerr << "error=callback-pipe-open\n";
             return 24;
         }
-        module.setHostCallbackSink(&queueLegacyHostCallback, &hostCallbackContext);
+
+        hostCallbackContext.available = CreateSemaphoreW(
+            nullptr, 0,
+            static_cast<LONG>(kHostCallbackQueueCapacity),
+            nullptr);
+        if (!hostCallbackContext.available) {
+            CloseHandle(hostCallbackContext.pipe);
+            hostCallbackContext.pipe = INVALID_HANDLE_VALUE;
+            std::cerr << "error=callback-queue-create\n";
+            return 25;
+        }
+
+        const HANDLE callbackPipe = hostCallbackContext.pipe;
+        hostCallbackContext.writer = std::thread(
+            [&hostCallbackContext, callbackPipe] {
+                for (;;) {
+                    WaitForSingleObject(hostCallbackContext.available, INFINITE);
+
+                    pluginscaler::ipc::VST2CallbackEvent event{};
+                    while (dequeueHostCallback(hostCallbackContext, event)) {
+                        if (!callbackWriteExact(
+                                callbackPipe, &event,
+                                static_cast<DWORD>(sizeof(event)))) {
+                            hostCallbackContext.stop.store(
+                                true, std::memory_order_release);
+                            break;
+                        }
+                    }
+
+                    if (hostCallbackContext.stop.load(
+                            std::memory_order_acquire))
+                        break;
+                }
+            });
+        hostCallbackContext.accepting.store(true, std::memory_order_release);
+        module.setHostCallbackSink(
+            &queueLegacyHostCallback, &hostCallbackContext);
     }
 
     std::mutex moduleMutex;
@@ -2139,9 +2251,22 @@ int runSharedVst2Server(const std::filesystem::path& path,
         guiThread.join();
 
     module.setHostCallbackSink(nullptr, nullptr);
+    hostCallbackContext.accepting.store(false, std::memory_order_release);
+    hostCallbackContext.stop.store(true, std::memory_order_release);
+
+    if (hostCallbackContext.writer.joinable())
+        (void)CancelSynchronousIo(hostCallbackContext.writer.native_handle());
     if (hostCallbackContext.pipe != INVALID_HANDLE_VALUE) {
         CloseHandle(hostCallbackContext.pipe);
         hostCallbackContext.pipe = INVALID_HANDLE_VALUE;
+    }
+    if (hostCallbackContext.available)
+        ReleaseSemaphore(hostCallbackContext.available, 1, nullptr);
+    if (hostCallbackContext.writer.joinable())
+        hostCallbackContext.writer.join();
+    if (hostCallbackContext.available) {
+        CloseHandle(hostCallbackContext.available);
+        hostCallbackContext.available = nullptr;
     }
 
     return resultCode;

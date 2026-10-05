@@ -27,6 +27,28 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "plugin-open=PASS\n";
 
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125E) != 1) {
+        std::cerr << "start-process-lifecycle=FAIL\n";
+        return 4;
+    }
+    std::cout << "start-process-lifecycle=PASS\n";
+
+    if (!host.reconfigure(44100.0, 128) ||
+        host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x125F) != 1) {
+        std::cerr << "reconfigure-lifecycle=FAIL\n";
+        return 5;
+    }
+    std::cout << "reconfigure-lifecycle=PASS\n";
+
+    if (!host.reconfigure(48000.0, 64)) {
+        std::cerr << "reconfigure-restore=FAIL\n";
+        return 6;
+    }
+
     pluginscaler::formats::vst2abi::VstTimeInfo timeInfo{};
     timeInfo.sampleRate = 48000.0;
     timeInfo.ppqPos = 12.5;
@@ -49,6 +71,14 @@ int wmain(int argc, wchar_t** argv) {
         return 4;
     }
     std::cout << "audio=PASS\n";
+
+    if (host.dispatchOnMainThread(
+            pluginscaler::formats::vst2abi::EffVendorSpecific,
+            0x1260) != 1) {
+        std::cerr << "process-level=FAIL\n";
+        return 7;
+    }
+    std::cout << "process-level=PASS\n";
 
     if (host.dispatchOnMainThread(
             pluginscaler::formats::vst2abi::EffVendorSpecific,

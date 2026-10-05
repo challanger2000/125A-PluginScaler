@@ -15,6 +15,7 @@ bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
 bool gTimeInfoVerified = false;
+bool gRealtimeProcessLevelVerified = false;
 AudioMasterCallback gHostCallback = nullptr;
 AEffect* gEffectForCallback = nullptr;
 
@@ -108,6 +109,10 @@ struct SynthState {
     int endSetProgramCount{0};
     int beginLoadBankCount{0};
     int beginLoadProgramCount{0};
+    int mainsOnCount{0};
+    int mainsOffCount{0};
+    int startProcessCount{0};
+    int stopProcessCount{0};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
@@ -192,7 +197,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (state) ++state->endSetProgramCount;
         return 1;
     case EffStartProcess:
+        if (state) ++state->startProcessCount;
+        return 1;
     case EffStopProcess:
+        if (state) ++state->stopProcessCount;
         return 1;
     case EffBeginLoadBank:
     case EffBeginLoadProgram:
@@ -214,6 +222,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffVendorSpecific:
         if (index == 0x125A)
             return gTimeInfoVerified ? 1 : 0;
+        if (index == 0x1260)
+            return gRealtimeProcessLevelVerified ? 1 : 0;
         if (!state)
             return 0;
         if (index == 0x125B)
@@ -230,6 +240,18 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return state->beginLoadProgramCount == 1 &&
                    state->beginSetProgramCount == 3 &&
                    state->endSetProgramCount == 3
+                ? 1 : 0;
+        if (index == 0x125E)
+            return state->mainsOnCount == 1 &&
+                   state->startProcessCount == 1 &&
+                   state->mainsOffCount == 0 &&
+                   state->stopProcessCount == 0
+                ? 1 : 0;
+        if (index == 0x125F)
+            return state->mainsOnCount == 2 &&
+                   state->startProcessCount == 2 &&
+                   state->mainsOffCount == 1 &&
+                   state->stopProcessCount == 1
                 ? 1 : 0;
         return 0;
     case EffSetSampleRate:
@@ -287,6 +309,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffMainsChanged:
         if (state) {
             state->mains = value != 0;
+            if (state->mains)
+                ++state->mainsOnCount;
+            else
+                ++state->mainsOffCount;
             if (!state->mains) {
                 state->active = false;
                 state->pendingEvent = false;
@@ -346,6 +372,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
     case EffGetVendorVersion:
         return 1000;
+    case EffGetVstVersion:
+        return 2400;
     default:
         return 0;
     }
@@ -366,6 +394,10 @@ void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt3
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
 
     if (gHostCallback && effect) {
+        gRealtimeProcessLevelVerified =
+            gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
+                          0, 0, nullptr, 0.0f) == 2;
+
         const VstIntPtr requested =
             VstPpqPosValid | VstTempoValid | VstSmpteValid;
         auto* info = reinterpret_cast<VstTimeInfo*>(
