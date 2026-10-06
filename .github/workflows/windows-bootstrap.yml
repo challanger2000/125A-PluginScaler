@@ -301,6 +301,9 @@ jobs:
           if ($joined -notmatch "plugin-automation-no-echo=PASS") {
             throw "Plugin automation echo regression marker missing"
           }
+          if ($joined -notmatch "host-parameter-no-redundant-resync=PASS") {
+            throw "Host parameter sparse-apply regression marker missing"
+          }
           if ($joined -notmatch "rt-contention-nonblocking=PASS") {
             throw "Realtime contention nonblocking marker missing"
           }
