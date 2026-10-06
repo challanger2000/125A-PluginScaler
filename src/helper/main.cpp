@@ -1390,6 +1390,20 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         if (!request || !ctx->module || !ctx->moduleMutex)
             return 0;
 
+        if (request->op == PluginMainThreadOp::GetParameters) {
+            if (request->floats) {
+                const auto count = std::max<std::int32_t>(
+                    0, ctx->module->numParams());
+                request->floats->resize(static_cast<std::size_t>(count));
+                request->ok = true;
+                for (std::int32_t i = 0; i < count; ++i) {
+                    (*request->floats)[static_cast<std::size_t>(i)] =
+                        ctx->module->getParameter(i);
+                }
+            }
+            return request->ok ? 1 : 0;
+        }
+
         std::lock_guard<std::mutex> lock(*ctx->moduleMutex);
         switch (request->op) {
         case PluginMainThreadOp::SetMains:
@@ -1407,18 +1421,6 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             request->ok = request->input && request->inputBytes > 0 &&
                 ctx->module->setChunk(request->arg0, request->input,
                                       request->inputBytes);
-            break;
-        case PluginMainThreadOp::GetParameters:
-            if (request->floats) {
-                const auto count = std::max<std::int32_t>(
-                    0, ctx->module->numParams());
-                request->floats->resize(static_cast<std::size_t>(count));
-                request->ok = true;
-                for (std::int32_t i = 0; i < count; ++i) {
-                    (*request->floats)[static_cast<std::size_t>(i)] =
-                        ctx->module->getParameter(i);
-                }
-            }
             break;
         case PluginMainThreadOp::GetEditorRect:
             request->ok = request->rect &&
@@ -1804,6 +1806,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
     }
 
     std::uint32_t appliedParameterGeneration = 0;
+    std::vector<float> appliedParameterValues;
 
     EditorGuiContext guiContext{};
     guiContext.module = &module;
@@ -1829,6 +1832,13 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 SetEvent(guiReady);
                 return;
             }
+            const auto parameterCount = std::max<std::int32_t>(
+                0, module.numParams());
+            appliedParameterValues.resize(
+                static_cast<std::size_t>(parameterCount));
+            for (std::int32_t i = 0; i < parameterCount; ++i)
+                appliedParameterValues[static_cast<std::size_t>(i)] =
+                    module.getParameter(i);
         }
 
         static const wchar_t* kClassName = L"125A_PluginScaler_EditorSurrogate";
@@ -2302,12 +2312,18 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
             if (!realtimeDeferred && ok && block->header.parameterCount > 0 &&
                 appliedParameterGeneration != block->header.parameterGeneration) {
-                for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
-                    if (!module.setParameter(static_cast<std::int32_t>(i),
-                                             block->parameterValues[i])) {
+                const auto count = (std::min)(
+                    static_cast<std::size_t>(block->header.parameterCount),
+                    appliedParameterValues.size());
+                for (std::size_t i = 0; i < count; ++i) {
+                    const float value = block->parameterValues[i];
+                    if (appliedParameterValues[i] == value)
+                        continue;
+                    if (!module.setParameter(static_cast<std::int32_t>(i), value)) {
                         ok = false;
                         break;
                     }
+                    appliedParameterValues[i] = value;
                 }
                 if (ok)
                     appliedParameterGeneration = block->header.parameterGeneration;
