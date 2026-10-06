@@ -137,9 +137,9 @@ struct ProxyInstance {
     bool editorOpen{false};
     ULONGLONG gdiCaptureNotBefore{0};
 
-    double sampleRate{48000.0};
-    VstInt32 blockSize{512};
-    bool mainsOn{false};
+    std::atomic<double> sampleRate{48000.0};
+    std::atomic<VstInt32> blockSize{512};
+    std::atomic<bool> mainsOn{false};
     bool bridgeStarted{false};
     std::atomic<bool> bridgeUsable{false};
     std::atomic<bool> recoveryRequested{false};
@@ -192,7 +192,7 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         discardDeadBridge(inst);
 
         const bool recovered =
-            !inst->mainsOn || startBridge(inst);
+            !inst->mainsOn.load(std::memory_order_acquire) || startBridge(inst);
         inst->recoveryRequested.store(false, std::memory_order_release);
         if (!recovered)
             inst->bridgeUsable.store(false, std::memory_order_release);
@@ -1352,8 +1352,8 @@ bool reconfigureBridge(ProxyInstance* inst) {
         return false;
 
     pluginscaler::ipc::ReconfigurePayload request{};
-    request.sampleRate = inst->sampleRate;
-    request.blockSize = inst->blockSize;
+    request.sampleRate = inst->sampleRate.load(std::memory_order_acquire);
+    request.blockSize = inst->blockSize.load(std::memory_order_acquire);
 
     std::vector<std::uint8_t> ignored;
     return controlCall(inst, pluginscaler::ipc::ControlCommand::Reconfigure,
@@ -1519,7 +1519,7 @@ bool startBridge(ProxyInstance* inst) {
         }
     }
 
-    if (inst->mainsOn) {
+    if (inst->mainsOn.load(std::memory_order_acquire)) {
         std::vector<std::uint8_t> ignored;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
                          1, nullptr, 0, ignored)) {
@@ -1771,20 +1771,25 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffSetSampleRate:
-        inst->sampleRate = opt > 0.0f ? static_cast<double>(opt) : 48000.0;
+        inst->sampleRate.store(
+            opt > 0.0f ? static_cast<double>(opt) : 48000.0,
+            std::memory_order_release);
         return !inst->bridgeStarted || reconfigureBridge(inst) ? 1 : 0;
 
     case EffSetBlockSize:
-        inst->blockSize = value > 0 ? static_cast<VstInt32>(value) : 512;
+        inst->blockSize.store(
+            value > 0 ? static_cast<VstInt32>(value) : 512,
+            std::memory_order_release);
         return !inst->bridgeStarted || reconfigureBridge(inst) ? 1 : 0;
 
     case EffMainsChanged: {
-        inst->mainsOn = value != 0;
+        const bool mainsOn = value != 0;
+        inst->mainsOn.store(mainsOn, std::memory_order_release);
 
         // Hosts are allowed to send mains-off before the plugin has ever
         // started processing. That must not launch the x86 helper merely to
         // tell a non-existent bridge to stop.
-        if (!inst->mainsOn && !inst->bridgeStarted)
+        if (!mainsOn && !inst->bridgeStarted)
             return 1;
 
         if (!startBridge(inst))
@@ -1792,7 +1797,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
         std::vector<std::uint8_t> ignored;
         return controlCall(inst, pluginscaler::ipc::ControlCommand::SetMains,
-                           inst->mainsOn ? 1 : 0, nullptr, 0, ignored) ? 1 : 0;
+                           mainsOn ? 1 : 0, nullptr, 0, ignored) ? 1 : 0;
     }
 
     case EffEditGetRect: {
@@ -2204,7 +2209,9 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
                                VstInt32 frames) {
     auto* inst = self(effect);
-    if (!inst || !inst->mainsOn || frames <= 0 ||
+    if (!inst ||
+        !inst->mainsOn.load(std::memory_order_acquire) ||
+        frames <= 0 ||
         frames > static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioFrames)) {
         zeroOutputs(effect, outputs, frames);
         return;
@@ -2235,7 +2242,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     block->header.outputChannels = outChannels;
     block->header.frames = static_cast<std::uint32_t>(frames);
     block->header.sampleRateHz =
-        static_cast<std::uint32_t>(std::llround(inst->sampleRate));
+        static_cast<std::uint32_t>(std::llround(
+            inst->sampleRate.load(std::memory_order_acquire)));
     block->header.sequence = ++inst->sequence;
     block->header.errorCode = 0;
 
@@ -2281,7 +2289,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
             block->hostTime.samplesToNextClock = ti->samplesToNextClock;
             block->hostTime.flags = ti->flags;
         } else {
-            block->hostTime.sampleRate = inst->sampleRate;
+            block->hostTime.sampleRate =
+                inst->sampleRate.load(std::memory_order_acquire);
         }
     }
 
