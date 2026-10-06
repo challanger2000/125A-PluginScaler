@@ -119,6 +119,7 @@ struct SynthState {
     int startProcessCount{0};
     int stopProcessCount{0};
     int legacyIdleCount{0};
+    int setParameterCalls{0};
     bool editorParentReadyAtOpen{false};
 };
 
@@ -247,6 +248,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                    gParameterProcessLevelVerified ? 1 : 0;
         if (index == 0x1269)
             return state && state->editorParentReadyAtOpen ? 1 : 0;
+        if (index == 0x126A)
+            return state ? state->setParameterCalls : -1;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -483,8 +486,10 @@ void __cdecl setParameter(AEffect* effect, VstInt32 index, float value) {
             gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
                           0, 0, nullptr, 0.0f) == 4;
     }
-    if (state && index == 0)
+    if (state && index == 0) {
+        ++state->setParameterCalls;
         state->gain = std::clamp(value, 0.0f, 1.0f);
+    }
 }
 
 float __cdecl getParameter(AEffect* effect, VstInt32 index) {

@@ -405,10 +405,27 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         if (ok && nativeEditor) {
+            const auto setParameterCallsBefore =
+                effect->dispatcher(effect, EffVendorSpecific,
+                                   0x126A, 0, nullptr, 0.0f);
+
             SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
                          MAKELPARAM(50, 40));
             SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
                          MAKELPARAM(50, 40));
+            pumpMessagesFor(120);
+            const bool silenceAfterGuiAutomation = processSilence(effect, 64);
+            const auto setParameterCallsAfter =
+                effect->dispatcher(effect, EffVendorSpecific,
+                                   0x126A, 0, nullptr, 0.0f);
+            const bool noAutomationEcho =
+                silenceAfterGuiAutomation &&
+                setParameterCallsBefore >= 0 &&
+                setParameterCallsAfter == setParameterCallsBefore + 1;
+            std::cout << "plugin-automation-no-echo="
+                      << (noAutomationEcho ? "PASS" : "FAIL") << "\n";
+            ok = ok && noAutomationEcho;
+
             RedrawWindow(nativeEditor, nullptr, nullptr,
                          RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 

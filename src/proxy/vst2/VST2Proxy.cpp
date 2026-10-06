@@ -160,6 +160,7 @@ void cleanupLocalEditor(ProxyInstance* inst) noexcept;
 void discardDeadBridge(ProxyInstance* inst) noexcept;
 bool startBridge(ProxyInstance* inst);
 void requestBridgeRecovery(ProxyInstance* inst) noexcept;
+void refreshParametersFromHelper(ProxyInstance* inst);
 
 inline constexpr UINT kHostCallbackMessage = WM_APP + 0x52A;
 inline constexpr UINT kBridgeRecoverMessage = WM_APP + 0x52C;
@@ -203,6 +204,14 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             events.swap(inst->callbackQueue);
         }
 
+        const bool havePluginAutomation =
+            std::any_of(events.begin(), events.end(),
+                [](const auto& event) {
+                    return event.opcode == AudioMasterAutomate;
+                });
+        if (havePluginAutomation)
+            refreshParametersFromHelper(inst);
+
         for (const auto& event : events) {
             if (!inst->host)
                 continue;
@@ -210,11 +219,13 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             if (event.opcode == AudioMasterAutomate &&
                 event.index >= 0 &&
                 event.index < static_cast<VstInt32>(inst->parameterValues.size())) {
+                // Plug-in GUI automation is already applied inside the x86
+                // plug-in. Mirror the value for host queries, but do not bump
+                // parameterGeneration: doing so would echo the whole cached
+                // parameter snapshot back into the plug-in on the next audio
+                // block and can overwrite a freshly selected legacy preset.
                 inst->parameterValues[static_cast<std::size_t>(event.index)] =
                     std::clamp(event.opt, 0.0f, 1.0f);
-                ++inst->parameterGeneration;
-                if (inst->parameterGeneration == 0)
-                    inst->parameterGeneration = 1;
             }
 
             if (event.opcode == AudioMasterIOChanged) {
@@ -696,9 +707,6 @@ void refreshParametersFromHelper(ProxyInstance* inst) {
     const auto* values = reinterpret_cast<const float*>(reply.data());
     for (std::size_t i = 0; i < copyCount; ++i)
         inst->parameterValues[i] = values[i];
-    ++inst->parameterGeneration;
-    if (inst->parameterGeneration == 0)
-        inst->parameterGeneration = 1;
 }
 
 bool captureEditorBitmap(ProxyInstance* inst) {

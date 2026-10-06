@@ -298,6 +298,9 @@ jobs:
           if ($joined -notmatch "editor-automation=PASS") {
             throw "Editor automation coherence marker missing"
           }
+          if ($joined -notmatch "plugin-automation-no-echo=PASS") {
+            throw "Plugin automation echo regression marker missing"
+          }
           if ($joined -notmatch "rt-contention-nonblocking=PASS") {
             throw "Realtime contention nonblocking marker missing"
           }
