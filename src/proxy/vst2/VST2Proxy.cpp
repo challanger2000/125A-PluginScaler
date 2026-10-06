@@ -160,6 +160,8 @@ struct ProxyInstance {
     std::atomic<std::size_t> midiEnqueuePos{0};
     std::atomic<std::size_t> midiDequeuePos{0};
     std::atomic<std::uint32_t> midiIngressDrops{0};
+    std::atomic<std::uint64_t> realtimeDeferredBlocks{0};
+    std::atomic<std::uint64_t> realtimeWatchdogTimeouts{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
     std::array<std::atomic<float>, pluginscaler::ipc::kMaxParameters> parameterValues{};
@@ -1841,6 +1843,20 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     }
 
     case EffVendorSpecific: {
+        // Test-only diagnostics for the in-tree legacy GDI mock. Keep this
+        // strictly scoped to its known unique ID so real plug-in vendor calls
+        // retain their original cross-bitness forwarding semantics.
+        if (inst->manifest.uniqueId == 0x47444931 && !ptr) {
+            if (index == 0x1271)
+                return static_cast<VstIntPtr>(
+                    inst->realtimeDeferredBlocks.load(
+                        std::memory_order_acquire));
+            if (index == 0x1272)
+                return static_cast<VstIntPtr>(
+                    inst->realtimeWatchdogTimeouts.load(
+                        std::memory_order_acquire));
+        }
+
         // Pointer payload size is vendor-defined and cannot be inferred safely
         // across a 32/64-bit boundary. Data-less vendor calls can be forwarded
         // generically; pointer-bearing calls must remain unsupported until a
@@ -2451,6 +2467,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     }
 
     if (waitResult != WAIT_OBJECT_0) {
+        inst->realtimeWatchdogTimeouts.fetch_add(
+            1, std::memory_order_relaxed);
         // A live-but-stalled helper is poisoned too: never reuse the shared
         // block while the old process may still be touching it.
         requestBridgeRecovery(inst);
@@ -2463,6 +2481,10 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
 
     if (state != pluginscaler::ipc::AudioBlockState::OutputReady ||
         block->header.errorCode != 0) {
+        if (block->header.errorCode == 104u) {
+            inst->realtimeDeferredBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+        }
         // The helper did not acknowledge this block, so retain its MIDI for a
         // later successful transaction instead of creating stuck notes.
         zeroOutputs(effect, outputs, frames);
