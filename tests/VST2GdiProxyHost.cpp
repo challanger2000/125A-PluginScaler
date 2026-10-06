@@ -310,8 +310,13 @@ bool runScale(EntryProc entry, int scale) {
                 const double p99Ratio =
                     baselineTiming.p99Us>0.0
                         ? stressTiming.p99Us/baselineTiming.p99Us : 0.0;
+                const bool realtimeTimingOk =
+                    baselineTiming.deadlineOverruns==0 &&
+                    stressTiming.deadlineOverruns==0 &&
+                    p99Ratio<=2.0;
                 std::cout<<"gdi-realtime-drag-"<<scale<<"="
-                         <<(realtimeSignal&&timingMeasured?"PASS":"FAIL")
+                         <<(realtimeSignal&&timingMeasured&&realtimeTimingOk
+                                ?"PASS":"FAIL")
                          <<" blocks="<<stressTimes.size()
                          <<" p95_us="<<stressTiming.p95Us
                          <<" p99_us="<<stressTiming.p99Us
@@ -319,7 +324,7 @@ bool runScale(EntryProc entry, int scale) {
                          <<" overruns="<<stressTiming.deadlineOverruns
                          <<" baseline_overruns="<<baselineTiming.deadlineOverruns
                          <<" p99_ratio="<<p99Ratio<<"\n";
-                ok=ok&&realtimeSignal&&timingMeasured;
+                ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk;
             }
 
             // Captured legacy drags must continue beyond the visible client
