@@ -484,32 +484,37 @@ jobs:
       - name: Package real VST2 test kit
         shell: pwsh
         run: |
+          [scriptblock]::Create((Get-Content "tools\Create-RealVST2-TestWrapper-GUI.ps1" -Raw)) | Out-Null
+
           $kit = Join-Path $PWD "PluginScaler-TestKit"
           New-Item -ItemType Directory -Force -Path $kit | Out-Null
 
           Copy-Item "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll" (Join-Path $kit "PluginScalerVST2Proxy.dll") -Force
           Copy-Item "build-x86\src\helper\Release\PluginScalerHelper-x86.exe" (Join-Path $kit "PluginScalerHelper-x86.exe") -Force
           Copy-Item "tools\Create-VST2Wrapper.ps1" (Join-Path $kit "Create-VST2Wrapper.ps1") -Force
+          Copy-Item "tools\Create-RealVST2-TestWrapper-GUI.ps1" (Join-Path $kit "Create-RealVST2-TestWrapper-GUI.ps1") -Force
+          Copy-Item "tools\START-REAL-VST2-TEST.vbs" (Join-Path $kit "START-REAL-VST2-TEST.vbs") -Force
           Copy-Item "docs\REAL-VST2-TEST.md" (Join-Path $kit "REAL-VST2-TEST.md") -Force
 
-          @"
-          Pro-53 quick setup
+          foreach ($required in @(
+            "PluginScalerVST2Proxy.dll",
+            "PluginScalerHelper-x86.exe",
+            "Create-VST2Wrapper.ps1",
+            "Create-RealVST2-TestWrapper-GUI.ps1",
+            "START-REAL-VST2-TEST.vbs",
+            "REAL-VST2-TEST.md"
+          )) {
+            if (-not (Test-Path (Join-Path $kit $required) -PathType Leaf)) {
+              throw "Real VST2 test kit file missing: $required"
+            }
+          }
 
-          Example:
-          powershell -ExecutionPolicy Bypass -File .\Create-VST2Wrapper.ps1 `
-            -TargetDll "C:\Music\VST\Instruments\Pro-53\Pro-53.dll" `
-            -ProxyDll ".\PluginScalerVST2Proxy.dll" `
-            -HelperExe ".\PluginScalerHelper-x86.exe" `
-            -OutputDir ".\Pro53-Test" `
-            -Scale 100 `
-            -EditorMode Direct `
-            -WrapperName "Pro-53-125A"
-          "@ | Set-Content (Join-Path $kit "PRO53-QUICKSTART.txt") -Encoding UTF8
+          Write-Host "real-vst2-field-kit=PASS"
 
       - name: Upload real VST2 test kit
         uses: actions/upload-artifact@v4
         with:
-          name: 125A-PluginScaler-Pro53-TestKit
+          name: 125A-PluginScaler-RealVST2-TestKit
           path: PluginScaler-TestKit
           if-no-files-found: error
           retention-days: 14
