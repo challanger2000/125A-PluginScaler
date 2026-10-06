@@ -267,7 +267,7 @@ bool runScale(EntryProc entry, int scale) {
             ok=ok && dragRedraw;
 
 
-            if(cycle==1 && ok) {
+            if(ok) {
                 const auto deferredBefore=effect->dispatcher(
                     effect,EffVendorSpecific,0x1271,0,nullptr,0.0f);
                 const auto watchdogBefore=effect->dispatcher(
@@ -278,6 +278,7 @@ bool runScale(EntryProc entry, int scale) {
                 std::atomic<bool> beginAudio{false};
                 std::atomic<bool> guiDone{false};
                 std::atomic<bool> stressSignal{true};
+                std::atomic<bool> stressTimedOut{false};
                 std::atomic<int> badAudioBlocks{0};
                 std::vector<double> stressTimes;
                 stressTimes.reserve(2048);
@@ -289,7 +290,8 @@ bool runScale(EntryProc entry, int scale) {
                     using Clock=std::chrono::steady_clock;
                     constexpr auto kBlockPeriod=
                         std::chrono::nanoseconds(1333333);
-                    auto next=Clock::now();
+                    const auto started=Clock::now();
+                    auto next=started;
 
                     while(!guiDone.load(std::memory_order_acquire) ||
                           stressTimes.size()<256) {
@@ -301,8 +303,10 @@ bool runScale(EntryProc entry, int scale) {
                                 1,std::memory_order_relaxed);
                         }
 
-                        if(stressTimes.size()>=1024)
+                        if(Clock::now()-started>std::chrono::seconds(10)) {
+                            stressTimedOut.store(true,std::memory_order_release);
                             break;
+                        }
 
                         std::this_thread::sleep_until(next);
                     }
@@ -353,6 +357,7 @@ bool runScale(EntryProc entry, int scale) {
                     stressTiming.deadlineOverruns==0 &&
                     p99Ratio<=2.0;
                 const bool transportClean =
+                    !stressTimedOut.load(std::memory_order_acquire) &&
                     badAudioBlocks.load(std::memory_order_relaxed)==0 &&
                     deferredDelta==0 &&
                     watchdogDelta==0;
@@ -369,6 +374,7 @@ bool runScale(EntryProc entry, int scale) {
                          <<" baseline_overruns="<<baselineTiming.deadlineOverruns
                          <<" p99_ratio="<<p99Ratio
                          <<" bad_blocks="<<badAudioBlocks.load(std::memory_order_relaxed)
+                         <<" stress_timeout="<<(stressTimedOut.load(std::memory_order_relaxed)?1:0)
                          <<" deferred104="<<deferredDelta
                          <<" watchdogs="<<watchdogDelta
                          <<" captures="<<captureDelta<<"\n";
