@@ -22,6 +22,7 @@ struct State {
     bool keyDown{false};
     bool knobArmed{false};
     int knobValue{50};
+    int minDragY{32767};
 };
 
 void paintLegacyDib(HWND hwnd, HDC dc, State* state) {
@@ -102,6 +103,7 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE:
         if (state->knobArmed && (wp & MK_LBUTTON)) {
             const int y = GET_Y_LPARAM(lp);
+            state->minDragY = (std::min)(state->minDragY, y);
             state->knobValue = std::clamp(155 - y, 0, 100);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
@@ -178,6 +180,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
         return 1;
     case EffGetVendorVersion:
         return 1000;
+    case EffVendorSpecific:
+        if (state && index == 0x1270)
+            return state->minDragY;
+        return 0;
     default:
         return 1;
     }
