@@ -752,6 +752,24 @@ int wmain(int argc, wchar_t** argv) {
              processNoteOnBlock(effect, 64, 7, expectedAmplitude);
     std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << "\n";
 
+    if (ok) {
+        const auto mainsTid = effect->dispatcher(
+            effect, EffVendorSpecific, 0x126C, 0, nullptr, 0.0f);
+        const auto midiTid = effect->dispatcher(
+            effect, EffVendorSpecific, 0x126D, 0, nullptr, 0.0f);
+        const auto processTid = effect->dispatcher(
+            effect, EffVendorSpecific, 0x126E, 0, nullptr, 0.0f);
+        const bool affinity =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x126B, 0, nullptr, 0.0f) == 1;
+        std::cout << "realtime-thread-ids mains=" << mainsTid
+                  << " midi=" << midiTid
+                  << " process=" << processTid << "\n";
+        std::cout << "realtime-thread-affinity="
+                  << (affinity ? "PASS" : "FAIL") << "\n";
+        ok = ok && affinity;
+    }
+
     const bool midiOutNoteOnOk =
         gPluginMidiOutputCount == 1 &&
         gPluginMidiDelta == 7 &&
