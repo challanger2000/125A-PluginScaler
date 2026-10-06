@@ -272,6 +272,8 @@ bool runScale(EntryProc entry, int scale) {
                     effect,EffVendorSpecific,0x1271,0,nullptr,0.0f);
                 const auto watchdogBefore=effect->dispatcher(
                     effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
+                const auto capturesBefore=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1273,0,nullptr,0.0f);
 
                 std::atomic<bool> beginAudio{false};
                 std::atomic<bool> guiDone{false};
@@ -315,12 +317,17 @@ bool runScale(EntryProc entry, int scale) {
                     effect,EffVendorSpecific,0x1271,0,nullptr,0.0f);
                 const auto watchdogAfter=effect->dispatcher(
                     effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
+                const auto capturesAfter=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1273,0,nullptr,0.0f);
                 const auto deferredDelta=
                     deferredAfter>=deferredBefore
                         ? deferredAfter-deferredBefore : -1;
                 const auto watchdogDelta=
                     watchdogAfter>=watchdogBefore
                         ? watchdogAfter-watchdogBefore : -1;
+                const auto captureDelta=
+                    capturesAfter>=capturesBefore
+                        ? capturesAfter-capturesBefore : -1;
 
                 const auto stressTiming=summarizeTimings(stressTimes);
                 const bool timingMeasured=!stressTimes.empty();
@@ -334,8 +341,10 @@ bool runScale(EntryProc entry, int scale) {
                     baselineTiming.deadlineOverruns==0 &&
                     stressTiming.deadlineOverruns==0 &&
                     p99Ratio<=2.0;
+                const bool captureCoalesced =
+                    captureDelta>=0 && captureDelta<128;
                 std::cout<<"gdi-realtime-drag-"<<scale<<"="
-                         <<(realtimeSignal&&timingMeasured&&realtimeTimingOk
+                         <<(realtimeSignal&&timingMeasured&&realtimeTimingOk&&captureCoalesced
                                 ?"PASS":"FAIL")
                          <<" blocks="<<stressTimes.size()
                          <<" p95_us="<<stressTiming.p95Us
@@ -346,8 +355,9 @@ bool runScale(EntryProc entry, int scale) {
                          <<" p99_ratio="<<p99Ratio
                          <<" bad_blocks="<<badAudioBlocks.load(std::memory_order_relaxed)
                          <<" deferred104="<<deferredDelta
-                         <<" watchdogs="<<watchdogDelta<<"\n";
-                ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk;
+                         <<" watchdogs="<<watchdogDelta
+                         <<" captures="<<captureDelta<<"\n";
+                ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk&&captureCoalesced;
             }
 
             // Captured legacy drags must continue beyond the visible client
