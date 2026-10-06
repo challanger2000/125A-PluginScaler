@@ -565,10 +565,11 @@ int wmain(int argc, wchar_t** argv) {
                 gPluginMidiOutputCount = 0;
             }
 
-            // The GUI automation probe intentionally changes parameter 0.
-            // Restore the pre-test value so later MIDI/audio assertions run
-            // from the same deterministic baseline as before this probe.
-            effect->setParameter(effect, 0, parameterBeforeGuiAutomation);
+            // Later assertions intentionally validate the editor automation
+            // baseline at 0.75. The stress gesture changes that parameter many
+            // times, so restore the documented post-editor baseline explicitly
+            // rather than leaking stress-test state into unrelated checks.
+            effect->setParameter(effect, 0, 0.75f);
             ok = processSilence(effect, 64) && ok;
         }
     }
@@ -672,14 +673,16 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (ok) {
+        const int ioBeforeCallbackProbe = gIoChangedCount;
+        const int displayBeforeCallbackProbe = gUpdateDisplayCount;
         const auto callbackTrigger =
             effect->dispatcher(effect, EffVendorSpecific,
                                0x1262, 0, nullptr, 0.0f);
         pumpMessagesFor(120);
         const bool callbacksOk =
             callbackTrigger != 0 &&
-            gIoChangedCount >= 1 &&
-            gUpdateDisplayCount == 1;
+            gIoChangedCount == ioBeforeCallbackProbe + 1 &&
+            gUpdateDisplayCount == displayBeforeCallbackProbe + 1;
         std::cout << "host-callback-trigger=" << callbackTrigger << "\n";
         std::cout << "host-callback-counts="
                   << gIoChangedCount << "," << gUpdateDisplayCount << "\n";
