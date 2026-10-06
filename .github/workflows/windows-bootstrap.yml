@@ -371,6 +371,9 @@ jobs:
             "gdi-click-map=PASS",
             "gdi-drag-redraw=PASS",
             "gdi-outside-drag=PASS",
+            "gdi-realtime-drag-125=PASS",
+            "gdi-realtime-drag-150=PASS",
+            "gdi-realtime-drag-200=PASS",
             "gdi-close=PASS",
             "gdi-harness=PASS"
           )) {
