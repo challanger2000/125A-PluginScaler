@@ -800,9 +800,10 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
         inst->dragNativeStartY = nativeY;
     } else if ((message == WM_MOUSEMOVE || message == WM_LBUTTONUP) &&
                inst->dragActive) {
-        // Preserve the established 1:1 relative-drag semantics for the
-        // generic scaler path. Only the TV-style GDI mode maps physical
-        // surface deltas back into the native plugin coordinate system.
+        // Captured Win32 drags are allowed to continue outside the client
+        // rectangle. Legacy rotary controls such as Pro-53's vertical knobs
+        // rely on that unbounded relative motion. Clamp only the initial
+        // button-down hit test, never an active drag back to editor bounds.
         const int nativeDeltaX = inst->settings.gdiEditor
             ? (scaledX - inst->dragSurfaceStartX) *
               static_cast<int>(inst->editorBitmapWidth) / surfaceWidth
@@ -812,11 +813,9 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
               static_cast<int>(inst->editorBitmapHeight) / surfaceHeight
             : (scaledY - inst->dragSurfaceStartY);
         nativeX = std::clamp(
-            inst->dragNativeStartX + nativeDeltaX,
-            0, static_cast<int>(inst->editorBitmapWidth) - 1);
+            inst->dragNativeStartX + nativeDeltaX, -32768, 32767);
         nativeY = std::clamp(
-            inst->dragNativeStartY + nativeDeltaY,
-            0, static_cast<int>(inst->editorBitmapHeight) - 1);
+            inst->dragNativeStartY + nativeDeltaY, -32768, 32767);
     }
 
     pluginscaler::ipc::EditorMousePayload mouse{};
