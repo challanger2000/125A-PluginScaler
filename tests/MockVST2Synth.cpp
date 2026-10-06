@@ -429,7 +429,7 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             for (VstInt32 i = 0; i < events->numEvents; ++i) {
                 auto* ev = eventPtrs[i];
                 if (!ev || ev->type != kVstMidiType) continue;
-                if (ev->byteSize != static_cast<VstInt32>(sizeof(VstMidiEvent)))
+                if (ev->byteSize != 24)
                     return 0;
                 auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
                 const auto status = static_cast<std::uint8_t>(midi->midiData[0]) & 0xF0u;
