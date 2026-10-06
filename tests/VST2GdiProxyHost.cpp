@@ -182,6 +182,24 @@ bool runScale(EntryProc entry, int scale) {
                      <<(dragRedraw?"PASS":"FAIL")<<"\n";
             ok=ok && dragRedraw;
 
+            // Captured legacy drags must continue beyond the visible client
+            // rectangle. Pro-53-style vertical knobs rely on negative/outside
+            // WM_MOUSEMOVE coordinates rather than being clamped at y=0.
+            const int outsideEndY=-scaledCoord(40,scale);
+            SendMessageW(surface,WM_LBUTTONDOWN,MK_LBUTTON,
+                         MAKELPARAM(knobX,knobStartY));
+            SendMessageW(surface,WM_MOUSEMOVE,MK_LBUTTON,
+                         MAKELPARAM(knobX,outsideEndY));
+            SendMessageW(surface,WM_LBUTTONUP,0,
+                         MAKELPARAM(knobX,outsideEndY));
+            const auto minDragY=effect->dispatcher(
+                effect,EffVendorSpecific,0x1270,0,nullptr,0.0f);
+            const bool outsideDrag=minDragY<0;
+            std::cout<<"gdi-outside-drag-"<<scale<<"-"<<cycle<<"="
+                     <<(outsideDrag?"PASS":"FAIL")
+                     <<" nativeY="<<minDragY<<"\n";
+            ok=ok && outsideDrag;
+
             std::cout<<"gdi-cycle-"<<scale<<"-"<<cycle
                      <<"="<<(ok?"PASS":"FAIL")<<"\n";
         }
@@ -228,6 +246,7 @@ int wmain(int argc, wchar_t** argv) {
     std::cout<<"gdi-scaled-visual="<<(ok?"PASS":"FAIL")<<"\n";
     std::cout<<"gdi-click-map="<<(ok?"PASS":"FAIL")<<"\n";
     std::cout<<"gdi-drag-redraw="<<(ok?"PASS":"FAIL")<<"\n";
+    std::cout<<"gdi-outside-drag="<<(ok?"PASS":"FAIL")<<"\n";
     std::cout<<"gdi-close="<<(ok?"PASS":"FAIL")<<"\n";
     std::cout<<"gdi-harness="<<(ok?"PASS":"FAIL")<<"\n";
     return ok?0:6;
