@@ -95,6 +95,7 @@ struct VstParameterProperties {
 };
 #pragma pack(pop)
 
+static_assert(sizeof(VstMidiEvent) == 32);
 static_assert(sizeof(VstPatchChunkInfo) == 64);
 static_assert(sizeof(VstParameterProperties) == 152);
 
