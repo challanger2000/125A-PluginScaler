@@ -565,12 +565,15 @@ int wmain(int argc, wchar_t** argv) {
                 gPluginMidiOutputCount = 0;
             }
 
-            // Later assertions intentionally validate the editor automation
-            // baseline at 0.75. The stress gesture changes that parameter many
-            // times, so restore the documented post-editor baseline explicitly
-            // rather than leaking stress-test state into unrelated checks.
+            // The callback pipe is asynchronous. Drain every queued
+            // automation/display notification from the stress gesture before
+            // restoring the deterministic baseline; otherwise a late
+            // audioMasterAutomate can overwrite the proxy mirror after the
+            // restore and pollute later assertions.
+            pumpMessagesFor(150);
             effect->setParameter(effect, 0, 0.75f);
             ok = processSilence(effect, 64) && ok;
+            pumpMessagesFor(50);
         }
     }
 
