@@ -146,8 +146,9 @@ struct ProxyInstance {
     std::uint64_t sequence{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
-    std::vector<float> parameterValues;
-    std::uint32_t parameterGeneration{0};
+    std::array<std::atomic<float>, pluginscaler::ipc::kMaxParameters> parameterValues{};
+    std::uint32_t parameterCount{0};
+    std::atomic<std::uint32_t> parameterGeneration{0};
     VstInt32 currentProgram{0};
     bool currentProgramValid{false};
     std::atomic<VstInt32> runtimeInputs{0};
@@ -224,14 +225,15 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
             if (event.opcode == AudioMasterAutomate &&
                 event.index >= 0 &&
-                event.index < static_cast<VstInt32>(inst->parameterValues.size())) {
+                event.index < static_cast<VstInt32>(inst->parameterCount)) {
                 // Plug-in GUI automation is already applied inside the x86
                 // plug-in. Mirror the value for host queries, but do not bump
                 // parameterGeneration: doing so would echo the whole cached
                 // parameter snapshot back into the plug-in on the next audio
                 // block and can overwrite a freshly selected legacy preset.
-                inst->parameterValues[static_cast<std::size_t>(event.index)] =
-                    std::clamp(event.opt, 0.0f, 1.0f);
+                inst->parameterValues[static_cast<std::size_t>(event.index)].store(
+                    std::clamp(event.opt, 0.0f, 1.0f),
+                    std::memory_order_relaxed);
             }
 
             if (event.opcode == AudioMasterIOChanged) {
@@ -715,10 +717,11 @@ void refreshParametersFromHelper(ProxyInstance* inst) {
         return;
 
     const auto count = reply.size() / sizeof(float);
-    const auto copyCount = (std::min)(count, inst->parameterValues.size());
+    const auto copyCount = (std::min)(
+        count, static_cast<std::size_t>(inst->parameterCount));
     const auto* values = reinterpret_cast<const float*>(reply.data());
     for (std::size_t i = 0; i < copyCount; ++i)
-        inst->parameterValues[i] = values[i];
+        inst->parameterValues[i].store(values[i], std::memory_order_relaxed);
 }
 
 bool captureEditorBitmap(ProxyInstance* inst) {
@@ -1656,7 +1659,8 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted) {
             char buffer[8]{};
             const float current =
-                inst->parameterValues[static_cast<std::size_t>(index)];
+                inst->parameterValues[static_cast<std::size_t>(index)].load(
+                    std::memory_order_relaxed);
             _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, "%.3f",
                         static_cast<double>(current));
             std::memcpy(ptr, buffer, sizeof(buffer));
@@ -2276,12 +2280,12 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
 
     block->header.outputMidiEventCount = 0;
 
-    block->header.parameterCount = static_cast<std::uint32_t>(
-        std::min<std::size_t>(inst->parameterValues.size(),
-                              pluginscaler::ipc::kMaxParameters));
-    block->header.parameterGeneration = inst->parameterGeneration;
+    block->header.parameterCount = inst->parameterCount;
+    block->header.parameterGeneration =
+        inst->parameterGeneration.load(std::memory_order_acquire);
     for (std::uint32_t i = 0; i < block->header.parameterCount; ++i)
-        block->parameterValues[i] = inst->parameterValues[i];
+        block->parameterValues[i] =
+            inst->parameterValues[i].load(std::memory_order_relaxed);
 
     for (std::uint32_t ch = 0; ch < inChannels; ++ch) {
         if (inputs && inputs[ch])
@@ -2387,21 +2391,20 @@ void __cdecl process(AEffect* effect, float** inputs, float** outputs, VstInt32 
 void __cdecl setParameter(AEffect* effect, VstInt32 index, float value) {
     auto* inst = self(effect);
     if (!inst || index < 0 ||
-        index >= static_cast<VstInt32>(inst->parameterValues.size()))
+        index >= static_cast<VstInt32>(inst->parameterCount))
         return;
-    inst->parameterValues[static_cast<std::size_t>(index)] =
-        std::clamp(value, 0.0f, 1.0f);
-    ++inst->parameterGeneration;
-    if (inst->parameterGeneration == 0)
-        inst->parameterGeneration = 1;
+    inst->parameterValues[static_cast<std::size_t>(index)].store(
+        std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
+    inst->parameterGeneration.fetch_add(1, std::memory_order_release);
 }
 
 float __cdecl getParameter(AEffect* effect, VstInt32 index) {
     auto* inst = self(effect);
     if (!inst || index < 0 ||
-        index >= static_cast<VstInt32>(inst->parameterValues.size()))
+        index >= static_cast<VstInt32>(inst->parameterCount))
         return 0.0f;
-    return inst->parameterValues[static_cast<std::size_t>(index)];
+    return inst->parameterValues[static_cast<std::size_t>(index)].load(
+        std::memory_order_relaxed);
 }
 
 } // namespace
@@ -2426,7 +2429,13 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
         delete inst;
         return nullptr;
     }
-    inst->parameterValues = inst->manifest.parameterDefaults;
+    inst->parameterCount = static_cast<std::uint32_t>(
+        (std::min)(inst->manifest.parameterDefaults.size(),
+                   static_cast<std::size_t>(pluginscaler::ipc::kMaxParameters)));
+    for (std::uint32_t i = 0; i < inst->parameterCount; ++i)
+        inst->parameterValues[i].store(
+            inst->manifest.parameterDefaults[static_cast<std::size_t>(i)],
+            std::memory_order_relaxed);
     inst->scalePercent = inst->settings.scalePercent;
 
     inst->effect.magic = kEffectMagic;
