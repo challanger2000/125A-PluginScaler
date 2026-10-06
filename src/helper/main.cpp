@@ -2256,9 +2256,13 @@ int runSharedVst2Server(const std::filesystem::path& path,
         if (!channel.waitForInput(std::chrono::seconds(10))) {
             if (controlStop.load(std::memory_order_acquire))
                 break;
-            std::cerr << "error=input-timeout\n";
-            resultCode = 13;
-            break;
+
+            // A host may suspend audio callbacks while transport is stopped,
+            // the track is idle, or an editor is open. Lack of an audio block
+            // is therefore not a helper failure. Keep the bridge/control/UI
+            // process alive and continue waiting; actual helper death is
+            // detected by the x64 process handle/recovery path.
+            continue;
         }
 
         const auto state = static_cast<ipc::AudioBlockState>(
