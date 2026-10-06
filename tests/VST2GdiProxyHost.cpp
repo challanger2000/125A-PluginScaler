@@ -3,17 +3,29 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace pluginscaler::formats::vst2abi;
 
 namespace {
 VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, void*, float) {
-    return opcode == AudioMasterVersion ? 2400 : 0;
+    switch (opcode) {
+    case AudioMasterVersion: return 2400;
+    case AudioMasterGetSampleRate: return 48000;
+    case AudioMasterGetBlockSize: return 64;
+    case AudioMasterGetCurrentProcessLevel: return 2; // realtime
+    case AudioMasterGetAutomationState: return 0;
+    default: return 0;
+    }
 }
 using EntryProc = AEffect* (__cdecl*)(AudioMasterCallback);
 
@@ -81,6 +93,53 @@ void pumpMessagesFor(DWORD milliseconds) {
     }
 }
 
+
+struct TimingSummary {
+    double p95Us{0.0};
+    double p99Us{0.0};
+    double maxUs{0.0};
+    int deadlineOverruns{0};
+};
+
+bool processTimed64(AEffect* effect, std::vector<double>& durationsUs) {
+    std::array<float,64> left{};
+    std::array<float,64> right{};
+    float* outputs[2]{left.data(), right.data()};
+
+    const auto begin=std::chrono::steady_clock::now();
+    effect->processReplacing(effect,nullptr,outputs,64);
+    const auto end=std::chrono::steady_clock::now();
+
+    durationsUs.push_back(
+        std::chrono::duration<double,std::micro>(end-begin).count());
+
+    for(int i=0;i<64;++i) {
+        if(std::fabs(left[static_cast<std::size_t>(i)]-0.25f)>0.00001f ||
+           std::fabs(right[static_cast<std::size_t>(i)]-0.25f)>0.00001f)
+            return false;
+    }
+    return true;
+}
+
+TimingSummary summarizeTimings(std::vector<double> values) {
+    TimingSummary s{};
+    if(values.empty()) return s;
+    std::sort(values.begin(),values.end());
+    auto percentile=[&](double q) {
+        const std::size_t index=static_cast<std::size_t>(
+            std::clamp(q,0.0,1.0)*static_cast<double>(values.size()-1));
+        return values[index];
+    };
+    s.p95Us=percentile(0.95);
+    s.p99Us=percentile(0.99);
+    s.maxUs=values.back();
+    constexpr double kBlockDeadlineUs=1000000.0*64.0/48000.0;
+    s.deadlineOverruns=static_cast<int>(std::count_if(
+        values.begin(),values.end(),
+        [](double us){ return us>1000000.0*64.0/48000.0; }));
+    return s;
+}
+
 bool runScale(EntryProc entry, int scale) {
     const std::wstring scaleText=std::to_wstring(scale);
     SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT",scaleText.c_str());
@@ -91,12 +150,37 @@ bool runScale(EntryProc entry, int scale) {
         return false;
     }
 
+    bool audioConfigured=
+        effect->dispatcher(effect,EffSetSampleRate,0,0,nullptr,48000.0f)!=0 &&
+        effect->dispatcher(effect,EffSetBlockSize,0,64,nullptr,0.0f)!=0 &&
+        effect->dispatcher(effect,EffMainsChanged,0,1,nullptr,0.0f)!=0;
+    if(!audioConfigured) {
+        std::cout<<"gdi-audio-config-"<<scale<<"=FAIL\n";
+        effect->dispatcher(effect,EffMainsChanged,0,0,nullptr,0.0f);
+    effect->dispatcher(effect,EffClose,0,0,nullptr,0.0f);
+        return false;
+    }
+    std::cout<<"gdi-audio-config-"<<scale<<"=PASS\n";
+
+    std::vector<double> baselineTimes;
+    baselineTimes.reserve(256);
+    bool baselineSignal=true;
+    for(int i=0;i<256;++i)
+        baselineSignal=processTimed64(effect,baselineTimes)&&baselineSignal;
+    const auto baselineTiming=summarizeTimings(baselineTimes);
+    std::cout<<"gdi-audio-baseline-"<<scale<<"="
+             <<(baselineSignal?"PASS":"FAIL")
+             <<" p95_us="<<baselineTiming.p95Us
+             <<" p99_us="<<baselineTiming.p99Us
+             <<" max_us="<<baselineTiming.maxUs
+             <<" overruns="<<baselineTiming.deadlineOverruns<<"\n";
+
     constexpr int nativeWidth=762;
     constexpr int nativeHeight=358;
     const int expectedWidth=nativeWidth*scale/100;
     const int expectedHeight=nativeHeight*scale/100;
 
-    bool ok=true;
+    bool ok=baselineSignal;
     VstRect* rect=nullptr;
     const auto rectOk=effect->dispatcher(effect,EffEditGetRect,0,0,&rect,0.0f);
     const int rw=rect?rect->right-rect->left:0;
@@ -181,6 +265,62 @@ bool runScale(EntryProc entry, int scale) {
             std::cout<<"gdi-drag-"<<scale<<"-"<<cycle<<"="
                      <<(dragRedraw?"PASS":"FAIL")<<"\n";
             ok=ok && dragRedraw;
+
+
+            if(cycle==1 && ok) {
+                std::atomic<bool> beginAudio{false};
+                std::atomic<bool> guiDone{false};
+                std::atomic<bool> stressSignal{true};
+                std::vector<double> stressTimes;
+                stressTimes.reserve(2048);
+
+                std::thread audioThread([&] {
+                    while(!beginAudio.load(std::memory_order_acquire))
+                        std::this_thread::yield();
+                    while(!guiDone.load(std::memory_order_acquire) ||
+                          stressTimes.size()<256) {
+                        if(!processTimed64(effect,stressTimes))
+                            stressSignal.store(false,std::memory_order_release);
+                        if(stressTimes.size()>=2048)
+                            break;
+                    }
+                });
+
+                SendMessageW(surface,WM_LBUTTONDOWN,MK_LBUTTON,
+                             MAKELPARAM(knobX,knobStartY));
+                beginAudio.store(true,std::memory_order_release);
+                for(int i=0;i<512;++i) {
+                    const int nativeY=125-(i%100);
+                    const int y=scaledCoord(nativeY,scale);
+                    SendMessageW(surface,WM_MOUSEMOVE,MK_LBUTTON,
+                                 MAKELPARAM(knobX,y));
+                    if((i%16)==15)
+                        pumpMessagesFor(1);
+                }
+                SendMessageW(surface,WM_LBUTTONUP,0,
+                             MAKELPARAM(knobX,knobEndY));
+                guiDone.store(true,std::memory_order_release);
+                audioThread.join();
+
+                const auto stressTiming=summarizeTimings(stressTimes);
+                const bool timingMeasured=!stressTimes.empty();
+                const bool realtimeSignal=
+                    stressSignal.load(std::memory_order_acquire);
+
+                const double p99Ratio =
+                    baselineTiming.p99Us>0.0
+                        ? stressTiming.p99Us/baselineTiming.p99Us : 0.0;
+                std::cout<<"gdi-realtime-drag-"<<scale<<"="
+                         <<(realtimeSignal&&timingMeasured?"PASS":"FAIL")
+                         <<" blocks="<<stressTimes.size()
+                         <<" p95_us="<<stressTiming.p95Us
+                         <<" p99_us="<<stressTiming.p99Us
+                         <<" max_us="<<stressTiming.maxUs
+                         <<" overruns="<<stressTiming.deadlineOverruns
+                         <<" baseline_overruns="<<baselineTiming.deadlineOverruns
+                         <<" p99_ratio="<<p99Ratio<<"\n";
+                ok=ok&&realtimeSignal&&timingMeasured;
+            }
 
             // Captured legacy drags must continue beyond the visible client
             // rectangle. Pro-53-style vertical knobs rely on negative/outside
