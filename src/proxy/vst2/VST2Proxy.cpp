@@ -167,6 +167,20 @@ struct ProxyInstance {
     std::atomic<std::uint64_t> midiWatchdogTimeouts{0};
     std::atomic<std::uint64_t> dspWatchdogTimeouts{0};
     std::atomic<std::uint64_t> gdiCaptureCalls{0};
+
+    std::atomic<bool> realtimeDiagnosticPending{false};
+    std::atomic<std::uint32_t> diagnosticReason{0};
+    std::atomic<std::uint32_t> diagnosticPhase{0};
+    std::atomic<std::int32_t> diagnosticLastHostOpcode{-1};
+    std::atomic<std::uint32_t> diagnosticHostCallbackCount{0};
+    std::atomic<std::uint32_t> diagnosticHostTraceWrite{0};
+    std::array<std::atomic<std::int32_t>,
+               pluginscaler::ipc::kRealtimeHostTraceEntries>
+        diagnosticHostTrace{};
+    std::atomic<std::uint32_t> diagnosticMidiEventCount{0};
+    std::atomic<std::int32_t> diagnosticFirstMidiDelta{0};
+    std::atomic<std::int32_t> diagnosticFirstMidiFlags{0};
+    std::atomic<std::uint32_t> diagnosticFirstMidiPacked{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
     std::array<std::atomic<float>, pluginscaler::ipc::kMaxParameters> parameterValues{};
@@ -253,6 +267,118 @@ bool startBridge(ProxyInstance* inst);
 void requestBridgeRecovery(ProxyInstance* inst) noexcept;
 void refreshParametersFromHelper(ProxyInstance* inst);
 
+void captureRealtimeDiagnosticSnapshot(
+    ProxyInstance* inst,
+    const pluginscaler::ipc::AudioSharedBlock* block,
+    std::uint32_t reason) noexcept {
+    if (!inst || !block)
+        return;
+
+    inst->diagnosticReason.store(reason, std::memory_order_relaxed);
+    inst->diagnosticPhase.store(
+        block->diagnostics.phase.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticLastHostOpcode.store(
+        block->diagnostics.lastHostCallbackOpcode.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticHostCallbackCount.store(
+        block->diagnostics.hostCallbackCount.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticHostTraceWrite.store(
+        block->diagnostics.hostTraceWrite.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    for (std::size_t i = 0; i < inst->diagnosticHostTrace.size(); ++i) {
+        inst->diagnosticHostTrace[i].store(
+            block->diagnostics.hostTrace[i].load(
+                std::memory_order_relaxed),
+            std::memory_order_relaxed);
+    }
+    inst->diagnosticMidiEventCount.store(
+        block->diagnostics.midiEventCount.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticFirstMidiDelta.store(
+        block->diagnostics.firstMidiDelta.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticFirstMidiFlags.store(
+        block->diagnostics.firstMidiFlags.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->diagnosticFirstMidiPacked.store(
+        block->diagnostics.firstMidiPacked.load(
+            std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    inst->realtimeDiagnosticPending.store(
+        true, std::memory_order_release);
+}
+
+void writeRealtimeDiagnosticReport(ProxyInstance* inst) {
+    if (!inst ||
+        !inst->realtimeDiagnosticPending.exchange(
+            false, std::memory_order_acq_rel))
+        return;
+
+    std::filesystem::path target(inst->settings.target);
+    std::filesystem::path directory = target.parent_path();
+    if (directory.empty())
+        directory = proxyModulePath().parent_path();
+    if (directory.empty())
+        return;
+
+    std::wstring stem = target.stem().wstring();
+    if (stem.empty())
+        stem = L"VST2";
+    const auto reportPath =
+        directory / (stem + L"-125A-PluginScaler-Diagnostic.txt");
+
+    std::ofstream out(reportPath, std::ios::binary | std::ios::trunc);
+    if (!out)
+        return;
+
+    const auto packed =
+        inst->diagnosticFirstMidiPacked.load(std::memory_order_relaxed);
+    out << "125A PluginScaler realtime diagnostic\n";
+    out << "reason="
+        << inst->diagnosticReason.load(std::memory_order_relaxed) << "\n";
+    out << "phase="
+        << inst->diagnosticPhase.load(std::memory_order_relaxed) << "\n";
+    out << "midiEventCount="
+        << inst->diagnosticMidiEventCount.load(std::memory_order_relaxed)
+        << "\n";
+    out << "firstMidiDelta="
+        << inst->diagnosticFirstMidiDelta.load(std::memory_order_relaxed)
+        << "\n";
+    out << "firstMidiFlags="
+        << inst->diagnosticFirstMidiFlags.load(std::memory_order_relaxed)
+        << "\n";
+    out << "firstMidiBytes="
+        << (packed & 0xFFu) << ","
+        << ((packed >> 8u) & 0xFFu) << ","
+        << ((packed >> 16u) & 0xFFu) << ","
+        << ((packed >> 24u) & 0xFFu) << "\n";
+    out << "lastHostCallbackOpcode="
+        << inst->diagnosticLastHostOpcode.load(std::memory_order_relaxed)
+        << "\n";
+    out << "hostCallbackCount="
+        << inst->diagnosticHostCallbackCount.load(std::memory_order_relaxed)
+        << "\n";
+    out << "hostTraceWrite="
+        << inst->diagnosticHostTraceWrite.load(std::memory_order_relaxed)
+        << "\n";
+    out << "hostTrace=";
+    for (std::size_t i = 0; i < inst->diagnosticHostTrace.size(); ++i) {
+        if (i)
+            out << ",";
+        out << inst->diagnosticHostTrace[i].load(
+            std::memory_order_relaxed);
+    }
+    out << "\n";
+}
+
 inline constexpr UINT kHostCallbackMessage = WM_APP + 0x52A;
 inline constexpr UINT kBridgeRecoverMessage = WM_APP + 0x52C;
 
@@ -267,6 +393,7 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
 
     if (msg == kBridgeRecoverMessage && inst) {
+        writeRealtimeDiagnosticReport(inst);
         cleanupLocalEditor(inst);
 
         // Recovery is owner/UI-thread work only. If the helper is still alive
@@ -2506,6 +2633,7 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
             : WAIT_FAILED;
 
     if (waitResult == WAIT_OBJECT_0 + 1) {
+        captureRealtimeDiagnosticSnapshot(inst, block, 2u);
         // The helper is gone; its synth state is gone with it. Do not replay
         // the just-submitted MIDI into a replacement helper, because a
         // malformed/plugin-hostile event can otherwise poison every restart.
@@ -2516,6 +2644,7 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     }
 
     if (waitResult != WAIT_OBJECT_0) {
+        captureRealtimeDiagnosticSnapshot(inst, block, 1u);
         inst->realtimeWatchdogTimeouts.fetch_add(
             1, std::memory_order_relaxed);
         const auto phase = block->header.errorCode;
