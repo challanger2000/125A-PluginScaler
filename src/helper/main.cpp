@@ -70,6 +70,23 @@ struct RealtimeMidiOutputContext {
     std::atomic<pluginscaler::ipc::AudioSharedBlock*> block{nullptr};
 };
 
+void traceRealtimeHostCallback(void* raw, std::int32_t opcode) noexcept {
+    auto* diagnostics =
+        static_cast<pluginscaler::ipc::RealtimeDiagnosticsShared*>(raw);
+    if (!diagnostics)
+        return;
+
+    diagnostics->lastHostCallbackOpcode.store(
+        opcode, std::memory_order_relaxed);
+    diagnostics->hostCallbackCount.fetch_add(
+        1, std::memory_order_relaxed);
+    const auto write = diagnostics->hostTraceWrite.fetch_add(
+        1, std::memory_order_relaxed);
+    diagnostics->hostTrace[
+        write % pluginscaler::ipc::kRealtimeHostTraceEntries].store(
+            opcode, std::memory_order_relaxed);
+}
+
 bool collectRealtimeMidiOutput(
     void* raw,
     const pluginscaler::formats::vst2abi::VstEvents* events) noexcept {
@@ -1839,6 +1856,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
     RealtimeMidiOutputContext realtimeMidiOutputContext{};
     module.setHostMidiOutputSink(
         &collectRealtimeMidiOutput, &realtimeMidiOutputContext);
+    module.setHostTraceSink(
+        &traceRealtimeHostCallback, &block->diagnostics);
 
     std::mutex moduleMutex;
     std::vector<std::uint8_t> persistedChunk;
@@ -2401,6 +2420,38 @@ int runSharedVst2Server(const std::filesystem::path& path,
         block->header.state.store(static_cast<std::uint32_t>(ipc::AudioBlockState::Processing),
                                   std::memory_order_release);
 
+        block->diagnostics.phase.store(0, std::memory_order_relaxed);
+        block->diagnostics.lastHostCallbackOpcode.store(
+            -1, std::memory_order_relaxed);
+        block->diagnostics.hostCallbackCount.store(
+            0, std::memory_order_relaxed);
+        block->diagnostics.hostTraceWrite.store(
+            0, std::memory_order_relaxed);
+        for (auto& opcode : block->diagnostics.hostTrace)
+            opcode.store(0, std::memory_order_relaxed);
+        block->diagnostics.midiEventCount.store(
+            block->header.midiEventCount, std::memory_order_relaxed);
+        block->diagnostics.firstMidiDelta.store(
+            0, std::memory_order_relaxed);
+        block->diagnostics.firstMidiFlags.store(
+            0, std::memory_order_relaxed);
+        block->diagnostics.firstMidiPacked.store(
+            0, std::memory_order_relaxed);
+        if (block->header.midiEventCount > 0) {
+            const auto& first = block->midiEvents[0];
+            block->diagnostics.firstMidiDelta.store(
+                first.deltaFrames, std::memory_order_relaxed);
+            block->diagnostics.firstMidiFlags.store(
+                first.flags, std::memory_order_relaxed);
+            const std::uint32_t packed =
+                static_cast<std::uint32_t>(first.data[0]) |
+                (static_cast<std::uint32_t>(first.data[1]) << 8u) |
+                (static_cast<std::uint32_t>(first.data[2]) << 16u) |
+                (static_cast<std::uint32_t>(first.data[3]) << 24u);
+            block->diagnostics.firstMidiPacked.store(
+                packed, std::memory_order_relaxed);
+        }
+
         bool ok = true;
         bool realtimeDeferred = false;
         {
@@ -2485,11 +2536,16 @@ int runSharedVst2Server(const std::filesystem::path& path,
                         dst.midiData[b] = static_cast<char>(src.data[b]);
                 }
                 block->header.errorCode = 201u;
+                block->diagnostics.phase.store(
+                    201u, std::memory_order_relaxed);
                 ok = module.processMidiEvents(
                     midi.data(),
                     static_cast<std::int32_t>(block->header.midiEventCount));
-                if (ok)
+                if (ok) {
                     block->header.errorCode = 0u;
+                    block->diagnostics.phase.store(
+                        0u, std::memory_order_relaxed);
+                }
             }
 
             if (!realtimeDeferred && ok) {
@@ -2505,11 +2561,16 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     outputs[ch] = block->outputs[ch];
 
                 block->header.errorCode = 202u;
+                block->diagnostics.phase.store(
+                    202u, std::memory_order_relaxed);
                 ok = module.processReplacing(
                     inputs.data(), outputs.data(),
                     static_cast<std::int32_t>(block->header.frames));
-                if (ok)
+                if (ok) {
                     block->header.errorCode = 0u;
+                    block->diagnostics.phase.store(
+                        0u, std::memory_order_relaxed);
+                }
 
             }
 
@@ -2554,6 +2615,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
     module.setHostMidiOutputSink(nullptr, nullptr);
     module.setHostCallbackSink(nullptr, nullptr);
+    module.setHostTraceSink(nullptr, nullptr);
     hostCallbackContext.accepting.store(false, std::memory_order_release);
     hostCallbackContext.stop.store(true, std::memory_order_release);
 
