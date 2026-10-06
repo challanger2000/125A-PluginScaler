@@ -128,7 +128,7 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 }
 
-VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32,
+VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                            VstIntPtr, void* ptr, float) {
     auto* state = static_cast<State*>(effect ? effect->object : nullptr);
     switch (opcode) {
