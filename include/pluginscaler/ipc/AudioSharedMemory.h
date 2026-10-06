@@ -6,7 +6,7 @@
 namespace pluginscaler::ipc {
 
 inline constexpr std::uint32_t kAudioSharedMagic = 0x41505341u; // "ASPA"
-inline constexpr std::uint32_t kAudioSharedVersion = 7;
+inline constexpr std::uint32_t kAudioSharedVersion = 8;
 inline constexpr std::uint32_t kMaxParameters = 4096;
 inline constexpr std::uint32_t kMaxMidiEvents = 256;
 inline constexpr std::uint32_t kMaxAudioChannels = 8;
@@ -63,8 +63,23 @@ struct MidiSharedEvent {
     std::uint8_t reserved[4]{};
 };
 
+inline constexpr std::uint32_t kRealtimeHostTraceEntries = 8;
+
+struct RealtimeDiagnosticsShared {
+    std::atomic<std::uint32_t> phase{0};
+    std::atomic<std::int32_t> lastHostCallbackOpcode{-1};
+    std::atomic<std::uint32_t> hostCallbackCount{0};
+    std::atomic<std::uint32_t> hostTraceWrite{0};
+    std::atomic<std::int32_t> hostTrace[kRealtimeHostTraceEntries]{};
+    std::atomic<std::uint32_t> midiEventCount{0};
+    std::atomic<std::int32_t> firstMidiDelta{0};
+    std::atomic<std::int32_t> firstMidiFlags{0};
+    std::atomic<std::uint32_t> firstMidiPacked{0};
+};
+
 struct AudioSharedBlock {
     AudioSharedHeader header{};
+    RealtimeDiagnosticsShared diagnostics{};
     HostTimeShared hostTime{};
     MidiSharedEvent midiEvents[kMaxMidiEvents]{};
     MidiSharedEvent outputMidiEvents[kMaxMidiEvents]{};
@@ -76,5 +91,6 @@ struct AudioSharedBlock {
 static_assert(alignof(AudioSharedHeader) == 64);
 static_assert(sizeof(AudioSharedHeader) == 64);
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+static_assert(std::atomic<std::int32_t>::is_always_lock_free);
 
 } // namespace pluginscaler::ipc
