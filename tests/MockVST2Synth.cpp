@@ -135,6 +135,9 @@ struct SynthState {
     int stopProcessCount{0};
     int legacyIdleCount{0};
     int setParameterCalls{0};
+    DWORD mainsOnThreadId{0};
+    DWORD midiThreadId{0};
+    DWORD processThreadId{0};
     bool editorParentReadyAtOpen{false};
 };
 
@@ -265,6 +268,14 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             return state && state->editorParentReadyAtOpen ? 1 : 0;
         if (index == 0x126A)
             return state ? state->setParameterCalls : -1;
+        if (index == 0x126B)
+            return state &&
+                   state->mainsOnThreadId != 0 &&
+                   state->midiThreadId != 0 &&
+                   state->processThreadId != 0 &&
+                   state->mainsOnThreadId == state->midiThreadId &&
+                   state->midiThreadId == state->processThreadId
+                ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -405,10 +416,12 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffMainsChanged:
         if (state) {
             state->mains = value != 0;
-            if (state->mains)
+            if (state->mains) {
                 ++state->mainsOnCount;
-            else
+                state->mainsOnThreadId = GetCurrentThreadId();
+            } else {
                 ++state->mainsOffCount;
+            }
             if (!state->mains) {
                 state->active = false;
                 state->pendingEvent = false;
@@ -417,6 +430,7 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
     case EffProcessEvents:
         if (!state || !ptr) return 0;
+        state->midiThreadId = GetCurrentThreadId();
         if (gHostCallback && effect) {
             gMidiProcessLevelVerified =
                 gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
@@ -516,6 +530,8 @@ float __cdecl getParameter(AEffect* effect, VstInt32 index) {
 
 void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt32 frames) {
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
+    if (state)
+        state->processThreadId = GetCurrentThreadId();
 
     if (gHostCallback && effect) {
         gObservedProcessLevel =
