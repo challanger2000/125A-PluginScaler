@@ -1074,6 +1074,7 @@ LRESULT CALLBACK gdiScaledEditorProc(
     switch (msg) {
     case WM_LBUTTONDOWN:
         SetFocus(hwnd);
+        SetCapture(hwnd);
         [[fallthrough]];
     case WM_MOUSEMOVE:
     case WM_LBUTTONUP:
@@ -1109,6 +1110,11 @@ LRESULT CALLBACK gdiScaledEditorProc(
 
     const WNDPROC original = state->original;
     const LRESULT result = CallWindowProcA(original, hwnd, msg, wp, lp);
+
+    if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
+        ReleaseCapture();
+    if (msg == WM_CAPTURECHANGED)
+        state->leftDrag = false;
 
     // Pro-53 frequently repaints only tiny dirty rectangles after mouse input.
     // The legacy SetDIBitsToDevice source-rectangle semantics do not map
