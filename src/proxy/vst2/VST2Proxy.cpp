@@ -169,6 +169,9 @@ struct ProxyInstance {
     std::atomic<std::uint64_t> gdiCaptureCalls{0};
 
     std::atomic<bool> realtimeDiagnosticPending{false};
+    HANDLE diagnosticEvent{nullptr};
+    std::thread diagnosticThread;
+    std::atomic<bool> diagnosticStop{false};
     std::atomic<std::uint32_t> diagnosticReason{0};
     std::atomic<std::uint32_t> diagnosticPhase{0};
     std::atomic<std::int32_t> diagnosticLastHostOpcode{-1};
@@ -267,6 +270,7 @@ bool startBridge(ProxyInstance* inst);
 void requestBridgeRecovery(ProxyInstance* inst) noexcept;
 void refreshParametersFromHelper(ProxyInstance* inst);
 std::filesystem::path proxyModulePath();
+void writeRealtimeDiagnosticReport(ProxyInstance* inst);
 
 void captureRealtimeDiagnosticSnapshot(
     ProxyInstance* inst,
@@ -315,6 +319,8 @@ void captureRealtimeDiagnosticSnapshot(
         std::memory_order_relaxed);
     inst->realtimeDiagnosticPending.store(
         true, std::memory_order_release);
+    if (inst->diagnosticEvent)
+        SetEvent(inst->diagnosticEvent);
 }
 
 void writeRealtimeDiagnosticReport(ProxyInstance* inst) {
@@ -394,7 +400,6 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
 
     if (msg == kBridgeRecoverMessage && inst) {
-        writeRealtimeDiagnosticReport(inst);
         cleanupLocalEditor(inst);
 
         // Recovery is owner/UI-thread work only. If the helper is still alive
@@ -1800,6 +1805,21 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (inst->callbackWindow && IsWindow(inst->callbackWindow))
             DestroyWindow(inst->callbackWindow);
         inst->callbackWindow = nullptr;
+
+        // Flush any captured realtime evidence independently of the host UI
+        // message pump, then stop the dedicated non-realtime writer.
+        if (inst->realtimeDiagnosticPending.load(
+                std::memory_order_acquire))
+            writeRealtimeDiagnosticReport(inst);
+        inst->diagnosticStop.store(true, std::memory_order_release);
+        if (inst->diagnosticEvent)
+            SetEvent(inst->diagnosticEvent);
+        if (inst->diagnosticThread.joinable())
+            inst->diagnosticThread.join();
+        if (inst->diagnosticEvent)
+            CloseHandle(inst->diagnosticEvent);
+        inst->diagnosticEvent = nullptr;
+
         delete inst;
         return 1;
 
@@ -2762,8 +2782,34 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     auto* inst = new ProxyInstance{};
     inst->host = host;
     inst->settings = loadSettings();
+
+    inst->diagnosticEvent = CreateEventW(
+        nullptr, FALSE, FALSE, nullptr);
+    if (inst->diagnosticEvent) {
+        inst->diagnosticThread = std::thread([inst] {
+            for (;;) {
+                const DWORD wait = WaitForSingleObject(
+                    inst->diagnosticEvent, INFINITE);
+                if (wait != WAIT_OBJECT_0)
+                    break;
+                if (inst->diagnosticStop.load(
+                        std::memory_order_acquire))
+                    break;
+                writeRealtimeDiagnosticReport(inst);
+            }
+        });
+    }
+
     inst->manifest = loadManifest(inst->settings.manifest);
     if (!inst->manifest.valid) {
+        inst->diagnosticStop.store(true, std::memory_order_release);
+        if (inst->diagnosticEvent)
+            SetEvent(inst->diagnosticEvent);
+        if (inst->diagnosticThread.joinable())
+            inst->diagnosticThread.join();
+        if (inst->diagnosticEvent)
+            CloseHandle(inst->diagnosticEvent);
+        inst->diagnosticEvent = nullptr;
         delete inst;
         return nullptr;
     }
