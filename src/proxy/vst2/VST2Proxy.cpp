@@ -669,7 +669,10 @@ void closeControlPipe(ProxyInstance* inst) noexcept {
     if (!inst)
         return;
     std::lock_guard<std::mutex> controlLock(inst->controlMutex);
-    closeControlPipe(inst);
+    if (inst->controlPipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(inst->controlPipe);
+        inst->controlPipe = INVALID_HANDLE_VALUE;
+    }
 }
 
 bool legacyDispatchCall(ProxyInstance* inst,
@@ -1308,8 +1311,7 @@ void stopBridge(ProxyInstance* inst) noexcept {
             std::vector<std::uint8_t> ignored;
             (void)controlCall(inst, pluginscaler::ipc::ControlCommand::Shutdown,
                               0, nullptr, 0, ignored);
-            CloseHandle(inst->controlPipe);
-            inst->controlPipe = INVALID_HANDLE_VALUE;
+            closeControlPipe(inst);
         }
 
         if (auto* block = inst->channel.block()) {
