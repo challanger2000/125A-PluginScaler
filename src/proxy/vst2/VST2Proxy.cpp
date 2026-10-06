@@ -204,12 +204,17 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             events.swap(inst->callbackQueue);
         }
 
-        const bool havePluginAutomation =
+        const bool havePluginDisplayUpdate =
             std::any_of(events.begin(), events.end(),
                 [](const auto& event) {
-                    return event.opcode == AudioMasterAutomate;
+                    return event.opcode == AudioMasterUpdateDisplay;
                 });
-        if (havePluginAutomation)
+        // Continuous GUI automation must stay O(1): event.opt already is the
+        // authoritative value for the changed parameter. A full legacy
+        // parameter sweep can involve thousands of getParameter() calls and
+        // contends with audio processing in the x86 helper. Only rare display/
+        // preset refresh notifications request a complete mirror resync.
+        if (havePluginDisplayUpdate)
             refreshParametersFromHelper(inst);
 
         for (const auto& event : events) {
