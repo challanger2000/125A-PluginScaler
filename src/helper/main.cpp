@@ -351,6 +351,7 @@ int runVst2AudioProbe(const std::filesystem::path& path) {
 struct EditorGuiContext {
     pluginscaler::formats::VST2PluginModule* module{nullptr};
     std::mutex* moduleMutex{nullptr};
+    std::atomic<bool>* realtimePluginCallActive{nullptr};
     HWND surrogate{nullptr};
     HWND editor{nullptr};
     bool nativeSidecar{false};
@@ -1495,14 +1496,21 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case WM_TIMER:
         if (wp == kEditorIdleTimer) {
-            // VST2 editor/idle work belongs to the plug-in's stable UI thread
-            // and may run concurrently with processReplacing just as it does
-            // in a normal DAW. Serializing this periodic 30 ms callback behind
-            // the same mutex as audio caused the realtime thread's try_lock
-            // fallback to emit silent blocks (audible clicks/dropouts).
-            (void)ctx->module->serviceLegacyIdle();
-            if (ctx->editor && IsWindow(ctx->editor))
-                (void)ctx->module->editorIdle();
+            // Legacy VST2 plug-ins are not universally re-entrant across
+            // dispatcher/audio calls. FM7-class instruments can deadlock when
+            // effIdle/effEditIdle overlaps effProcessEvents/processReplacing.
+            // Never block the audio thread behind GUI idle: simply skip this
+            // timer tick while a realtime plug-in call is active.
+            const bool realtimeBusy =
+                ctx->realtimePluginCallActive &&
+                ctx->realtimePluginCallActive->load(
+                    std::memory_order_acquire);
+
+            if (!realtimeBusy) {
+                (void)ctx->module->serviceLegacyIdle();
+                if (ctx->editor && IsWindow(ctx->editor))
+                    (void)ctx->module->editorIdle();
+            }
 
             if (ctx->gdiScalePercent > 0 &&
                 ctx->editor && IsWindow(ctx->editor))
@@ -1841,6 +1849,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
         &collectRealtimeMidiOutput, &realtimeMidiOutputContext);
 
     std::mutex moduleMutex;
+    std::atomic<bool> realtimePluginCallActive{false};
     std::vector<std::uint8_t> persistedChunk;
     std::int32_t persistedChunkIndex = 0;
     std::atomic<bool> controlStop{false};
@@ -1867,6 +1876,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
     EditorGuiContext guiContext{};
     guiContext.module = &module;
     guiContext.moduleMutex = &moduleMutex;
+    guiContext.realtimePluginCallActive = &realtimePluginCallActive;
 
     HANDLE guiReady = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!guiReady)
@@ -2346,6 +2356,11 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 }
             }
 
+            if (!realtimeDeferred) {
+                realtimePluginCallActive.store(
+                    true, std::memory_order_release);
+            }
+
             formats::vst2abi::VstTimeInfo hostTime{};
             hostTime.samplePos = block->hostTime.samplePos;
             hostTime.sampleRate = block->hostTime.sampleRate;
@@ -2441,6 +2456,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
             realtimeMidiOutputContext.block.store(
                 nullptr, std::memory_order_release);
+            if (!realtimeDeferred) {
+                realtimePluginCallActive.store(
+                    false, std::memory_order_release);
+            }
         }
 
         if (realtimeDeferred) {
