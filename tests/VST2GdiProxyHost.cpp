@@ -359,10 +359,13 @@ bool runScale(EntryProc entry, int scale) {
                 const double p99Ratio =
                     baselineTiming.p99Us>0.0
                         ? stressTiming.p99Us/baselineTiming.p99Us : 0.0;
+                constexpr double kBlockDeadlineUs =
+                    1000000.0*64.0/48000.0;
                 const bool realtimeTimingOk =
                     baselineTiming.deadlineOverruns==0 &&
                     stressTiming.deadlineOverruns==0 &&
-                    p99Ratio<=2.0;
+                    stressTiming.p99Us<=kBlockDeadlineUs*0.25 &&
+                    stressTiming.maxUs<=kBlockDeadlineUs;
                 const bool transportClean =
                     !stressTimedOut.load(std::memory_order_acquire) &&
                     badAudioBlocks.load(std::memory_order_relaxed)==0 &&
