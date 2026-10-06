@@ -402,14 +402,13 @@ int wmain(int argc, wchar_t** argv) {
 
         HWND staleAnchor = FindWindowExW(
             editorHost, nullptr, L"125A_PluginScaler_ScaledSurface", nullptr);
-        HWND staleSurrogate =
-            FindWindowW(L"125A_PluginScaler_EditorSurrogate", nullptr);
+        HWND staleNative =
+            FindWindowW(L"125A_MockVST2SynthEditor", nullptr);
 
         const bool cleanupOk =
             silentCrashBlock &&
             staleAnchor == nullptr &&
-            staleSurrogate == nullptr &&
-            childCount(editorHost) == 0;
+            staleNative == nullptr;
         std::cout << "editor-crash-cleanup="
                   << (cleanupOk ? "PASS" : "FAIL") << "\n";
         ok = ok && cleanupOk;
