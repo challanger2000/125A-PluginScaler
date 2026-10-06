@@ -206,19 +206,13 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             events.swap(inst->callbackQueue);
         }
 
-        const bool havePluginDisplayUpdate =
-            std::any_of(events.begin(), events.end(),
-                [](const auto& event) {
-                    return event.opcode == AudioMasterUpdateDisplay;
-                });
-        // Continuous GUI automation must stay O(1): event.opt already is the
-        // authoritative value for the changed parameter. A full legacy
-        // parameter sweep can involve thousands of getParameter() calls and
-        // contends with audio processing in the x86 helper. Only rare display/
-        // preset refresh notifications request a complete mirror resync.
-        if (havePluginDisplayUpdate)
-            refreshParametersFromHelper(inst);
-
+        // Never turn audioMasterUpdateDisplay into a synchronous full
+        // parameter sweep. Legacy editors such as Pro-53 can emit display
+        // updates continuously while a knob is moving. GetParameters takes
+        // the helper's module ownership and can make the realtime thread miss
+        // its try_lock, producing a silent block/click. Changed GUI parameter
+        // values already arrive through audioMasterAutomate. Program/chunk
+        // restore paths perform their own explicit mirror resync.
         for (const auto& event : events) {
             if (!inst->host)
                 continue;
