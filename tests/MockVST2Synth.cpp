@@ -298,6 +298,22 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             Sleep(800);
             return 1;
         }
+        if (index == 0x126B) {
+            if (!gHostCallback || !effect || !state)
+                return 0;
+            for (int i = 0; i < 128; ++i) {
+                const float value =
+                    0.20f + 0.60f * static_cast<float>(i) / 127.0f;
+                state->gain = value;
+                if (effect->setParameter)
+                    effect->setParameter(effect, 0, value);
+                (void)gHostCallback(effect, AudioMasterAutomate,
+                                    0, 0, nullptr, value);
+                (void)gHostCallback(effect, AudioMasterUpdateDisplay,
+                                    0, 0, nullptr, 0.0f);
+            }
+            return 1;
+        }
         if (!state)
             return 0;
         if (index == 0x125B)
