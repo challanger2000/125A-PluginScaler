@@ -285,15 +285,26 @@ bool runScale(EntryProc entry, int scale) {
                 std::thread audioThread([&] {
                     while(!beginAudio.load(std::memory_order_acquire))
                         std::this_thread::yield();
+
+                    using Clock=std::chrono::steady_clock;
+                    constexpr auto kBlockPeriod=
+                        std::chrono::nanoseconds(1333333);
+                    auto next=Clock::now();
+
                     while(!guiDone.load(std::memory_order_acquire) ||
                           stressTimes.size()<256) {
+                        next+=kBlockPeriod;
+
                         if(!processTimed64(effect,stressTimes)) {
                             stressSignal.store(false,std::memory_order_release);
                             badAudioBlocks.fetch_add(
                                 1,std::memory_order_relaxed);
                         }
-                        if(stressTimes.size()>=2048)
+
+                        if(stressTimes.size()>=1024)
                             break;
+
+                        std::this_thread::sleep_until(next);
                     }
                 });
 
@@ -341,10 +352,14 @@ bool runScale(EntryProc entry, int scale) {
                     baselineTiming.deadlineOverruns==0 &&
                     stressTiming.deadlineOverruns==0 &&
                     p99Ratio<=2.0;
+                const bool transportClean =
+                    badAudioBlocks.load(std::memory_order_relaxed)==0 &&
+                    deferredDelta==0 &&
+                    watchdogDelta==0;
                 const bool captureCoalesced =
                     captureDelta>=0 && captureDelta<128;
                 std::cout<<"gdi-realtime-drag-"<<scale<<"="
-                         <<(realtimeSignal&&timingMeasured&&realtimeTimingOk&&captureCoalesced
+                         <<(realtimeSignal&&timingMeasured&&realtimeTimingOk&&transportClean&&captureCoalesced
                                 ?"PASS":"FAIL")
                          <<" blocks="<<stressTimes.size()
                          <<" p95_us="<<stressTiming.p95Us
@@ -357,7 +372,7 @@ bool runScale(EntryProc entry, int scale) {
                          <<" deferred104="<<deferredDelta
                          <<" watchdogs="<<watchdogDelta
                          <<" captures="<<captureDelta<<"\n";
-                ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk&&captureCoalesced;
+                ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk&&transportClean&&captureCoalesced;
             }
 
             // Captured legacy drags must continue beyond the visible client
