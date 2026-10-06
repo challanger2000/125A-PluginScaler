@@ -274,6 +274,8 @@ bool runScale(EntryProc entry, int scale) {
                     effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
                 const auto capturesBefore=effect->dispatcher(
                     effect,EffVendorSpecific,0x1273,0,nullptr,0.0f);
+                const auto mouseMovesBefore=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1274,0,nullptr,0.0f);
 
                 std::atomic<bool> beginAudio{false};
                 std::atomic<bool> guiDone{false};
@@ -334,6 +336,8 @@ bool runScale(EntryProc entry, int scale) {
                     effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
                 const auto capturesAfter=effect->dispatcher(
                     effect,EffVendorSpecific,0x1273,0,nullptr,0.0f);
+                const auto mouseMovesAfter=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1274,0,nullptr,0.0f);
                 const auto deferredDelta=
                     deferredAfter>=deferredBefore
                         ? deferredAfter-deferredBefore : -1;
@@ -343,6 +347,9 @@ bool runScale(EntryProc entry, int scale) {
                 const auto captureDelta=
                     capturesAfter>=capturesBefore
                         ? capturesAfter-capturesBefore : -1;
+                const auto mouseMoveDelta=
+                    mouseMovesAfter>=mouseMovesBefore
+                        ? mouseMovesAfter-mouseMovesBefore : -1;
 
                 const auto stressTiming=summarizeTimings(stressTimes);
                 const bool timingMeasured=!stressTimes.empty();
@@ -377,7 +384,8 @@ bool runScale(EntryProc entry, int scale) {
                          <<" stress_timeout="<<(stressTimedOut.load(std::memory_order_relaxed)?1:0)
                          <<" deferred104="<<deferredDelta
                          <<" watchdogs="<<watchdogDelta
-                         <<" captures="<<captureDelta<<"\n";
+                         <<" captures="<<captureDelta
+                         <<" mouse_forwards="<<mouseMoveDelta<<"\n";
                 ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk&&transportClean&&captureCoalesced;
             }
 
