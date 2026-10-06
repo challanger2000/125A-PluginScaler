@@ -4,6 +4,9 @@
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 using namespace pluginscaler::formats::vst2abi;
