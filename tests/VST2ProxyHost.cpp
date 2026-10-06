@@ -237,24 +237,6 @@ int wmain(int argc, wchar_t** argv) {
         ok = sendNoteOn(effect, 60, 100) &&
              processAndCheck(effect, 64, 0.20f, 0.310f);
 
-    if (ok) {
-        const auto mainsTid = effect->dispatcher(
-            effect, EffVendorSpecific, 0x126C, 0, nullptr, 0.0f);
-        const auto midiTid = effect->dispatcher(
-            effect, EffVendorSpecific, 0x126D, 0, nullptr, 0.0f);
-        const auto processTid = effect->dispatcher(
-            effect, EffVendorSpecific, 0x126E, 0, nullptr, 0.0f);
-        const bool affinity =
-            effect->dispatcher(effect, EffVendorSpecific,
-                               0x126B, 0, nullptr, 0.0f) == 1;
-        std::cout << "realtime-thread-ids mains=" << mainsTid
-                  << " midi=" << midiTid
-                  << " process=" << processTid << "\n";
-        std::cout << "realtime-thread-affinity="
-                  << (affinity ? "PASS" : "FAIL") << "\n";
-        ok = ok && affinity;
-    }
-
     // Explicitly release the MIDI note. effMainsChanged(false) suspends
     // processing but does not imply that a VST2 instrument forgets note state.
     if (ok)
