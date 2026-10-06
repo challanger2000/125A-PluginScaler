@@ -1046,15 +1046,16 @@ LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
         state->surfaceStart = {x, y};
         state->nativeStart = {nativeX, nativeY};
     } else if (msg == WM_MOUSEMOVE && state->leftDrag) {
-        nativeX = state->nativeStart.x +
-                  MulDiv(x - state->surfaceStart.x, 100, state->scale);
-        nativeY = state->nativeStart.y +
-                  MulDiv(y - state->surfaceStart.y, 100, state->scale);
+        // Absolute hit testing must map scaled editor coordinates back to the
+        // plug-in's native geometry, but a captured knob drag is relative.
+        // Preserve the legacy control's original pixel sensitivity here:
+        // dividing the drag delta by the GUI scale makes a 150% editor require
+        // 1.5x the physical mouse travel and can force repeated re-grabs.
+        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
+        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
     } else if (msg == WM_LBUTTONUP && state->leftDrag) {
-        nativeX = state->nativeStart.x +
-                  MulDiv(x - state->surfaceStart.x, 100, state->scale);
-        nativeY = state->nativeStart.y +
-                  MulDiv(y - state->surfaceStart.y, 100, state->scale);
+        nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
+        nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
         state->leftDrag = false;
     }
 
@@ -1116,17 +1117,22 @@ LRESULT CALLBACK gdiScaledEditorProc(
     // editor repaint after real mouse interaction so the already-proven
     // 762x358 -> 1143x537 full-frame path refreshes the visible state.
     switch (msg) {
+    case WM_MOUSEMOVE:
+        if (state->leftDrag) {
+            // Coalesce drag repaints. Forcing UpdateWindow synchronously for
+            // every mouse move monopolizes the legacy GUI thread; the existing
+            // 30 ms editor timer will flush the invalid region.
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        break;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
     case WM_RBUTTONDOWN:
     case WM_RBUTTONUP:
     case WM_MBUTTONDOWN:
     case WM_MBUTTONUP:
-    case WM_MOUSEMOVE:
-        if (state->leftDrag || msg != WM_MOUSEMOVE) {
-            InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateWindow(hwnd);
-        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+        UpdateWindow(hwnd);
         break;
     default:
         break;
@@ -1423,13 +1429,14 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case WM_TIMER:
         if (wp == kEditorIdleTimer) {
-            // Never block the GUI/owner thread behind audio/control work.
-            std::unique_lock<std::mutex> lock(*ctx->moduleMutex, std::try_to_lock);
-            if (lock.owns_lock()) {
-                (void)ctx->module->serviceLegacyIdle();
-                if (ctx->editor && IsWindow(ctx->editor))
-                    (void)ctx->module->editorIdle();
-            }
+            // VST2 editor/idle work belongs to the plug-in's stable UI thread
+            // and may run concurrently with processReplacing just as it does
+            // in a normal DAW. Serializing this periodic 30 ms callback behind
+            // the same mutex as audio caused the realtime thread's try_lock
+            // fallback to emit silent blocks (audible clicks/dropouts).
+            (void)ctx->module->serviceLegacyIdle();
+            if (ctx->editor && IsWindow(ctx->editor))
+                (void)ctx->module->editorIdle();
 
             if (ctx->gdiScalePercent > 0 &&
                 ctx->editor && IsWindow(ctx->editor))
