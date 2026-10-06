@@ -2260,9 +2260,11 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<HANDLE>(inst->channel.outputEventHandle()),
         inst->helperProcess.hProcess
     };
+    const DWORD audioWaitMs =
+        block->header.hostProcessLevel == 4 ? 1000 : 100;
     const DWORD waitResult =
         (waitHandles[0] && waitHandles[1])
-            ? WaitForMultipleObjects(2, waitHandles, FALSE, 1000)
+            ? WaitForMultipleObjects(2, waitHandles, FALSE, audioWaitMs)
             : WAIT_FAILED;
 
     if (waitResult == WAIT_OBJECT_0 + 1) {

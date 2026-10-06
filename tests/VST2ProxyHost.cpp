@@ -322,6 +322,32 @@ int wmain(int argc, wchar_t** argv) {
         ok = ok && recovered;
     }
 
+    if (ok) {
+        const bool armed =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1267, 0, nullptr, 0.0f) == 1;
+        ULONGLONG hangBlockMs = 0;
+        const bool isolated =
+            armed &&
+            processAndExpectSilence(effect, 128, hangBlockMs) &&
+            hangBlockMs < 250;
+        std::cout << "helper-hang-detect-ms=" << hangBlockMs << "\n";
+        std::cout << "helper-hang-isolation="
+                  << (isolated ? "PASS" : "FAIL") << "\n";
+        ok = ok && isolated;
+    }
+
+    if (ok) {
+        pumpMessagesFor(300);
+        const bool hangRecovered =
+            processAndCheck(effect, 128, 0.49f, 0.25f) &&
+            effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 3 &&
+            std::fabs(effect->getParameter(effect, 0) - 0.25f) < 0.00001f;
+        std::cout << "helper-hang-recovery="
+                  << (hangRecovered ? "PASS" : "FAIL") << "\n";
+        ok = ok && hangRecovered;
+    }
+
     if (ok)
         ok = configure(effect, 96000.0f, 32) &&
              processAndCheck(effect, 32, 0.5f, 0.25f);

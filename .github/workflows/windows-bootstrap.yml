@@ -143,6 +143,12 @@ jobs:
           if ($joined -notmatch "helper-restart-state=PASS") {
             throw "Helper restart state marker missing"
           }
+          if ($joined -notmatch "helper-hang-isolation=PASS") {
+            throw "Helper hang isolation marker missing"
+          }
+          if ($joined -notmatch "helper-hang-recovery=PASS") {
+            throw "Helper hang recovery marker missing"
+          }
           if ($joined -notmatch "torture=PASS") {
             throw "Proxy lifecycle torture marker missing"
           }

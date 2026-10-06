@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
+#include <windows.h>
 
 using namespace pluginscaler::formats::vst2abi;
 
@@ -19,13 +20,14 @@ struct MockState {
     VstInt32 blockSize{0};
     bool mains{false};
     bool midiSeen{false};
+    bool hangNextProcess{false};
     std::uint8_t lastMidiNote{0};
     VstInt32 currentProgram{0};
     float parameters[16]{0.125f};
     MockChunkState chunkState{};
 };
 
-VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr value, void* ptr, float opt) {
+VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index, VstIntPtr value, void* ptr, float opt) {
     auto* state = static_cast<MockState*>(effect ? effect->object : nullptr);
 
     switch (opcode) {
@@ -75,6 +77,12 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
         }
 #endif
         return 0;
+    case EffVendorSpecific:
+        if (state && index == 0x1267) {
+            state->hangNextProcess = true;
+            return 1;
+        }
+        return 0;
     case EffProcessEvents:
         if (state && ptr) {
             auto* events = static_cast<VstEvents*>(ptr);
@@ -116,6 +124,11 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32, VstIntPtr
 
 void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs, VstInt32 frames) {
     auto* state = static_cast<MockState*>(effect ? effect->object : nullptr);
+    if (state && state->hangNextProcess) {
+        state->hangNextProcess = false;
+        Sleep(5000);
+    }
+
     const bool configured =
         state && state->mains && state->sampleRate > 0.0f &&
         state->blockSize == frames;
