@@ -573,6 +573,9 @@ void captureNativeGdiFrame(const VOID* bits, const BITMAPINFO* bmi) {
 
 thread_local HWND g_gdiCreateParent{nullptr};
 thread_local int g_gdiCreateScalePercent{100};
+thread_local bool g_gdiMouseDragActive{false};
+thread_local POINT g_gdiMouseDragSurfaceStart{};
+thread_local POINT g_gdiMouseDragNativeStart{};
 
 LRESULT CALLBACK gdiCreateCbtProc(int code, WPARAM wp, LPARAM lp) {
     if (code == HCBT_CREATEWND &&
@@ -613,8 +616,20 @@ BOOL WINAPI scaledScreenToClient(HWND hwnd, LPPOINT point) {
 
     POINT native = *point;
     if (scale > 100 && editor && hwnd == editor) {
-        native.x = MulDiv(native.x, 100, scale);
-        native.y = MulDiv(native.y, 100, scale);
+        if (g_gdiMouseDragActive) {
+            // During a captured knob drag, use the same relative 1:1 delta
+            // contract as the translated WM_MOUSEMOVE path. Some legacy NI
+            // editors query GetCursorPos/ScreenToClient in addition to using
+            // message LPARAM coordinates; returning a differently scaled
+            // position here makes the two sources disagree mid-drag.
+            native.x = g_gdiMouseDragNativeStart.x +
+                       (native.x - g_gdiMouseDragSurfaceStart.x);
+            native.y = g_gdiMouseDragNativeStart.y +
+                       (native.y - g_gdiMouseDragSurfaceStart.y);
+        } else {
+            native.x = MulDiv(native.x, 100, scale);
+            native.y = MulDiv(native.y, 100, scale);
+        }
         *point = native;
 
         static std::atomic<unsigned> diagCount{0};
@@ -645,8 +660,18 @@ BOOL WINAPI scaledClientToScreen(HWND hwnd, LPPOINT point) {
     const int scale = g_gdiScalePercent.load(std::memory_order_relaxed);
     const HWND editor = g_gdiEditorWindow.load(std::memory_order_relaxed);
     if (scale > 100 && editor && hwnd == editor) {
-        point->x = MulDiv(point->x, scale, 100);
-        point->y = MulDiv(point->y, scale, 100);
+        if (g_gdiMouseDragActive) {
+            // Exact inverse of the relative ScreenToClient mapping above.
+            // This preserves cursor-warp/recenter behaviour used by legacy
+            // controls without changing drag sensitivity at scaled GUI sizes.
+            point->x = g_gdiMouseDragSurfaceStart.x +
+                       (point->x - g_gdiMouseDragNativeStart.x);
+            point->y = g_gdiMouseDragSurfaceStart.y +
+                       (point->y - g_gdiMouseDragNativeStart.y);
+        } else {
+            point->x = MulDiv(point->x, scale, 100);
+            point->y = MulDiv(point->y, scale, 100);
+        }
     }
     return original(hwnd, point);
 }
@@ -1045,6 +1070,9 @@ LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
         state->leftDrag = true;
         state->surfaceStart = {x, y};
         state->nativeStart = {nativeX, nativeY};
+        g_gdiMouseDragActive = true;
+        g_gdiMouseDragSurfaceStart = state->surfaceStart;
+        g_gdiMouseDragNativeStart = state->nativeStart;
     } else if (msg == WM_MOUSEMOVE && state->leftDrag) {
         // Absolute hit testing must map scaled editor coordinates back to the
         // plug-in's native geometry, but a captured knob drag is relative.
@@ -1057,6 +1085,7 @@ LPARAM mapMouseCoordinates(GdiMouseScaleState* state, UINT msg, LPARAM lp) {
         nativeX = state->nativeStart.x + (x - state->surfaceStart.x);
         nativeY = state->nativeStart.y + (y - state->surfaceStart.y);
         state->leftDrag = false;
+        g_gdiMouseDragActive = false;
     }
 
     return MAKELPARAM(
@@ -1113,8 +1142,10 @@ LRESULT CALLBACK gdiScaledEditorProc(
 
     if (msg == WM_LBUTTONUP && GetCapture() == hwnd)
         ReleaseCapture();
-    if (msg == WM_CAPTURECHANGED)
+    if (msg == WM_CAPTURECHANGED) {
         state->leftDrag = false;
+        g_gdiMouseDragActive = false;
+    }
 
     // Pro-53 frequently repaints only tiny dirty rectangles after mouse input.
     // The legacy SetDIBitsToDevice source-rectangle semantics do not map
