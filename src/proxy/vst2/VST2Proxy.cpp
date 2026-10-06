@@ -184,6 +184,9 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 event.index < static_cast<VstInt32>(inst->parameterValues.size())) {
                 inst->parameterValues[static_cast<std::size_t>(event.index)] =
                     std::clamp(event.opt, 0.0f, 1.0f);
+                ++inst->parameterGeneration;
+                if (inst->parameterGeneration == 0)
+                    inst->parameterGeneration = 1;
             }
 
             (void)inst->host(&inst->effect,
