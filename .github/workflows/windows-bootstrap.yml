@@ -502,7 +502,17 @@ jobs:
       - name: Package real VST2 test kit
         shell: pwsh
         run: |
-          [scriptblock]::Create((Get-Content "tools\Create-RealVST2-TestWrapper-GUI.ps1" -Raw)) | Out-Null
+          $fieldTestScript = Get-Content "tools\Create-RealVST2-TestWrapper-GUI.ps1" -Raw
+          [scriptblock]::Create($fieldTestScript) | Out-Null
+          if ($fieldTestScript -notmatch 'Scale\s*=\s*100') {
+            throw "Real VST2 field test must stay at 100% baseline scale"
+          }
+          if ($fieldTestScript -notmatch 'EditorMode\s*=\s*"Direct"') {
+            throw "Real VST2 field test must use Direct editor mode"
+          }
+          if ($fieldTestScript -match 'EditorMode\s*=\s*"Gdi"') {
+            throw "Real VST2 baseline must not force GDI mode"
+          }
 
           $kit = Join-Path $PWD "PluginScaler-TestKit"
           New-Item -ItemType Directory -Force -Path $kit | Out-Null
