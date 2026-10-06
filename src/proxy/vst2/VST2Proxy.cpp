@@ -266,6 +266,7 @@ void discardDeadBridge(ProxyInstance* inst) noexcept;
 bool startBridge(ProxyInstance* inst);
 void requestBridgeRecovery(ProxyInstance* inst) noexcept;
 void refreshParametersFromHelper(ProxyInstance* inst);
+std::filesystem::path proxyModulePath();
 
 void captureRealtimeDiagnosticSnapshot(
     ProxyInstance* inst,
