@@ -469,7 +469,7 @@ int wmain(int argc, wchar_t** argv) {
     if (ok) {
         const bool runtimeContextOk =
             effect->dispatcher(effect, EffVendorSpecific,
-                               0x1260, 0, nullptr, 0.0f) == 1;
+                               0x1266, 0, nullptr, 0.0f) == 1;
         std::cout << "host-runtime-context="
                   << (runtimeContextOk ? "PASS" : "FAIL") << "\n";
         ok = ok && runtimeContextOk;

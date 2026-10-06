@@ -15,8 +15,8 @@ bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
 bool gTimeInfoVerified = false;
-bool gRealtimeProcessLevelVerified = false;
-bool gAutomationStateVerified = false;
+VstIntPtr gObservedProcessLevel = 0;
+VstIntPtr gObservedAutomationState = 0;
 AudioMasterCallback gHostCallback = nullptr;
 AEffect* gEffectForCallback = nullptr;
 
@@ -235,8 +235,10 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (index == 0x125A)
             return gTimeInfoVerified ? 1 : 0;
         if (index == 0x1260)
-            return gRealtimeProcessLevelVerified &&
-                   gAutomationStateVerified ? 1 : 0;
+            return gObservedProcessLevel == 2 ? 1 : 0;
+        if (index == 0x1266)
+            return gObservedProcessLevel == 4 &&
+                   gObservedAutomationState == 4 ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -455,12 +457,12 @@ void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt3
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
 
     if (gHostCallback && effect) {
-        gRealtimeProcessLevelVerified =
+        gObservedProcessLevel =
             gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
-                          0, 0, nullptr, 0.0f) == 4;
-        gAutomationStateVerified =
+                          0, 0, nullptr, 0.0f);
+        gObservedAutomationState =
             gHostCallback(effect, AudioMasterGetAutomationState,
-                          0, 0, nullptr, 0.0f) == 4;
+                          0, 0, nullptr, 0.0f);
 
         const VstIntPtr requested =
             VstPpqPosValid | VstTempoValid | VstSmpteValid;
