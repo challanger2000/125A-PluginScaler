@@ -108,6 +108,7 @@ struct ProxyInstance {
     pluginscaler::ipc::AudioSharedChannel channel;
     PROCESS_INFORMATION helperProcess{};
     HANDLE controlPipe{INVALID_HANDLE_VALUE};
+    std::mutex controlMutex;
     HANDLE callbackPipe{INVALID_HANDLE_VALUE};
     std::thread callbackThread;
     std::atomic<bool> callbackStop{false};
@@ -629,8 +630,14 @@ bool controlCall(ProxyInstance* inst,
                  std::uint32_t payloadBytes,
                  std::vector<std::uint8_t>& reply) {
     reply.clear();
-    if (!inst || inst->controlPipe == INVALID_HANDLE_VALUE ||
-        payloadBytes > pluginscaler::ipc::kMaxControlPayload)
+    if (!inst || payloadBytes > pluginscaler::ipc::kMaxControlPayload)
+        return false;
+
+    // The control pipe is a strict request/response byte stream. Hosts may
+    // issue editor/state/dispatcher calls from different control threads, so
+    // one complete transaction must own the stream until its response is read.
+    std::lock_guard<std::mutex> controlLock(inst->controlMutex);
+    if (inst->controlPipe == INVALID_HANDLE_VALUE)
         return false;
 
     pluginscaler::ipc::ControlMessageHeader req{};
