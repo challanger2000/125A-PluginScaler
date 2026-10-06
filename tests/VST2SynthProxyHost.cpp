@@ -405,6 +405,8 @@ int wmain(int argc, wchar_t** argv) {
         }
 
         if (ok && nativeEditor) {
+            const float parameterBeforeGuiAutomation =
+                effect->getParameter(effect, 0);
             const auto setParameterCallsBefore =
                 effect->dispatcher(effect, EffVendorSpecific,
                                    0x126A, 0, nullptr, 0.0f);
@@ -465,6 +467,12 @@ int wmain(int argc, wchar_t** argv) {
                           << (dragOk ? "PASS" : "FAIL") << "\n";
                 ok = ok && dragOk;
             }
+
+            // The GUI automation probe intentionally changes parameter 0.
+            // Restore the pre-test value so later MIDI/audio assertions run
+            // from the same deterministic baseline as before this probe.
+            effect->setParameter(effect, 0, parameterBeforeGuiAutomation);
+            ok = processSilence(effect, 64) && ok;
         }
     }
 
