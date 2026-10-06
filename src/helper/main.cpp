@@ -2402,22 +2402,20 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     auto& dst = midi[static_cast<std::size_t>(i)];
                     const auto& src = block->midiEvents[i];
                     dst.type = formats::vst2abi::kVstMidiType;
-                    // Normalize host-side legacy MIDI into the canonical
-                    // VST2 event ABI before crossing into the target plug-in.
-                    // Some hosts deliver 24-byte legacy payloads, which the
-                    // proxy accepts, but the plug-in receives the full 32-byte
-                    // VstMidiEvent described by this ABI.
-                    dst.byteSize =
-                        static_cast<formats::vst2abi::VstInt32>(
-                            sizeof(formats::vst2abi::VstMidiEvent));
+                    // VST2's VstMidiEvent structure occupies 32 bytes in
+                    // memory, but its ABI-defined byteSize field is 24.
+                    dst.byteSize = 24;
                     dst.deltaFrames = src.deltaFrames;
                     dst.flags = src.flags;
                     for (int b = 0; b < 4; ++b)
                         dst.midiData[b] = static_cast<char>(src.data[b]);
                 }
+                block->header.errorCode = 201u;
                 ok = module.processMidiEvents(
                     midi.data(),
                     static_cast<std::int32_t>(block->header.midiEventCount));
+                if (ok)
+                    block->header.errorCode = 0u;
             }
 
             if (!realtimeDeferred && ok) {
@@ -2432,9 +2430,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 for (std::uint32_t ch = 0; ch < outCount; ++ch)
                     outputs[ch] = block->outputs[ch];
 
+                block->header.errorCode = 202u;
                 ok = module.processReplacing(
                     inputs.data(), outputs.data(),
                     static_cast<std::int32_t>(block->header.frames));
+                if (ok)
+                    block->header.errorCode = 0u;
 
             }
 
@@ -2442,8 +2443,17 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 nullptr, std::memory_order_release);
         }
 
-        block->header.errorCode =
-            realtimeDeferred ? 104u : (ok ? 0u : 103u);
+        if (realtimeDeferred) {
+            block->header.errorCode = 104u;
+        } else if (!ok) {
+            // Preserve the phase marker (201 MIDI / 202 DSP) when the call
+            // returned false; otherwise fall back to a generic helper error.
+            if (block->header.errorCode != 201u &&
+                block->header.errorCode != 202u)
+                block->header.errorCode = 103u;
+        } else {
+            block->header.errorCode = 0u;
+        }
         block->header.state.store(static_cast<std::uint32_t>(
                                       (ok || realtimeDeferred)
                                           ? ipc::AudioBlockState::OutputReady
