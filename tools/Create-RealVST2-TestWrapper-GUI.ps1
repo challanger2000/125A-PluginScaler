@@ -63,7 +63,7 @@ try {
         HelperExe = $helper
         OutputDir = $outputDir
         Scale = 100
-        EditorMode = "Direct"
+        EditorMode = "Gdi"
         WrapperName = $wrapperName
     }
 
@@ -102,7 +102,7 @@ Testreihenfolge:
 6. Projekt speichern, Studio One schließen, Projekt neu laden.
 7. Prüfen, ob Preset/Parameterzustand korrekt wiederhergestellt ist.
 8. Plugin deaktivieren/aktivieren und erneut MIDI spielen.
-9. Erst wenn 100% Direct stabil ist, GUI-Skalierung testen.
+9. Erst wenn 100% GDI stabil ist, 150/200% testen.
 
 Bei einem Fehler bitte nicht weiterprobieren:
 - merken, welcher Schritt fehlschlug,
@@ -113,7 +113,7 @@ Bei einem Fehler bitte nicht weiterprobieren:
     $nl = [Environment]::NewLine
     Show-Info ("Wrapper erstellt." + $nl + $nl +
         "In Studio One laden:" + $nl + $wrapperDll + $nl + $nl +
-        "Zuerst nur bei 100% / Direct testen.")
+        "Zuerst nur bei 100% / GDI testen.")
 }
 catch {
     Show-Error $_.Exception.Message
