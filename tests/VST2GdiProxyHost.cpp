@@ -111,10 +111,10 @@ bool runScale(EntryProc entry, int scale) {
         UpdateWindow(host);
 
         const auto openOk=effect->dispatcher(effect,EffEditOpen,0,0,host,0.0f);
-        // The legacy GDI path intentionally gives old editors a quiet
-        // startup grace period before capture. Keep pumping the host message
-        // queue so the surface timer can begin capture after that grace.
-        pumpMessagesFor(5300);
+        // Capture now begins almost immediately. Keep pumping long enough
+        // for the first timer/capture cycle, but do not artificially idle the
+        // helper for seconds between editor lifecycle operations.
+        pumpMessagesFor(250);
 
         HWND surface=nullptr;
         EnumChildWindows(host,findSurfaceProc,reinterpret_cast<LPARAM>(&surface));
