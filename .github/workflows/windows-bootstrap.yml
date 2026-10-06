@@ -335,8 +335,7 @@ jobs:
             throw "Synth bridge marker missing"
           }
 
-      - name: Run Pro-53-style GDI scaler harness (experimental, non-gating)
-        continue-on-error: true
+      - name: Run Pro-53-style GDI scaler harness
         timeout-minutes: 3
         shell: pwsh
         run: |
@@ -368,6 +367,7 @@ jobs:
             "gdi-scaled-visual=PASS",
             "gdi-click-map=PASS",
             "gdi-drag-redraw=PASS",
+            "gdi-outside-drag=PASS",
             "gdi-close=PASS",
             "gdi-harness=PASS"
           )) {
