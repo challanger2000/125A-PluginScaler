@@ -154,6 +154,19 @@ bool processSilence(AEffect* effect, VstInt32 frames) {
     return true;
 }
 
+bool processHasSignal(AEffect* effect, VstInt32 frames) {
+    std::vector<float> left(static_cast<std::size_t>(frames), 0.0f);
+    std::vector<float> right(static_cast<std::size_t>(frames), 0.0f);
+    float* outputs[2]{left.data(), right.data()};
+    effect->processReplacing(effect, nullptr, outputs, frames);
+    for (VstInt32 i = 0; i < frames; ++i) {
+        if (std::fabs(left[static_cast<std::size_t>(i)]) > 0.00001f ||
+            std::fabs(right[static_cast<std::size_t>(i)]) > 0.00001f)
+            return true;
+    }
+    return false;
+}
+
 bool processNoteOnBlock(AEffect* effect, VstInt32 frames,
                         VstInt32 deltaFrames, float expectedAmplitude) {
     std::vector<float> left(static_cast<std::size_t>(frames), -1.0f);
@@ -494,6 +507,55 @@ int wmain(int argc, wchar_t** argv) {
                 std::cout << "editor-native-drag="
                           << (dragOk ? "PASS" : "FAIL") << "\n";
                 ok = ok && dragOk;
+            }
+
+            if (ok && nativeEditor) {
+                // Real-use regression: hold a synth note while the legacy GUI
+                // emits a dense stream of parameter automation + display
+                // notifications. No audio block may collapse to silence.
+                gPluginMidiOutputCount = 0;
+                const bool noteStarted =
+                    sendMidi(effect, 0x90, 64, 100, 0) &&
+                    processHasSignal(effect, 64);
+
+                std::atomic<bool> guiDone{false};
+                std::thread guiStress([&] {
+                    SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
+                                 MAKELPARAM(50, 40));
+                    for (int i = 0; i < 128; ++i) {
+                        const int y = 110 - (i % 100);
+                        SendMessageW(nativeEditor, WM_MOUSEMOVE, MK_LBUTTON,
+                                     MAKELPARAM(70, y));
+                    }
+                    SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
+                                 MAKELPARAM(70, 20));
+                    guiDone.store(true, std::memory_order_release);
+                });
+
+                bool continuousAudio = noteStarted;
+                int blocks = 0;
+                while (!guiDone.load(std::memory_order_acquire) || blocks < 32) {
+                    continuousAudio =
+                        processHasSignal(effect, 64) && continuousAudio;
+                    ++blocks;
+                    if (blocks > 256)
+                        break;
+                }
+                guiStress.join();
+
+                const bool noteStopped =
+                    sendMidi(effect, 0x80, 64, 0, 0) &&
+                    processSilence(effect, 64);
+                const bool guiRealtimeOk =
+                    noteStarted && continuousAudio && noteStopped &&
+                    blocks <= 256;
+                std::cout << "gui-gesture-continuous-audio="
+                          << (guiRealtimeOk ? "PASS" : "FAIL")
+                          << " blocks=" << blocks << "\n";
+                ok = ok && guiRealtimeOk;
+
+                // Keep later MIDI-output assertions independent of this probe.
+                gPluginMidiOutputCount = 0;
             }
 
             // The GUI automation probe intentionally changes parameter 0.
