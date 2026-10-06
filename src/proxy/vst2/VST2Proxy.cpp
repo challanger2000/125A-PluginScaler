@@ -54,8 +54,11 @@ struct ProxyManifest {
     VstInt32 flags{1 << 4};
     VstInt32 plugCategory{PlugCategUnknown};
     VstInt32 midiInputChannels{0};
+    VstInt32 midiOutputChannels{0};
     bool receivesVstEvents{false};
     bool receivesVstMidiEvents{false};
+    bool sendsVstEvents{false};
+    bool sendsVstMidiEvents{false};
     bool wantsMidi{false};
     std::vector<float> parameterDefaults;
     std::vector<std::string> parameterNames;
@@ -476,8 +479,11 @@ ProxyManifest loadManifest(const std::wstring& manifestPath) {
             else if (key == "flags") m.flags = static_cast<VstInt32>(std::stol(value));
             else if (key == "category") m.plugCategory = static_cast<VstInt32>(std::stol(value));
             else if (key == "midiInputs") m.midiInputChannels = static_cast<VstInt32>(std::stol(value));
+            else if (key == "midiOutputs") m.midiOutputChannels = static_cast<VstInt32>(std::stol(value));
             else if (key == "receiveVstEvents") m.receivesVstEvents = (std::stol(value) != 0);
             else if (key == "receiveVstMidiEvent") m.receivesVstMidiEvents = (std::stol(value) != 0);
+            else if (key == "sendVstEvents") m.sendsVstEvents = (std::stol(value) != 0);
+            else if (key == "sendVstMidiEvent") m.sendsVstMidiEvents = (std::stol(value) != 0);
             else if (key == "wantMidi") m.wantsMidi = (std::stol(value) != 0);
             else if (key.rfind("param.", 0) == 0) {
                 const auto index = static_cast<std::size_t>(std::stoul(key.substr(6)));
@@ -512,7 +518,12 @@ ProxyManifest loadManifest(const std::wstring& manifestPath) {
 
     m.valid = formatOk &&
         m.numPrograms >= 0 && m.numParams >= 0 &&
-        m.numInputs >= 0 && m.numOutputs >= 0 &&
+        m.numInputs >= 0 &&
+        m.numOutputs >= 0 &&
+        m.numInputs <= static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels) &&
+        m.numOutputs <= static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels) &&
+        m.midiInputChannels >= 0 && m.midiInputChannels <= 16 &&
+        m.midiOutputChannels >= 0 && m.midiOutputChannels <= 16 &&
         m.numParams <= static_cast<VstInt32>(pluginscaler::ipc::kMaxParameters);
     if (m.valid) {
         const auto paramCount = static_cast<std::size_t>(m.numParams);
@@ -1659,9 +1670,26 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
     case EffBeginSetProgram:
     case EffEndSetProgram:
+        if (!inst->bridgeStarted)
+            return 1;
+        {
+            VstIntPtr result = 0;
+            return legacyDispatchCall(inst, opcode, index, value, nullptr, 0, opt, result)
+                ? result : 0;
+        }
+
     case EffStartProcess:
     case EffStopProcess:
+        // The helper owns the VST2.4 start/stop lifecycle as part of
+        // SetMains. A DAW may still send the explicit opcodes; acknowledge
+        // them here without dispatching a duplicate start/stop to the target.
+        return 1;
+
     case EffSetProcessPrecision:
+        // The proxy currently exposes only float processReplacing. Never
+        // accept 64-bit processing precision until a double bridge path exists.
+        if (value != 0)
+            return 0;
         if (!inst->bridgeStarted)
             return 1;
         {
@@ -2116,22 +2144,21 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 0;
 
     case EffGetNumMidiOutputChannels:
-        return 0;
+        return std::max<VstInt32>(0, inst->manifest.midiOutputChannels);
 
     case EffCanDo:
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0)
-            return (inst->manifest.wantsMidi ||
-                    inst->manifest.receivesVstEvents ||
-                    inst->manifest.receivesVstMidiEvents ||
-                    inst->manifest.plugCategory == PlugCategSynth ||
-                    (inst->manifest.flags & kEffectFlagIsSynth)) ? 1 : 0;
+            return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
             return (inst->manifest.wantsMidi ||
                     inst->manifest.receivesVstMidiEvents ||
-                    inst->manifest.receivesVstEvents ||
                     inst->manifest.plugCategory == PlugCategSynth ||
                     (inst->manifest.flags & kEffectFlagIsSynth)) ? 1 : 0;
+        if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0)
+            return 0;
+        if (std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0)
+            return inst->manifest.sendsVstMidiEvents ? 1 : 0;
         return 0;
 
     default:
@@ -2375,6 +2402,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     inst->host = host;
     inst->settings = loadSettings();
     inst->manifest = loadManifest(inst->settings.manifest);
+    if (!inst->manifest.valid) {
+        delete inst;
+        return nullptr;
+    }
     inst->parameterValues = inst->manifest.parameterDefaults;
     inst->scalePercent = inst->settings.scalePercent;
 
@@ -2396,7 +2427,10 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     // The wrapper itself always supports opaque project state. If the target
     // plug-in has no native VST2 chunks, the x86 module serializes
     // program+parameters into a validated 125A fallback state blob.
-    inst->effect.flags = inst->manifest.flags | kEffectFlagProgramChunks;
+    inst->effect.flags =
+        (inst->manifest.flags & ~kEffectFlagCanDoubleReplacing) |
+        kEffectFlagProgramChunks |
+        kEffectFlagCanReplacing;
     if (inst->manifest.plugCategory == PlugCategSynth ||
         inst->manifest.wantsMidi ||
         inst->manifest.receivesVstEvents ||

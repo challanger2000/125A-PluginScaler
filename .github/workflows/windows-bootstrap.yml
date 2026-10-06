@@ -197,6 +197,40 @@ jobs:
           }
           Write-Host "fallback-state=PASS"
 
+      - name: Run x64 proxy with legacy process-only VST2
+        shell: pwsh
+        run: |
+          $proxyHostExe = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2LegacyProcess.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2LegacyProcess.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $plugin $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Legacy process-only manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $output = & $proxyHostExe $proxy $helper $plugin $manifest
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Legacy process-only bridge failed with exit code $LASTEXITCODE"
+          }
+          $joined = ($output | Out-String)
+          foreach ($marker in @(
+            "metadata=PASS",
+            "parameter=PASS",
+            "state=PASS",
+            "helper-hang-isolation=PASS",
+            "helper-hang-recovery=PASS",
+            "torture=PASS"
+          )) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "Legacy process-only marker missing: $marker"
+            }
+          }
+          Write-Host "legacy-process-fallback=PASS"
+
       - name: Run x64 proxy with x86 zero-input synth
         timeout-minutes: 3
         shell: pwsh
@@ -270,11 +304,23 @@ jobs:
           if ($joined -notmatch "synth-note-off=PASS") {
             throw "Synth note-off marker missing"
           }
+          if ($joined -notmatch "plugin-midi-out-capabilities=PASS") {
+            throw "Plugin MIDI output capability marker missing"
+          }
+          if ($joined -notmatch "float-processing-contract=PASS") {
+            throw "Float processing contract marker missing"
+          }
+          if ($joined -notmatch "start-process-idempotent=PASS") {
+            throw "Start process idempotence marker missing"
+          }
           if ($joined -notmatch "plugin-midi-out-note-on=PASS") {
             throw "Plugin to host MIDI note-on marker missing"
           }
           if ($joined -notmatch "plugin-midi-out-note-off=PASS") {
             throw "Plugin to host MIDI note-off marker missing"
+          }
+          if ($joined -notmatch "rt-callback-context=PASS") {
+            throw "Realtime callback context marker missing"
           }
           if ($joined -notmatch "synth=PASS") {
             throw "Synth bridge marker missing"

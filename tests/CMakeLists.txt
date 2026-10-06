@@ -27,6 +27,13 @@ target_compile_features(MockVST2NoChunk PRIVATE cxx_std_20)
 pluginscaler_enable_warnings(MockVST2NoChunk)
 set_target_properties(MockVST2NoChunk PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2NoChunk")
 
+add_library(MockVST2LegacyProcess SHARED MockVST2.cpp)
+target_include_directories(MockVST2LegacyProcess PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_definitions(MockVST2LegacyProcess PRIVATE PLUGINSCALER_MOCK_LEGACY_PROCESS=1)
+target_compile_features(MockVST2LegacyProcess PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2LegacyProcess)
+set_target_properties(MockVST2LegacyProcess PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2LegacyProcess")
+
 add_library(MockVST2Synth SHARED MockVST2Synth.cpp)
 target_include_directories(MockVST2Synth PRIVATE "${PROJECT_SOURCE_DIR}/include")
 target_compile_features(MockVST2Synth PRIVATE cxx_std_20)

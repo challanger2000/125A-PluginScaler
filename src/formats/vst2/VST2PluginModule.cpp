@@ -26,6 +26,19 @@ std::array<HostModuleSlot, kHostModuleSlots> g_hostModuleSlots{};
 thread_local VST2PluginModule* g_constructingModule = nullptr;
 thread_local bool g_inRealtimeProcess = false;
 
+struct RealtimeProcessScope {
+    bool previous{false};
+
+    RealtimeProcessScope() noexcept
+        : previous(g_inRealtimeProcess) {
+        g_inRealtimeProcess = true;
+    }
+
+    ~RealtimeProcessScope() {
+        g_inRealtimeProcess = previous;
+    }
+};
+
 inline constexpr std::uint32_t kFallbackStateMagic = 0x53353231u; // "125S"
 inline constexpr std::uint16_t kFallbackStateVersion = 1;
 
@@ -182,12 +195,13 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
             : 0;
     case AudioMasterCanDo:
         if (!ptr) return 0;
-        if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+        if (std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sizeWindow") == 0)
             return 1;
+        if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0)
+            return 0;
         return 0;
     default:
         (void)value;
@@ -264,16 +278,24 @@ bool callProcessReplacingSafely(AEffect* effect,
                                 float** inputs,
                                 float** outputs,
                                 VstInt32 frames) noexcept {
-    if (!effect || !effect->processReplacing) return false;
+    if (!effect)
+        return false;
+
+    auto* processProc = effect->processReplacing
+        ? effect->processReplacing
+        : effect->process;
+    if (!processProc)
+        return false;
+
 #if defined(_MSC_VER)
     __try {
-        effect->processReplacing(effect, inputs, outputs, frames);
+        processProc(effect, inputs, outputs, frames);
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 #else
-    effect->processReplacing(effect, inputs, outputs, frames);
+    processProc(effect, inputs, outputs, frames);
     return true;
 #endif
 }
@@ -420,6 +442,11 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
         midiInputs > 0)
         result.midiInputChannels = static_cast<std::int32_t>(midiInputs);
 
+    VstIntPtr midiOutputs = 0;
+    if (callDispatcherSafely(effect_, EffGetNumMidiOutputChannels, 0, 0, nullptr, 0.0f, &midiOutputs) &&
+        midiOutputs > 0)
+        result.midiOutputChannels = static_cast<std::int32_t>(midiOutputs);
+
     const auto queryCanDo = [&](const char* capability) {
         VstIntPtr value = 0;
         return callDispatcherSafely(effect_, EffCanDo, 0, 0,
@@ -428,6 +455,8 @@ VST2ProbeResult VST2PluginModule::probe(const std::filesystem::path& path) {
     };
     result.receivesVstEvents = queryCanDo("receiveVstEvents");
     result.receivesVstMidiEvents = queryCanDo("receiveVstMidiEvent");
+    result.sendsVstEvents = queryCanDo("sendVstEvents");
+    result.sendsVstMidiEvents = queryCanDo("sendVstMidiEvent");
     result.wantsMidi = wantsMidi_;
 
     if (effect_->numParams > 0 && effect_->getParameter) {
@@ -513,8 +542,8 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
         return false;
     }
 
-    if (!effect_->processReplacing) {
-        error = "processReplacing not available";
+    if (!effect_->processReplacing && !effect_->process) {
+        error = "no VST2 audio process callback available";
         close();
         return false;
     }
@@ -615,11 +644,9 @@ bool VST2PluginModule::processReplacing(float** inputs, float** outputs,
                                         std::int32_t frames) noexcept {
     if (!effect_ || !mainsOn_ || frames <= 0)
         return false;
-    g_inRealtimeProcess = true;
-    const bool ok = callProcessReplacingSafely(
+    RealtimeProcessScope realtimeScope;
+    return callProcessReplacingSafely(
         effect_, inputs, outputs, frames);
-    g_inRealtimeProcess = false;
-    return ok;
 }
 
 bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
@@ -645,13 +672,18 @@ bool VST2PluginModule::processMidiEvents(const VstMidiEvent* events,
             reinterpret_cast<VstEvent*>(const_cast<VstMidiEvent*>(&events[i]));
 
     VstIntPtr result = 0;
-    // No heap allocation is allowed on the realtime event path.
+    // Event delivery is part of the current audio block. It must expose the
+    // same process level and realtime callback restrictions as DSP.
+    RealtimeProcessScope realtimeScope;
     return callDispatcherSafely(
         effect_, EffProcessEvents, 0, 0, &list, 0.0f, &result);
 }
 
 bool VST2PluginModule::setParameter(std::int32_t index, float value) noexcept {
     if (!effect_ || index < 0 || index >= effect_->numParams) return false;
+    // The helper applies parameter generations as part of the shared audio
+    // transaction, so callbacks raised here belong to the audio context.
+    RealtimeProcessScope realtimeScope;
     return callSetParameterSafely(effect_, index, value);
 }
 

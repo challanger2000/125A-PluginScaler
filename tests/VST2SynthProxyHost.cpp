@@ -265,8 +265,31 @@ int wmain(int argc, wchar_t** argv) {
         effect->numParams == 1 &&
         effect->numPrograms == 4 &&
         effect->uniqueId == 0x53594E31 &&
-        (effect->flags & (1 << 8)) != 0;
+        (effect->flags & (1 << 8)) != 0 &&
+        (effect->flags & kEffectFlagCanDoubleReplacing) == 0 &&
+        effect->processDoubleReplacing == nullptr;
     std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << "\n";
+
+    if (ok) {
+        char sendEvents[] = "sendVstEvents";
+        char sendMidi[] = "sendVstMidiEvent";
+        char receiveEvents[] = "receiveVstEvents";
+        char receiveMidi[] = "receiveVstMidiEvent";
+        const bool midiOutCapsOk =
+            effect->dispatcher(effect, EffGetNumMidiOutputChannels,
+                               0, 0, nullptr, 0.0f) == 1 &&
+            effect->dispatcher(effect, EffCanDo,
+                               0, 0, sendEvents, 0.0f) == 0 &&
+            effect->dispatcher(effect, EffCanDo,
+                               0, 0, sendMidi, 0.0f) == 1 &&
+            effect->dispatcher(effect, EffCanDo,
+                               0, 0, receiveEvents, 0.0f) == 0 &&
+            effect->dispatcher(effect, EffCanDo,
+                               0, 0, receiveMidi, 0.0f) == 1;
+        std::cout << "plugin-midi-out-capabilities="
+                  << (midiOutCapsOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && midiOutCapsOk;
+    }
 
     // Exercise the proxy in the real VST2 lifecycle order. EffOpen creates
     // the host callback marshalling window on this UI thread before any
@@ -276,6 +299,30 @@ int wmain(int argc, wchar_t** argv) {
              effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f) != 0 &&
              effect->dispatcher(effect, EffSetBlockSize, 0, 64, nullptr, 0.0f) != 0 &&
              effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0;
+
+    if (ok) {
+        const bool floatContractOk =
+            effect->dispatcher(effect, EffSetProcessPrecision,
+                               0, 0, nullptr, 0.0f) != 0 &&
+            effect->dispatcher(effect, EffSetProcessPrecision,
+                               0, 1, nullptr, 0.0f) == 0;
+        std::cout << "float-processing-contract="
+                  << (floatContractOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && floatContractOk;
+    }
+
+    if (ok) {
+        const bool lifecycleIdempotent =
+            effect->dispatcher(effect, EffStartProcess,
+                               0, 0, nullptr, 0.0f) == 1 &&
+            effect->dispatcher(effect, EffStartProcess,
+                               0, 0, nullptr, 0.0f) == 1 &&
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x125E, 0, nullptr, 0.0f) == 1;
+        std::cout << "start-process-idempotent="
+                  << (lifecycleIdempotent ? "PASS" : "FAIL") << "\n";
+        ok = ok && lifecycleIdempotent;
+    }
 
     HWND editorHost = nullptr;
     if (ok) {
@@ -592,6 +639,15 @@ int wmain(int argc, wchar_t** argv) {
     std::cout << "plugin-midi-out-note-off="
               << (midiOutNoteOffOk ? "PASS" : "FAIL") << "\n";
     ok = ok && midiOutNoteOffOk;
+
+    if (ok) {
+        const bool rtCallbackContextOk =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1268, 0, nullptr, 0.0f) == 1;
+        std::cout << "rt-callback-context="
+                  << (rtCallbackContextOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && rtCallbackContextOk;
+    }
 
     if (effect) {
         effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);

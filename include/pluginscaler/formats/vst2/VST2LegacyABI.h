@@ -210,6 +210,7 @@ inline constexpr VstInt32 kEffectFlagHasEditor = 1 << 0;
 inline constexpr VstInt32 kEffectFlagCanReplacing = 1 << 4;
 inline constexpr VstInt32 kEffectFlagProgramChunks = 1 << 5;
 inline constexpr VstInt32 kEffectFlagIsSynth = 1 << 8;
+inline constexpr VstInt32 kEffectFlagCanDoubleReplacing = 1 << 12;
 
 enum AudioMasterOpcode : VstInt32 {
     AudioMasterAutomate = 0,

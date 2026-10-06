@@ -28,8 +28,11 @@ struct VST2ProbeResult {
     std::int32_t flags{0};
     std::int32_t plugCategory{vst2abi::PlugCategUnknown};
     std::int32_t midiInputChannels{0};
+    std::int32_t midiOutputChannels{0};
     bool receivesVstEvents{false};
     bool receivesVstMidiEvents{false};
+    bool sendsVstEvents{false};
+    bool sendsVstMidiEvents{false};
     bool wantsMidi{false};
     std::vector<float> parameterDefaults;
     std::vector<std::string> parameterNames;

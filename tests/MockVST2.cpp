@@ -145,7 +145,11 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs, 
             const float midiOffset =
                 (state && state->midiSeen) ? static_cast<float>(state->lastMidiNote) / 1000.0f : 0.0f;
             const float parameterOffset = state ? state->parameters[0] : 0.0f;
+#if defined(PLUGINSCALER_MOCK_LEGACY_PROCESS)
+            outputs[ch][i] += in * 2.0f + midiOffset + parameterOffset;
+#else
             outputs[ch][i] = in * 2.0f + midiOffset + parameterOffset;
+#endif
         }
     }
 }
@@ -171,14 +175,23 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     auto* effect = new AEffect{};
     effect->magic = kEffectMagic;
     effect->dispatcher = dispatch;
+#if defined(PLUGINSCALER_MOCK_LEGACY_PROCESS)
+    effect->process = processReplacing;
+    effect->processReplacing = nullptr;
+#else
     effect->processReplacing = processReplacing;
+#endif
     effect->setParameter = setParameter;
     effect->getParameter = getParameter;
     effect->numPrograms = 8;
     effect->numParams = 16;
     effect->numInputs = 2;
     effect->numOutputs = 2;
+#if defined(PLUGINSCALER_MOCK_LEGACY_PROCESS)
+    effect->flags = (1 << 8);
+#else
     effect->flags = (1 << 4) | (1 << 8);
+#endif
 #ifndef PLUGINSCALER_MOCK_NO_CHUNK
     effect->flags |= (1 << 5);
 #endif

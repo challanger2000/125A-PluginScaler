@@ -15,6 +15,8 @@ bool gMappedClickReceived = false;
 bool gNativeDragReceived = false;
 bool gDragArmed = false;
 bool gTimeInfoVerified = false;
+bool gMidiProcessLevelVerified = false;
+bool gParameterProcessLevelVerified = false;
 VstIntPtr gObservedProcessLevel = 0;
 VstIntPtr gObservedAutomationState = 0;
 AudioMasterCallback gHostCallback = nullptr;
@@ -223,7 +225,7 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         }
         return 0;
     case EffSetProcessPrecision:
-        return value == 0 ? 1 : 0;
+        return (value == 0 || value == 1) ? 1 : 0;
     case EffGetTailSize:
         return 1;
     case EffIdle:
@@ -239,6 +241,9 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (index == 0x1266)
             return gObservedProcessLevel == 4 &&
                    gObservedAutomationState == 4 ? 1 : 0;
+        if (index == 0x1268)
+            return gMidiProcessLevelVerified &&
+                   gParameterProcessLevelVerified ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -275,9 +280,9 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             char recvMidi[] = "receiveVstMidiEvent";
             char sizeWindow[] = "sizeWindow";
             char unknown[] = "125AUnknownCapability";
-            return gHostCallback(effect, AudioMasterCanDo, 0, 0, sendEvents, 0.0f) == 1 &&
+            return gHostCallback(effect, AudioMasterCanDo, 0, 0, sendEvents, 0.0f) == 0 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, sendMidi, 0.0f) == 1 &&
-                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvEvents, 0.0f) == 1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvEvents, 0.0f) == 0 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, recvMidi, 0.0f) == 1 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, sizeWindow, 0.0f) == 1 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, unknown, 0.0f) == 0
@@ -384,6 +389,11 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1;
     case EffProcessEvents:
         if (!state || !ptr) return 0;
+        if (gHostCallback && effect) {
+            gMidiProcessLevelVerified =
+                gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
+                              0, 0, nullptr, 0.0f) == 4;
+        }
         {
             auto* events = static_cast<VstEvents*>(ptr);
             auto** eventPtrs = reinterpret_cast<VstEvent**>(
@@ -437,6 +447,20 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         return 1000;
     case EffGetVstVersion:
         return 2400;
+    case EffGetNumMidiInputChannels:
+        return 1;
+    case EffGetNumMidiOutputChannels:
+        return 1;
+    case EffCanDo:
+        if (!ptr)
+            return 0;
+        if (std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0)
+            return 1;
+        if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0)
+            return 0;
+        return 0;
     default:
         return 0;
     }
@@ -444,6 +468,11 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
 void __cdecl setParameter(AEffect* effect, VstInt32 index, float value) {
     auto* state = static_cast<SynthState*>(effect ? effect->object : nullptr);
+    if (gHostCallback && effect) {
+        gParameterProcessLevelVerified =
+            gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
+                          0, 0, nullptr, 0.0f) == 4;
+    }
     if (state && index == 0)
         state->gain = std::clamp(value, 0.0f, 1.0f);
 }
@@ -569,7 +598,9 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     effect->numParams = 1;
     effect->numInputs = 0;
     effect->numOutputs = 2;
-    effect->flags = (1 << 4) | (1 << 5) | (1 << 8); // replacing, chunks, synth
+    effect->flags =
+        (1 << 4) | (1 << 5) | (1 << 8) | (1 << 12);
+    // replacing, chunks, synth, and intentionally advertised double replacing
     effect->object = new SynthState{};
     gHostCallback = host;
     gEffectForCallback = effect;
