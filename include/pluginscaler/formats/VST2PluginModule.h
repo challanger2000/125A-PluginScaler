@@ -88,10 +88,21 @@ public:
                                std::int32_t blockSize) noexcept;
     bool setMains(bool active) noexcept;
     void setHostTimeInfo(const vst2abi::VstTimeInfo& info) noexcept;
+    void setHostRuntimeContext(std::int32_t processLevel,
+                               std::int32_t automationState) noexcept {
+        hostProcessLevel_ = processLevel;
+        hostAutomationState_ = automationState;
+    }
     const vst2abi::VstTimeInfo* hostTimeInfoForRequest(
         vst2abi::VstIntPtr requestedFlags) noexcept;
     double sampleRate() const noexcept { return sampleRate_; }
     std::int32_t blockSize() const noexcept { return blockSize_; }
+    std::int32_t hostProcessLevel() const noexcept {
+        return hostProcessLevel_;
+    }
+    std::int32_t hostAutomationState() const noexcept {
+        return hostAutomationState_;
+    }
     std::int32_t uniqueId() const noexcept { return effect_ ? effect_->uniqueId : 0; }
     const char* pluginDirectoryAnsi() const noexcept {
         return pluginDirectoryAnsi_.empty() ? nullptr : pluginDirectoryAnsi_.c_str();
@@ -172,6 +183,8 @@ private:
     std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
     vst2abi::VstTimeInfo timeInfoView_{};
+    std::int32_t hostProcessLevel_{0};
+    std::int32_t hostAutomationState_{0};
     HostCallbackSink hostCallbackSink_{nullptr};
     void* hostCallbackContext_{nullptr};
     HostWindowResizeSink hostWindowResizeSink_{nullptr};

@@ -2263,8 +2263,12 @@ int runSharedVst2Server(const std::filesystem::path& path,
             hostTime.smpteFrameRate = block->hostTime.smpteFrameRate;
             hostTime.samplesToNextClock = block->hostTime.samplesToNextClock;
             hostTime.flags = block->hostTime.flags;
-            if (!realtimeDeferred)
+            if (!realtimeDeferred) {
                 module.setHostTimeInfo(hostTime);
+                module.setHostRuntimeContext(
+                    block->header.hostProcessLevel,
+                    block->header.hostAutomationState);
+            }
 
             block->header.outputMidiEventCount = 0;
             if (!realtimeDeferred && ok) {

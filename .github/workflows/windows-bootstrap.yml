@@ -234,6 +234,9 @@ jobs:
           if ($joined -notmatch "editor-close=PASS") {
             throw "Cross-process editor close marker missing"
           }
+          if ($joined -notmatch "host-runtime-context=PASS") {
+            throw "Host runtime context marker missing"
+          }
           if ($joined -notmatch "legacy-idle-proxy=PASS") {
             throw "Legacy idle proxy marker missing"
           }

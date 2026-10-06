@@ -2142,7 +2142,25 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     block->header.errorCode = 0;
 
     block->hostTime = {};
+    block->header.hostProcessLevel = 0;
+    block->header.hostAutomationState = 0;
     if (inst->host) {
+        const auto processLevel = inst->host(
+            effect, AudioMasterGetCurrentProcessLevel,
+            0, 0, nullptr, 0.0f);
+        const auto automationState = inst->host(
+            effect, AudioMasterGetAutomationState,
+            0, 0, nullptr, 0.0f);
+
+        block->header.hostProcessLevel =
+            (processLevel >= 0 && processLevel <= 4)
+                ? static_cast<std::int32_t>(processLevel)
+                : 0;
+        block->header.hostAutomationState =
+            (automationState >= 0 && automationState <= 4)
+                ? static_cast<std::int32_t>(automationState)
+                : 0;
+
         constexpr VstIntPtr wantedTimeFlags =
             VstNanosValid | VstPpqPosValid | VstTempoValid | VstBarsValid |
             VstCyclePosValid | VstTimeSigValid | VstSmpteValid | VstClockValid;

@@ -155,7 +155,13 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case AudioMasterGetBlockSize:
         return module ? static_cast<VstIntPtr>(module->blockSize()) : 512;
     case AudioMasterGetCurrentProcessLevel:
-        return g_inRealtimeProcess ? 2 : 1;
+        return g_inRealtimeProcess
+            ? static_cast<VstIntPtr>(module ? module->hostProcessLevel() : 0)
+            : 1;
+    case AudioMasterGetAutomationState:
+        return module
+            ? static_cast<VstIntPtr>(module->hostAutomationState())
+            : 0;
     case AudioMasterGetVendorVersion:
         return 1000;
     case AudioMasterGetVendorString:

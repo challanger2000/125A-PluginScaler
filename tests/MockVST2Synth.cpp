@@ -16,6 +16,7 @@ bool gNativeDragReceived = false;
 bool gDragArmed = false;
 bool gTimeInfoVerified = false;
 bool gRealtimeProcessLevelVerified = false;
+bool gAutomationStateVerified = false;
 AudioMasterCallback gHostCallback = nullptr;
 AEffect* gEffectForCallback = nullptr;
 
@@ -234,7 +235,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (index == 0x125A)
             return gTimeInfoVerified ? 1 : 0;
         if (index == 0x1260)
-            return gRealtimeProcessLevelVerified ? 1 : 0;
+            return gRealtimeProcessLevelVerified &&
+                   gAutomationStateVerified ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -455,7 +457,10 @@ void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt3
     if (gHostCallback && effect) {
         gRealtimeProcessLevelVerified =
             gHostCallback(effect, AudioMasterGetCurrentProcessLevel,
-                          0, 0, nullptr, 0.0f) == 2;
+                          0, 0, nullptr, 0.0f) == 4;
+        gAutomationStateVerified =
+            gHostCallback(effect, AudioMasterGetAutomationState,
+                          0, 0, nullptr, 0.0f) == 4;
 
         const VstIntPtr requested =
             VstPpqPosValid | VstTempoValid | VstSmpteValid;
