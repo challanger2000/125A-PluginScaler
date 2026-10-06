@@ -2251,6 +2251,13 @@ int runSharedVst2Server(const std::filesystem::path& path,
         CloseHandle(pipe);
     });
 
+    // The helper's main server loop is the x86 plug-in audio thread.
+    // Keep it above GUI/control/callback worker priority so editor repaint or
+    // pipe activity cannot casually preempt realtime processing. Avoid
+    // TIME_CRITICAL: HIGHEST is a conservative boost within the normal process
+    // priority class and still allows the system to schedule essential work.
+    (void)SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
     int resultCode = 0;
     for (;;) {
         if (!channel.waitForInput(std::chrono::seconds(10))) {
