@@ -181,24 +181,40 @@ bool dequeueHostCallback(
     }
 }
 
-void queueLegacyHostCallback(void* opaque,
+bool queueLegacyHostCallback(void* opaque,
                              std::int32_t opcode,
                              std::int32_t index,
                              pluginscaler::formats::vst2abi::VstIntPtr value,
-                             float opt) noexcept {
+                             float opt,
+                             std::int32_t numInputs,
+                             std::int32_t numOutputs,
+                             std::int32_t initialDelay,
+                             std::int32_t effectFlags) noexcept {
     auto* context = static_cast<HostCallbackPipeContext*>(opaque);
     if (!context || !context->accepting.load(std::memory_order_acquire))
-        return;
+        return false;
+
+    if (opcode == pluginscaler::formats::vst2abi::AudioMasterIOChanged &&
+        (numInputs < 0 || numOutputs < 0 ||
+         numInputs > static_cast<std::int32_t>(pluginscaler::ipc::kMaxAudioChannels) ||
+         numOutputs > static_cast<std::int32_t>(pluginscaler::ipc::kMaxAudioChannels) ||
+         initialDelay < 0)) {
+        return false;
+    }
 
     pluginscaler::ipc::VST2CallbackEvent event{};
     event.opcode = opcode;
     event.index = index;
     event.value = static_cast<std::int64_t>(value);
     event.opt = opt;
+    event.numInputs = numInputs;
+    event.numOutputs = numOutputs;
+    event.initialDelay = initialDelay;
+    event.effectFlags = effectFlags;
 
     // Bounded lock-free handoff. A saturated notification queue drops the
     // event rather than blocking a plug-in's realtime/audio callback.
-    (void)enqueueHostCallback(*context, event);
+    return enqueueHostCallback(*context, event);
 }
 
 int runVst2Probe(const std::filesystem::path& path) {

@@ -244,7 +244,23 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 effect, AudioMasterIOChanged, 0, 0, nullptr, 0.0f);
             const auto updateDisplay = gHostCallback(
                 effect, AudioMasterUpdateDisplay, 0, 0, nullptr, 0.0f);
-            return (ioChanged == 0 && updateDisplay != 0) ? 1 : 0;
+            return (ioChanged != 0 && updateDisplay != 0) ? 1 : 0;
+        }
+        if (index == 0x1265) {
+            if (!gHostCallback || !effect)
+                return 0;
+
+            effect->numOutputs = 1;
+            effect->initialDelay = 37;
+            const auto changed = gHostCallback(
+                effect, AudioMasterIOChanged, 0, 0, nullptr, 0.0f);
+
+            effect->numOutputs = 2;
+            effect->initialDelay = 0;
+            const auto restored = gHostCallback(
+                effect, AudioMasterIOChanged, 0, 0, nullptr, 0.0f);
+
+            return changed != 0 && restored != 0 ? 1 : 0;
         }
         if (index == 0x1264) {
             if (!gHostCallback)

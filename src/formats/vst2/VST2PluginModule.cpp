@@ -130,15 +130,13 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         // Notifications are forwarded asynchronously by the helper. The
         // callback itself must never wait for the x64 proxy/DAW.
         if (module)
-            module->emitHostCallback(opcode, index, value, opt);
+            (void)module->emitHostCallback(opcode, index, value, opt);
         return 1;
     case AudioMasterIOChanged:
-        // Preserve the notification for the outer host, but do not claim that
-        // dynamic VST2 I/O reconfiguration succeeded: the proxy currently
-        // exposes the manifest's fixed bus counts for its lifetime.
-        if (module)
-            module->emitHostCallback(opcode, index, value, opt);
-        return 0;
+        // Never block or renegotiate topology from realtime processing.
+        if (g_inRealtimeProcess || !module)
+            return 0;
+        return module->emitHostCallback(opcode, index, value, opt) ? 1 : 0;
     case AudioMasterProcessEvents:
         // Plug-in -> host events are captured synchronously on the realtime
         // processing path. No control pipe or UI callback queue is involved.
@@ -979,12 +977,16 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     return result;
 }
 
-void VST2PluginModule::emitHostCallback(std::int32_t opcode,
-                                            std::int32_t index,
-                                            VstIntPtr value,
-                                            float opt) noexcept {
-    if (hostCallbackSink_)
-        hostCallbackSink_(hostCallbackContext_, opcode, index, value, opt);
+bool VST2PluginModule::emitHostCallback(std::int32_t opcode,
+                                        std::int32_t index,
+                                        VstIntPtr value,
+                                        float opt) noexcept {
+    if (!hostCallbackSink_ || !effect_)
+        return false;
+    return hostCallbackSink_(
+        hostCallbackContext_, opcode, index, value, opt,
+        effect_->numInputs, effect_->numOutputs,
+        effect_->initialDelay, effect_->flags);
 }
 
 void VST2PluginModule::close() noexcept {

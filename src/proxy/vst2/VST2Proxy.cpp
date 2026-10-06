@@ -144,6 +144,9 @@ struct ProxyInstance {
     std::uint32_t parameterGeneration{0};
     VstInt32 currentProgram{0};
     bool currentProgramValid{false};
+    std::atomic<VstInt32> runtimeInputs{0};
+    std::atomic<VstInt32> runtimeOutputs{0};
+    std::atomic<VstInt32> runtimeInitialDelay{0};
 };
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
@@ -187,6 +190,30 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 ++inst->parameterGeneration;
                 if (inst->parameterGeneration == 0)
                     inst->parameterGeneration = 1;
+            }
+
+            if (event.opcode == AudioMasterIOChanged) {
+                const bool valid =
+                    event.numInputs >= 0 &&
+                    event.numOutputs >= 0 &&
+                    event.numInputs <= static_cast<VstInt32>(
+                        pluginscaler::ipc::kMaxAudioChannels) &&
+                    event.numOutputs <= static_cast<VstInt32>(
+                        pluginscaler::ipc::kMaxAudioChannels) &&
+                    event.initialDelay >= 0;
+                if (!valid)
+                    continue;
+
+                inst->runtimeInputs.store(
+                    event.numInputs, std::memory_order_release);
+                inst->runtimeOutputs.store(
+                    event.numOutputs, std::memory_order_release);
+                inst->runtimeInitialDelay.store(
+                    event.initialDelay, std::memory_order_release);
+
+                inst->effect.numInputs = event.numInputs;
+                inst->effect.numOutputs = event.numOutputs;
+                inst->effect.initialDelay = event.initialDelay;
             }
 
             (void)inst->host(&inst->effect,
@@ -483,7 +510,11 @@ ProxyInstance* self(AEffect* effect) noexcept {
 
 void zeroOutputs(AEffect* effect, float** outputs, VstInt32 frames) noexcept {
     if (!effect || !outputs || frames <= 0) return;
-    const auto channels = std::max<VstInt32>(0, effect->numOutputs);
+    auto* inst = self(effect);
+    const auto channels = std::max<VstInt32>(
+        0, inst
+            ? inst->runtimeOutputs.load(std::memory_order_acquire)
+            : effect->numOutputs);
     for (VstInt32 ch = 0; ch < channels; ++ch) {
         if (outputs[ch])
             std::fill(outputs[ch], outputs[ch] + frames, 0.0f);
@@ -2095,10 +2126,12 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
 
     const std::uint32_t inChannels =
         static_cast<std::uint32_t>(std::clamp<VstInt32>(
-            effect->numInputs, 0, static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels)));
+            inst->runtimeInputs.load(std::memory_order_acquire),
+            0, static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels)));
     const std::uint32_t outChannels =
         static_cast<std::uint32_t>(std::clamp<VstInt32>(
-            effect->numOutputs, 0, static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels)));
+            inst->runtimeOutputs.load(std::memory_order_acquire),
+            0, static_cast<VstInt32>(pluginscaler::ipc::kMaxAudioChannels)));
 
     block->header.inputChannels = inChannels;
     block->header.outputChannels = outChannels;
@@ -2299,6 +2332,12 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(AudioMasterCallb
     inst->effect.numParams = inst->manifest.numParams;
     inst->effect.numInputs = inst->manifest.numInputs;
     inst->effect.numOutputs = inst->manifest.numOutputs;
+    inst->effect.initialDelay = 0;
+    inst->runtimeInputs.store(
+        inst->manifest.numInputs, std::memory_order_relaxed);
+    inst->runtimeOutputs.store(
+        inst->manifest.numOutputs, std::memory_order_relaxed);
+    inst->runtimeInitialDelay.store(0, std::memory_order_relaxed);
     // The wrapper itself always supports opaque project state. If the target
     // plug-in has no native VST2 chunks, the x86 module serializes
     // program+parameters into a validated 125A fallback state blob.

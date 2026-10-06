@@ -243,6 +243,9 @@ jobs:
           if ($joined -notmatch "host-callback-forwarding=PASS") {
             throw "Host callback forwarding marker missing"
           }
+          if ($joined -notmatch "dynamic-io-change=PASS") {
+            throw "Dynamic I/O change marker missing"
+          }
           if ($joined -notmatch "editor-automation=PASS") {
             throw "Editor automation coherence marker missing"
           }

@@ -17,6 +17,8 @@ namespace {
 
 int gIoChangedCount = 0;
 int gUpdateDisplayCount = 0;
+bool gSawDynamicIo = false;
+bool gSawRestoredIo = false;
 int gPluginMidiOutputCount = 0;
 VstInt32 gPluginMidiDelta = -1;
 std::uint8_t gPluginMidiStatus = 0;
@@ -69,7 +71,7 @@ void pumpMessagesFor(DWORD milliseconds) {
     }
 }
 
-VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
+VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32,
                                VstIntPtr, void* ptr, float) {
     switch (opcode) {
     case AudioMasterVersion: return 2400;
@@ -78,6 +80,16 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     case AudioMasterGetVendorVersion: return 1000;
     case AudioMasterIOChanged:
         ++gIoChangedCount;
+        if (effect &&
+            effect->numInputs == 0 &&
+            effect->numOutputs == 1 &&
+            effect->initialDelay == 37)
+            gSawDynamicIo = true;
+        if (effect &&
+            effect->numInputs == 0 &&
+            effect->numOutputs == 2 &&
+            effect->initialDelay == 0)
+            gSawRestoredIo = true;
         return 1;
     case AudioMasterUpdateDisplay:
         ++gUpdateDisplayCount;
@@ -475,7 +487,7 @@ int wmain(int argc, wchar_t** argv) {
         pumpMessagesFor(120);
         const bool callbacksOk =
             callbackTrigger != 0 &&
-            gIoChangedCount == 1 &&
+            gIoChangedCount >= 1 &&
             gUpdateDisplayCount == 1;
         std::cout << "host-callback-trigger=" << callbackTrigger << "\n";
         std::cout << "host-callback-counts="
@@ -483,6 +495,23 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << "host-callback-forwarding="
                   << (callbacksOk ? "PASS" : "FAIL") << "\n";
         ok = ok && callbacksOk;
+    }
+
+    if (ok) {
+        const auto dynamicIoTrigger =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x1265, 0, nullptr, 0.0f);
+        pumpMessagesFor(120);
+        const bool dynamicIoOk =
+            dynamicIoTrigger == 1 &&
+            gSawDynamicIo &&
+            gSawRestoredIo &&
+            effect->numInputs == 0 &&
+            effect->numOutputs == 2 &&
+            effect->initialDelay == 0;
+        std::cout << "dynamic-io-change="
+                  << (dynamicIoOk ? "PASS" : "FAIL") << "\n";
+        ok = ok && dynamicIoOk;
     }
 
     if (ok)

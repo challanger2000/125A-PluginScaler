@@ -54,11 +54,15 @@ struct VST2AudioProbeResult {
 
 class VST2PluginModule {
 public:
-    using HostCallbackSink = void (*)(void* context,
+    using HostCallbackSink = bool (*)(void* context,
                                       std::int32_t opcode,
                                       std::int32_t index,
                                       vst2abi::VstIntPtr value,
-                                      float opt) noexcept;
+                                      float opt,
+                                      std::int32_t numInputs,
+                                      std::int32_t numOutputs,
+                                      std::int32_t initialDelay,
+                                      std::int32_t effectFlags) noexcept;
     using HostWindowResizeSink = bool (*)(void* context,
                                          std::int32_t width,
                                          std::int32_t height) noexcept;
@@ -98,7 +102,7 @@ public:
         hostCallbackSink_ = sink;
         hostCallbackContext_ = context;
     }
-    void emitHostCallback(std::int32_t opcode,
+    bool emitHostCallback(std::int32_t opcode,
                           std::int32_t index,
                           vst2abi::VstIntPtr value,
                           float opt) noexcept;
