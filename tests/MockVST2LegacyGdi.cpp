@@ -193,8 +193,15 @@ void __cdecl setParameter(AEffect*, VstInt32, float) {}
 float __cdecl getParameter(AEffect*, VstInt32) { return 0.0f; }
 void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt32 frames) {
     if (!effect || !outputs) return;
+    // Deterministic nonzero signal for cross-process realtime continuity and
+    // timing regressions. Keep it independent of GUI state so a dropped/
+    // deferred block is unambiguous.
+    constexpr float kSignal = 0.25f;
     for (VstInt32 ch=0; ch<effect->numOutputs; ++ch)
-        if (outputs[ch]) std::fill(outputs[ch], outputs[ch] + std::max<VstInt32>(frames,0), 0.0f);
+        if (outputs[ch])
+            std::fill(outputs[ch],
+                      outputs[ch] + std::max<VstInt32>(frames,0),
+                      kSignal);
 }
 
 } // namespace
