@@ -137,6 +137,9 @@ jobs:
           if ($joined -notmatch "helper-crash-isolation=PASS") {
             throw "Helper crash isolation marker missing"
           }
+          if ($joined -notmatch "helper-recovery-offthread=PASS") {
+            throw "Helper off-thread recovery marker missing"
+          }
           if ($joined -notmatch "helper-restart-state=PASS") {
             throw "Helper restart state marker missing"
           }

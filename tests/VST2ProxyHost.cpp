@@ -129,6 +129,18 @@ bool killHelperChild() {
     return terminated;
 }
 
+void pumpMessagesFor(DWORD milliseconds) {
+    const ULONGLONG deadline = GetTickCount64() + milliseconds;
+    MSG msg{};
+    while (GetTickCount64() < deadline) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        Sleep(5);
+    }
+}
+
 bool processAndExpectSilence(AEffect* effect, VstInt32 frames,
                              ULONGLONG& elapsedMs) {
     std::vector<float> inL(static_cast<std::size_t>(frames), 0.25f);
@@ -295,10 +307,16 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     if (ok) {
+        // Recovery is intentionally owner/UI-thread work. Pump the proxy's
+        // message-only callback window before asking the realtime path to
+        // process again.
+        pumpMessagesFor(250);
         const bool recovered =
             processAndCheck(effect, 128, 0.48f, 0.25f) &&
             effect->dispatcher(effect, EffGetProgram, 0, 0, nullptr, 0.0f) == 3 &&
             std::fabs(effect->getParameter(effect, 0) - 0.25f) < 0.00001f;
+        std::cout << "helper-recovery-offthread="
+                  << (recovered ? "PASS" : "FAIL") << "\n";
         std::cout << "helper-restart-state="
                   << (recovered ? "PASS" : "FAIL") << "\n";
         ok = ok && recovered;

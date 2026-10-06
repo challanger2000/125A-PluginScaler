@@ -137,6 +137,8 @@ struct ProxyInstance {
     VstInt32 blockSize{512};
     bool mainsOn{false};
     bool bridgeStarted{false};
+    std::atomic<bool> bridgeUsable{false};
+    std::atomic<bool> recoveryRequested{false};
     std::uint64_t sequence{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
@@ -152,9 +154,12 @@ struct ProxyInstance {
 std::atomic<std::uint64_t> g_instanceCounter{1};
 
 void cleanupLocalEditor(ProxyInstance* inst) noexcept;
+void discardDeadBridge(ProxyInstance* inst) noexcept;
+bool startBridge(ProxyInstance* inst);
+void requestBridgeRecovery(ProxyInstance* inst) noexcept;
 
 inline constexpr UINT kHostCallbackMessage = WM_APP + 0x52A;
-inline constexpr UINT kBridgeDeadMessage = WM_APP + 0x52B;
+inline constexpr UINT kBridgeRecoverMessage = WM_APP + 0x52C;
 
 LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* inst = reinterpret_cast<ProxyInstance*>(
@@ -166,8 +171,25 @@ LRESULT CALLBACK hostCallbackWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                           reinterpret_cast<LONG_PTR>(inst));
     }
 
-    if (msg == kBridgeDeadMessage && inst) {
+    if (msg == kBridgeRecoverMessage && inst) {
         cleanupLocalEditor(inst);
+
+        // Recovery is owner/UI-thread work only. If the helper is still alive
+        // but failed to complete an audio transaction, terminate it before
+        // releasing the shared-memory/channel resources it may still touch.
+        if (inst->helperProcess.hProcess &&
+            WaitForSingleObject(inst->helperProcess.hProcess, 0) == WAIT_TIMEOUT) {
+            (void)TerminateProcess(inst->helperProcess.hProcess, 0x125A);
+            (void)WaitForSingleObject(inst->helperProcess.hProcess, 2000);
+        }
+
+        discardDeadBridge(inst);
+
+        const bool recovered =
+            !inst->mainsOn || startBridge(inst);
+        inst->recoveryRequested.store(false, std::memory_order_release);
+        if (!recovered)
+            inst->bridgeUsable.store(false, std::memory_order_release);
         return 0;
     }
 
@@ -1164,6 +1186,19 @@ bool ensureScalerSurfaceClass() {
     return true;
 }
 
+void requestBridgeRecovery(ProxyInstance* inst) noexcept {
+    if (!inst)
+        return;
+
+    inst->bridgeUsable.store(false, std::memory_order_release);
+    if (inst->recoveryRequested.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    const HWND window = inst->callbackWindow;
+    if (!window || !PostMessageW(window, kBridgeRecoverMessage, 0, 0))
+        inst->recoveryRequested.store(false, std::memory_order_release);
+}
+
 bool helperProcessExited(const ProxyInstance* inst) noexcept {
     return inst && inst->helperProcess.hProcess &&
            WaitForSingleObject(inst->helperProcess.hProcess, 0) == WAIT_OBJECT_0;
@@ -1173,6 +1208,7 @@ void discardDeadBridge(ProxyInstance* inst) noexcept {
     if (!inst)
         return;
 
+    inst->bridgeUsable.store(false, std::memory_order_release);
     inst->bridgeStarted = false;
 
     if (inst->controlPipe != INVALID_HANDLE_VALUE) {
@@ -1198,20 +1234,16 @@ void discardDeadBridge(ProxyInstance* inst) noexcept {
 
     inst->channel.close();
 
-    // Window/capture teardown belongs to the UI thread. The message-only
-    // callback window is created on the host's UI/control thread in EffOpen.
-    if (inst->callbackWindow && IsWindow(inst->callbackWindow)) {
-        PostMessageW(inst->callbackWindow, kBridgeDeadMessage, 0, 0);
-    } else {
-        inst->editorWindow = nullptr;
-        inst->editorSurrogate = nullptr;
-        inst->editorOpen = false;
-        inst->dragActive = false;
-    }
+    // discardDeadBridge is owner/control-thread only. Local x64 editor
+    // resources can therefore be destroyed directly without marshalling from
+    // the realtime thread.
+    cleanupLocalEditor(inst);
 }
 
 void stopBridge(ProxyInstance* inst) noexcept {
     if (!inst) return;
+
+    inst->bridgeUsable.store(false, std::memory_order_release);
 
     if (inst->bridgeStarted) {
         if (inst->editorOpen && inst->controlPipe != INVALID_HANDLE_VALUE) {
@@ -1289,8 +1321,10 @@ bool reconfigureBridge(ProxyInstance* inst) {
 bool startBridge(ProxyInstance* inst) {
     if (!inst) return false;
     if (inst->bridgeStarted) {
-        if (!helperProcessExited(inst))
+        if (!helperProcessExited(inst)) {
+            inst->bridgeUsable.store(true, std::memory_order_release);
             return true;
+        }
 
         // A dead helper discovered at block entry is isolated for this block.
         // Do not launch a replacement from the same realtime call; return
@@ -1449,6 +1483,7 @@ bool startBridge(ProxyInstance* inst) {
         }
     }
 
+    inst->bridgeUsable.store(true, std::memory_order_release);
     return true;
 }
 
@@ -2113,7 +2148,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         return;
     }
 
-    if (!startBridge(inst)) {
+    if (!inst->bridgeUsable.load(std::memory_order_acquire)) {
+        requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
     }
@@ -2215,8 +2251,7 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         std::memory_order_release);
 
     if (!inst->channel.signalInput()) {
-        if (helperProcessExited(inst))
-            discardDeadBridge(inst);
+        requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
     }
@@ -2231,17 +2266,17 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
             : WAIT_FAILED;
 
     if (waitResult == WAIT_OBJECT_0 + 1) {
-        // Helper crashed/exited. Tear down only dead resources here; do not
-        // perform a restart in this audio call.
-        discardDeadBridge(inst);
+        // Do not close handles, join threads, or restart from the audio
+        // callback. The owner thread performs all bridge recovery.
+        requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
     }
 
     if (waitResult != WAIT_OBJECT_0) {
-        // Keep queued MIDI on a failed/late bridge transaction. In
-        // particular, a Note-Off must not disappear merely because the helper
-        // was late.
+        // A live-but-stalled helper is poisoned too: never reuse the shared
+        // block while the old process may still be touching it.
+        requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
     }
