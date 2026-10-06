@@ -44,9 +44,24 @@ LRESULT CALLBACK mockEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE: {
         const int x = GET_X_LPARAM(lp);
         const int y = GET_Y_LPARAM(lp);
-        if (gDragArmed && (wp & MK_LBUTTON) != 0 &&
-            x == 70 && y == 20) {
-            gNativeDragReceived = true;
+        if (gDragArmed && (wp & MK_LBUTTON) != 0) {
+            if (x == 70 && y == 20)
+                gNativeDragReceived = true;
+
+            if (gEffectForCallback && gEffectForCallback->setParameter &&
+                gHostCallback) {
+                const float value = std::clamp(
+                    0.20f + static_cast<float>(120 - y) / 200.0f,
+                    0.0f, 1.0f);
+                gEffectForCallback->setParameter(
+                    gEffectForCallback, 0, value);
+                (void)gHostCallback(
+                    gEffectForCallback, AudioMasterAutomate,
+                    0, 0, nullptr, value);
+                (void)gHostCallback(
+                    gEffectForCallback, AudioMasterUpdateDisplay,
+                    0, 0, nullptr, 0.0f);
+            }
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 1;
@@ -296,22 +311,6 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         }
         if (index == 0x1263) {
             Sleep(800);
-            return 1;
-        }
-        if (index == 0x126B) {
-            if (!gHostCallback || !effect || !state)
-                return 0;
-            for (int i = 0; i < 128; ++i) {
-                const float value =
-                    0.20f + 0.60f * static_cast<float>(i) / 127.0f;
-                state->gain = value;
-                if (effect->setParameter)
-                    effect->setParameter(effect, 0, value);
-                (void)gHostCallback(effect, AudioMasterAutomate,
-                                    0, 0, nullptr, value);
-                (void)gHostCallback(effect, AudioMasterUpdateDisplay,
-                                    0, 0, nullptr, 0.0f);
-            }
             return 1;
         }
         if (!state)
