@@ -324,6 +324,34 @@ int wmain(int argc, wchar_t** argv) {
         ok = ok && lifecycleIdempotent;
     }
 
+    if (ok) {
+        const auto before =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x126A, 0, nullptr, 0.0f);
+        effect->setParameter(effect, 0, 0.61f);
+        const bool firstApplied = processSilence(effect, 64);
+        const auto afterFirst =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x126A, 0, nullptr, 0.0f);
+
+        // A repeated host write still advances the proxy generation, but must
+        // not make the x86 plug-in execute another identical setParameter().
+        effect->setParameter(effect, 0, 0.61f);
+        const bool secondApplied = processSilence(effect, 64);
+        const auto afterSecond =
+            effect->dispatcher(effect, EffVendorSpecific,
+                               0x126A, 0, nullptr, 0.0f);
+
+        const bool sparseParameterApply =
+            before >= 0 &&
+            firstApplied && secondApplied &&
+            afterFirst == before + 1 &&
+            afterSecond == afterFirst;
+        std::cout << "host-parameter-no-redundant-resync="
+                  << (sparseParameterApply ? "PASS" : "FAIL") << "\n";
+        ok = ok && sparseParameterApply;
+    }
+
     HWND editorHost = nullptr;
     if (ok) {
         editorHost = createHostWindow();
