@@ -326,6 +326,7 @@ struct EditorGuiContext {
     std::mutex* moduleMutex{nullptr};
     HWND surrogate{nullptr};
     HWND editor{nullptr};
+    bool nativeSidecar{false};
     int gdiScalePercent{100};
 };
 
@@ -1228,15 +1229,15 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         // hidden; recreating the plug-in child under that hidden 32x32 window
         // makes creation-time GDI paints unreliable. Restore the host geometry
         // and visibility before every editor-open cycle.
-        if (ctx->gdiScalePercent > 0) {
+        if (ctx->nativeSidecar || ctx->gdiScalePercent > 0) {
             pluginscaler::formats::vst2abi::VstRect nativeRect{};
             if (ctx->module->editorRect(nativeRect)) {
                 const int nativeWidth = nativeRect.right - nativeRect.left;
                 const int nativeHeight = nativeRect.bottom - nativeRect.top;
-                const int hostWidth = MulDiv(
-                    nativeWidth, ctx->gdiScalePercent, 100);
-                const int hostHeight = MulDiv(
-                    nativeHeight, ctx->gdiScalePercent, 100);
+                const int hostScale = ctx->nativeSidecar
+                    ? 100 : ctx->gdiScalePercent;
+                const int hostWidth = MulDiv(nativeWidth, hostScale, 100);
+                const int hostHeight = MulDiv(nativeHeight, hostScale, 100);
                 if (hostWidth > 0 && hostHeight > 0) {
                     SetWindowPos(
                         hwnd, HWND_BOTTOM, 0, 0, hostWidth, hostHeight,
@@ -1930,6 +1931,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     resp.status = ipc::ControlStatus::InvalidRequest;
                 } else {
                     const bool nativeSidecar = req.arg0 == 1;
+                    guiContext.nativeSidecar = nativeSidecar;
                     guiContext.gdiScalePercent =
                         req.arg0 >= 100 && req.arg0 <= 400
                             ? static_cast<int>(req.arg0)

@@ -119,6 +119,7 @@ struct SynthState {
     int startProcessCount{0};
     int stopProcessCount{0};
     int legacyIdleCount{0};
+    bool editorParentReadyAtOpen{false};
 };
 
 VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
@@ -244,6 +245,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (index == 0x1268)
             return gMidiProcessLevelVerified &&
                    gParameterProcessLevelVerified ? 1 : 0;
+        if (index == 0x1269)
+            return state && state->editorParentReadyAtOpen ? 1 : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
@@ -348,6 +351,13 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                     return 0;
             }
             HWND parent = static_cast<HWND>(ptr);
+            RECT parentClient{};
+            state->editorParentReadyAtOpen =
+                IsWindowVisible(parent) != FALSE &&
+                GetClientRect(parent, &parentClient) != FALSE &&
+                (parentClient.right - parentClient.left) >= 320 &&
+                (parentClient.bottom - parentClient.top) >= 180;
+
             state->editorWindow = CreateWindowExW(
                 0, kClassName, L"125A Mock Synth Editor",
                 WS_CHILD | WS_VISIBLE,

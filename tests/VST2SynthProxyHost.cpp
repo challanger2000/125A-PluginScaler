@@ -395,6 +395,15 @@ int wmain(int argc, wchar_t** argv) {
         std::cout << "editor-no-reparent=" << (ok ? "PASS" : "FAIL") << "\n";
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << "\n";
 
+        if (ok) {
+            const bool parentReadyAtOpen =
+                effect->dispatcher(effect, EffVendorSpecific,
+                                   0x1269, 0, nullptr, 0.0f) == 1;
+            std::cout << "direct-open-parent-ready="
+                      << (parentReadyAtOpen ? "PASS" : "FAIL") << "\n";
+            ok = ok && parentReadyAtOpen;
+        }
+
         if (ok && nativeEditor) {
             SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
                          MAKELPARAM(50, 40));
