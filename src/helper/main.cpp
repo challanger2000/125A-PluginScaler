@@ -143,7 +143,7 @@ bool enqueueHostCallback(
                 cell.event = event;
                 cell.sequence.store(pos + 1, std::memory_order_release);
                 if (context.available)
-                    ReleaseSemaphore(context.available, 1, nullptr);
+                    SetEvent(context.available);
                 return true;
             }
         } else if (diff < 0) {
@@ -1800,10 +1800,8 @@ int runSharedVst2Server(const std::filesystem::path& path,
             return 24;
         }
 
-        hostCallbackContext.available = CreateSemaphoreW(
-            nullptr, 0,
-            static_cast<LONG>(kHostCallbackQueueCapacity),
-            nullptr);
+        hostCallbackContext.available = CreateEventW(
+            nullptr, FALSE, FALSE, nullptr);
         if (!hostCallbackContext.available) {
             CloseHandle(hostCallbackContext.pipe);
             hostCallbackContext.pipe = INVALID_HANDLE_VALUE;
@@ -2478,7 +2476,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
         hostCallbackContext.pipe = INVALID_HANDLE_VALUE;
     }
     if (hostCallbackContext.available)
-        ReleaseSemaphore(hostCallbackContext.available, 1, nullptr);
+        SetEvent(hostCallbackContext.available);
     if (hostCallbackContext.writer.joinable())
         hostCallbackContext.writer.join();
     const auto callbackDrops =
