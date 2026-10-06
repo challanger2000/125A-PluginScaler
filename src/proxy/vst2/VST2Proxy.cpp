@@ -164,6 +164,8 @@ struct ProxyInstance {
     std::atomic<std::uint32_t> midiIngressDrops{0};
     std::atomic<std::uint64_t> realtimeDeferredBlocks{0};
     std::atomic<std::uint64_t> realtimeWatchdogTimeouts{0};
+    std::atomic<std::uint64_t> midiWatchdogTimeouts{0};
+    std::atomic<std::uint64_t> dspWatchdogTimeouts{0};
     std::atomic<std::uint64_t> gdiCaptureCalls{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
@@ -1892,6 +1894,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
                 return static_cast<VstIntPtr>(
                     inst->gdiMouseMoveForwards.load(
                         std::memory_order_acquire));
+            if (index == 0x1275)
+                return static_cast<VstIntPtr>(
+                    inst->midiWatchdogTimeouts.load(
+                        std::memory_order_acquire));
+            if (index == 0x1276)
+                return static_cast<VstIntPtr>(
+                    inst->dspWatchdogTimeouts.load(
+                        std::memory_order_acquire));
         }
 
         // Pointer payload size is vendor-defined and cannot be inferred safely
@@ -2496,8 +2506,10 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
             : WAIT_FAILED;
 
     if (waitResult == WAIT_OBJECT_0 + 1) {
-        // Do not close handles, join threads, or restart from the audio
-        // callback. The owner thread performs all bridge recovery.
+        // The helper is gone; its synth state is gone with it. Do not replay
+        // the just-submitted MIDI into a replacement helper, because a
+        // malformed/plugin-hostile event can otherwise poison every restart.
+        inst->pendingMidiCount = 0;
         requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
@@ -2506,8 +2518,21 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     if (waitResult != WAIT_OBJECT_0) {
         inst->realtimeWatchdogTimeouts.fetch_add(
             1, std::memory_order_relaxed);
-        // A live-but-stalled helper is poisoned too: never reuse the shared
-        // block while the old process may still be touching it.
+        const auto phase = block->header.errorCode;
+        if (phase == 201u) {
+            inst->midiWatchdogTimeouts.fetch_add(
+                1, std::memory_order_relaxed);
+        } else if (phase == 202u) {
+            inst->dspWatchdogTimeouts.fetch_add(
+                1, std::memory_order_relaxed);
+        }
+
+        // A timed-out helper is killed/recreated, so replaying this exact MIDI
+        // into the replacement can create an infinite poison-restart loop.
+        // The new helper has no note state to preserve, therefore dropping the
+        // in-flight MIDI here is safer than retrying it.
+        inst->pendingMidiCount = 0;
+
         requestBridgeRecovery(inst);
         zeroOutputs(effect, outputs, frames);
         return;
