@@ -27,6 +27,12 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::cout << "plugin-open=PASS\n";
 
+    if (!host.setMains(true)) {
+        std::cerr << "mains-on=FAIL\n";
+        return 3;
+    }
+    std::cout << "mains-on=PASS\n";
+
     Sleep(160);
     if (host.dispatchOnMainThread(
             pluginscaler::formats::vst2abi::EffVendorSpecific,

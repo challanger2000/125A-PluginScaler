@@ -134,7 +134,7 @@ bool VST2LegacyHost::openPlugin(const std::filesystem::path& path,
 
             ok = module_.openForProcessing(path, sampleRate, blockSize, localError);
             pluginOpen_.store(ok, std::memory_order_release);
-            processing_.store(ok, std::memory_order_release);
+            processing_.store(false, std::memory_order_release);
             if (ok)
                 SetTimer(ownerWindow_, kEditorIdleTimer, kEditorIdleMs, nullptr);
         })) {

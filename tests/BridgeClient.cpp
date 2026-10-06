@@ -57,6 +57,33 @@ HANDLE connectControlPipe(const std::wstring& pipeName) {
     return INVALID_HANDLE_VALUE;
 }
 
+bool setMainsHelper(HANDLE pipe, bool active) {
+    if (pipe == INVALID_HANDLE_VALUE)
+        return false;
+
+    pluginscaler::ipc::ControlMessageHeader request{};
+    request.command = pluginscaler::ipc::ControlCommand::SetMains;
+    request.arg0 = active ? 1 : 0;
+
+    if (!writeExact(pipe, &request, sizeof(request)))
+        return false;
+
+    pluginscaler::ipc::ControlMessageHeader response{};
+    if (!readExact(pipe, &response, sizeof(response)))
+        return false;
+
+    if (response.responseBytes > 0) {
+        std::vector<std::uint8_t> ignored(response.responseBytes);
+        if (!readExact(pipe, ignored.data(), response.responseBytes))
+            return false;
+    }
+
+    return response.magic == pluginscaler::ipc::kControlMagic &&
+           response.version == pluginscaler::ipc::kControlVersion &&
+           response.command == pluginscaler::ipc::ControlCommand::SetMains &&
+           response.status == pluginscaler::ipc::ControlStatus::Ok;
+}
+
 bool reconfigureHelper(HANDLE pipe, double sampleRate, std::int32_t blockSize) {
     if (pipe == INVALID_HANDLE_VALUE)
         return false;
@@ -128,7 +155,8 @@ int wmain(int argc, wchar_t** argv) {
 
     HANDLE controlPipe = connectControlPipe(controlPipeName);
     if (controlPipe == INVALID_HANDLE_VALUE ||
-        !reconfigureHelper(controlPipe, 48000.0, 64)) {
+        !reconfigureHelper(controlPipe, 48000.0, 64) ||
+        !setMainsHelper(controlPipe, true)) {
         if (controlPipe != INVALID_HANDLE_VALUE)
             CloseHandle(controlPipe);
         TerminateProcess(pi.hProcess, 7);
@@ -146,6 +174,7 @@ int wmain(int argc, wchar_t** argv) {
             channel.signalInput();
         }
         if (controlPipe != INVALID_HANDLE_VALUE) {
+            (void)setMainsHelper(controlPipe, false);
             CloseHandle(controlPipe);
             controlPipe = INVALID_HANDLE_VALUE;
         }
