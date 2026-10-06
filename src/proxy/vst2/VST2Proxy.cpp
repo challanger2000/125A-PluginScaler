@@ -1113,7 +1113,16 @@ LRESULT CALLBACK scalerSurfaceProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ReleaseCapture();
         if (sent) {
             InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateWindow(hwnd);
+
+            // Do not force a synchronous editor capture for every mouse-move
+            // during a drag. In GDI-TV mode WM_PAINT -> CaptureEditor is a
+            // synchronous control-pipe round trip into the x86 GUI thread.
+            // Repeating that for every pointer event adds avoidable control/
+            // GUI scheduling jitter while audio is running. The existing
+            // surface timer coalesces drag repaints; keep immediate refresh
+            // only for discrete button transitions.
+            if (msg != WM_MOUSEMOVE)
+                UpdateWindow(hwnd);
         }
         return sent ? 0 : DefWindowProcW(hwnd, msg, wp, lp);
     }
