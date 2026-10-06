@@ -518,37 +518,44 @@ int wmain(int argc, wchar_t** argv) {
                     sendMidi(effect, 0x90, 64, 100, 0) &&
                     processHasSignal(effect, 64);
 
-                std::atomic<bool> guiDone{false};
-                std::thread guiStress([&] {
-                    SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
-                                 MAKELPARAM(50, 40));
+                std::atomic<bool> audioDone{false};
+                std::atomic<bool> continuousAudio{noteStarted};
+                std::atomic<int> audioBlocks{0};
+                std::thread audioStress([&] {
                     for (int i = 0; i < 128; ++i) {
-                        const int y = 110 - (i % 100);
-                        SendMessageW(nativeEditor, WM_MOUSEMOVE, MK_LBUTTON,
-                                     MAKELPARAM(70, y));
+                        if (!processHasSignal(effect, 64))
+                            continuousAudio.store(false, std::memory_order_release);
+                        audioBlocks.fetch_add(1, std::memory_order_relaxed);
                     }
-                    SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
-                                 MAKELPARAM(70, 20));
-                    guiDone.store(true, std::memory_order_release);
+                    audioDone.store(true, std::memory_order_release);
                 });
 
-                bool continuousAudio = noteStarted;
-                int blocks = 0;
-                while (!guiDone.load(std::memory_order_acquire) || blocks < 32) {
-                    continuousAudio =
-                        processHasSignal(effect, 64) && continuousAudio;
-                    ++blocks;
-                    if (blocks > 256)
-                        break;
+                // Drive the editor from the host/UI thread, matching normal
+                // Win32 ownership. Sending cross-thread synchronous messages
+                // here would test SendMessage scheduling rather than plug-in
+                // audio continuity.
+                SendMessageW(nativeEditor, WM_LBUTTONDOWN, MK_LBUTTON,
+                             MAKELPARAM(50, 40));
+                for (int i = 0; i < 128; ++i) {
+                    const int y = 110 - (i % 100);
+                    SendMessageW(nativeEditor, WM_MOUSEMOVE, MK_LBUTTON,
+                                 MAKELPARAM(70, y));
+                    pumpMessagesFor(1);
                 }
-                guiStress.join();
+                SendMessageW(nativeEditor, WM_LBUTTONUP, 0,
+                             MAKELPARAM(70, 20));
+
+                audioStress.join();
+                const int blocks = audioBlocks.load(std::memory_order_relaxed);
 
                 const bool noteStopped =
                     sendMidi(effect, 0x80, 64, 0, 0) &&
                     processSilence(effect, 64);
                 const bool guiRealtimeOk =
-                    noteStarted && continuousAudio && noteStopped &&
-                    blocks <= 256;
+                    noteStarted &&
+                    continuousAudio.load(std::memory_order_acquire) &&
+                    noteStopped &&
+                    blocks == 128;
                 std::cout << "gui-gesture-continuous-audio="
                           << (guiRealtimeOk ? "PASS" : "FAIL")
                           << " blocks=" << blocks << "\n";
