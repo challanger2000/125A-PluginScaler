@@ -27,6 +27,7 @@ add_subdirectory(src/proxy)
 add_subdirectory(src/formats/vst3)
 add_subdirectory(src/formats/vst2)
 add_subdirectory(src/host)
+add_subdirectory(src/jbridge_probe)
 
 if(PLUGINSCALER_BUILD_TESTS)
     enable_testing()
