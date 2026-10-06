@@ -463,6 +463,9 @@ int wmain(int argc, wchar_t** argv) {
     if (editorHost)
         DestroyWindow(editorHost);
 
+    if (ok)
+        ok = processSilence(effect, 64);
+
     if (ok) {
         const bool runtimeContextOk =
             effect->dispatcher(effect, EffVendorSpecific,

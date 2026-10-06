@@ -183,7 +183,7 @@ private:
     std::atomic_flag editorIdleActive_ = ATOMIC_FLAG_INIT;
     vst2abi::VstTimeInfo timeInfo_{};
     vst2abi::VstTimeInfo timeInfoView_{};
-    std::int32_t hostProcessLevel_{0};
+    std::int32_t hostProcessLevel_{2};
     std::int32_t hostAutomationState_{0};
     HostCallbackSink hostCallbackSink_{nullptr};
     void* hostCallbackContext_{nullptr};
