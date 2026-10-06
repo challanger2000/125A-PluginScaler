@@ -162,6 +162,7 @@ struct ProxyInstance {
     std::atomic<std::uint32_t> midiIngressDrops{0};
     std::atomic<std::uint64_t> realtimeDeferredBlocks{0};
     std::atomic<std::uint64_t> realtimeWatchdogTimeouts{0};
+    std::atomic<std::uint64_t> gdiCaptureCalls{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
     std::array<std::atomic<float>, pluginscaler::ipc::kMaxParameters> parameterValues{};
@@ -814,6 +815,8 @@ void refreshParametersFromHelper(ProxyInstance* inst) {
 
 bool captureEditorBitmap(ProxyInstance* inst) {
     if (!inst) return false;
+    if (inst->settings.gdiEditor)
+        inst->gdiCaptureCalls.fetch_add(1, std::memory_order_relaxed);
     std::vector<std::uint8_t> reply;
     if (!controlCall(inst, pluginscaler::ipc::ControlCommand::CaptureEditor,
                      0, nullptr, 0, reply) ||
@@ -1854,6 +1857,10 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (index == 0x1272)
                 return static_cast<VstIntPtr>(
                     inst->realtimeWatchdogTimeouts.load(
+                        std::memory_order_acquire));
+            if (index == 0x1273)
+                return static_cast<VstIntPtr>(
+                    inst->gdiCaptureCalls.load(
                         std::memory_order_acquire));
         }
 
