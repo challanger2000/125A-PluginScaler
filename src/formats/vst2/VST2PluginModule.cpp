@@ -548,12 +548,8 @@ bool VST2PluginModule::openForProcessing(const std::filesystem::path& path,
         return false;
     }
 
-    if (!setMains(true)) {
-        error = "exception during VST2 processing start";
-        close();
-        return false;
-    }
-
+    // Loading/configuration must not start processing on its own. The outer
+    // host owns the VST2 lifecycle and activates Mains/StartProcess explicitly.
     return true;
 }
 
@@ -962,6 +958,13 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     result.loaded = true;
     result.opened = true;
     result.configured = true;
+
+    if (!setMains(true)) {
+        result.error = "exception during VST2 processing start";
+        close();
+        result.closed = true;
+        return result;
+    }
     result.mainsOn = true;
 
     const auto inputsCount = std::max<std::int32_t>(1, effect_->numInputs);
@@ -1000,15 +1003,13 @@ VST2AudioProbeResult VST2PluginModule::probeAudio(const std::filesystem::path& p
     result.firstOutputRight =
         outputStorage[static_cast<std::size_t>(std::min<std::int32_t>(1, outputsCount - 1))][0];
 
-    if (!callDispatcherSafely(effect_, EffMainsChanged, 0, 0, nullptr, 0.0f)) {
+    if (!setMains(false)) {
         result.error = "exception during mains-off";
-        mainsOn_ = false;
         close();
         result.closed = true;
         return result;
     }
 
-    mainsOn_ = false;
     result.mainsOff = true;
     close();
     result.closed = true;
