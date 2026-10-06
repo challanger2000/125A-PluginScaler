@@ -39,7 +39,7 @@ std::string hexEncode(std::string_view text) {
     return out;
 }
 
-constexpr std::size_t kHostCallbackQueueCapacity = 256;
+constexpr std::size_t kHostCallbackQueueCapacity = 1024;
 static_assert((kHostCallbackQueueCapacity &
                (kHostCallbackQueueCapacity - 1)) == 0);
 
@@ -56,6 +56,8 @@ struct HostCallbackPipeContext {
     std::atomic<std::size_t> dequeuePos{0};
     std::atomic<bool> accepting{false};
     std::atomic<bool> stop{false};
+    std::atomic<bool> updateDisplayPending{false};
+    std::atomic<std::uint64_t> droppedEvents{0};
     std::thread writer;
 
     HostCallbackPipeContext() {
@@ -171,6 +173,11 @@ bool dequeueHostCallback(
                 cell.sequence.store(
                     pos + kHostCallbackQueueCapacity,
                     std::memory_order_release);
+                if (event.opcode ==
+                    pluginscaler::formats::vst2abi::AudioMasterUpdateDisplay) {
+                    context.updateDisplayPending.store(
+                        false, std::memory_order_release);
+                }
                 return true;
             }
         } else if (diff < 0) {
@@ -212,9 +219,29 @@ bool queueLegacyHostCallback(void* opaque,
     event.initialDelay = initialDelay;
     event.effectFlags = effectFlags;
 
-    // Bounded lock-free handoff. A saturated notification queue drops the
-    // event rather than blocking a plug-in's realtime/audio callback.
-    return enqueueHostCallback(*context, event);
+    // audioMasterUpdateDisplay is a level-triggered refresh hint. Coalesce
+    // repeated pending refreshes so a repaint storm cannot consume the bounded
+    // queue needed by ordered automation/edit notifications.
+    if (opcode ==
+        pluginscaler::formats::vst2abi::AudioMasterUpdateDisplay) {
+        if (context->updateDisplayPending.exchange(
+                true, std::memory_order_acq_rel)) {
+            return true;
+        }
+    }
+
+    // Bounded lock-free handoff. Never block the plug-in callback. Keep a
+    // diagnostic drop counter so overload is observable outside the hot path.
+    const bool queued = enqueueHostCallback(*context, event);
+    if (!queued) {
+        context->droppedEvents.fetch_add(1, std::memory_order_relaxed);
+        if (opcode ==
+            pluginscaler::formats::vst2abi::AudioMasterUpdateDisplay) {
+            context->updateDisplayPending.store(
+                false, std::memory_order_release);
+        }
+    }
+    return queued;
 }
 
 int runVst2Probe(const std::filesystem::path& path) {
@@ -2454,6 +2481,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
         ReleaseSemaphore(hostCallbackContext.available, 1, nullptr);
     if (hostCallbackContext.writer.joinable())
         hostCallbackContext.writer.join();
+    const auto callbackDrops =
+        hostCallbackContext.droppedEvents.load(std::memory_order_acquire);
+    if (callbackDrops != 0)
+        std::cerr << "callback-drops=" << callbackDrops << '\n';
     if (hostCallbackContext.available) {
         CloseHandle(hostCallbackContext.available);
         hostCallbackContext.available = nullptr;
