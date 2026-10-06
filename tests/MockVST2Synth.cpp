@@ -276,6 +276,12 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
                    state->mainsOnThreadId == state->midiThreadId &&
                    state->midiThreadId == state->processThreadId
                 ? 1 : 0;
+        if (index == 0x126C)
+            return state ? static_cast<VstIntPtr>(state->mainsOnThreadId) : 0;
+        if (index == 0x126D)
+            return state ? static_cast<VstIntPtr>(state->midiThreadId) : 0;
+        if (index == 0x126E)
+            return state ? static_cast<VstIntPtr>(state->processThreadId) : 0;
         if (index == 0x1261)
             return state && state->legacyIdleCount == 3 ? 1 : 0;
         if (index == 0x1262) {
