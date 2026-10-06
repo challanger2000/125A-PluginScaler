@@ -1845,6 +1845,55 @@ int runSharedVst2Server(const std::filesystem::path& path,
     std::int32_t persistedChunkIndex = 0;
     std::atomic<bool> controlStop{false};
 
+    // jBridge-style processing affinity: processing lifecycle calls that
+    // directly bracket realtime work (mains/reconfigure) must execute on the
+    // same helper thread that later runs effProcessEvents/processReplacing.
+    enum class RealtimeControlOp : std::uint32_t {
+        None = 0,
+        SetMains = 1,
+        Reconfigure = 2
+    };
+    HANDLE realtimeControlRequest =
+        CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    HANDLE realtimeControlDone =
+        CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!realtimeControlRequest || !realtimeControlDone) {
+        if (realtimeControlRequest) CloseHandle(realtimeControlRequest);
+        if (realtimeControlDone) CloseHandle(realtimeControlDone);
+        return 26;
+    }
+
+    std::mutex realtimeControlSubmitMutex;
+    std::atomic<RealtimeControlOp> realtimeControlOp{
+        RealtimeControlOp::None};
+    std::atomic<std::int32_t> realtimeControlArg0{0};
+    std::atomic<double> realtimeControlSampleRate{48000.0};
+    std::atomic<std::int32_t> realtimeControlBlockSize{512};
+    std::atomic<bool> realtimeControlResult{false};
+
+    auto submitRealtimeControl =
+        [&](RealtimeControlOp op, std::int32_t arg0,
+            double sampleRate, std::int32_t blockSize) -> bool {
+            std::lock_guard<std::mutex> submitLock(
+                realtimeControlSubmitMutex);
+            ResetEvent(realtimeControlDone);
+            realtimeControlArg0.store(arg0, std::memory_order_relaxed);
+            realtimeControlSampleRate.store(
+                sampleRate, std::memory_order_relaxed);
+            realtimeControlBlockSize.store(
+                blockSize, std::memory_order_relaxed);
+            realtimeControlResult.store(
+                false, std::memory_order_relaxed);
+            realtimeControlOp.store(op, std::memory_order_release);
+            if (!SetEvent(realtimeControlRequest))
+                return false;
+            if (WaitForSingleObject(
+                    realtimeControlDone, 3000) != WAIT_OBJECT_0)
+                return false;
+            return realtimeControlResult.load(
+                std::memory_order_acquire);
+        };
+
     // The helper must never survive its owning DAW/proxy process. A legacy
     // plug-in can deadlock inside the helper before normal Shutdown handling
     // runs, so keep an independent parent-process watchdog that does not take
@@ -2078,13 +2127,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     }
                 }
             } else if (req.command == ipc::ControlCommand::SetMains) {
-                PluginMainThreadRequest call{};
-                call.op = PluginMainThreadOp::SetMains;
-                call.arg0 = req.arg0;
-                if (!SendMessageW(guiContext.surrogate,
-                                  kPluginMainThreadMessage, 0,
-                                  reinterpret_cast<LPARAM>(&call)) ||
-                    !call.ok)
+                const bool changed = submitRealtimeControl(
+                    RealtimeControlOp::SetMains,
+                    req.arg0, 0.0, 0);
+                if (!changed)
                     resp.status = ipc::ControlStatus::PluginError;
             } else if (req.command == ipc::ControlCommand::Reconfigure) {
                 if (payload.size() != sizeof(ipc::ReconfigurePayload)) {
@@ -2095,15 +2141,9 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     if (request.sampleRate <= 0.0 || request.blockSize <= 0) {
                         resp.status = ipc::ControlStatus::InvalidRequest;
                     } else {
-                        PluginMainThreadRequest call{};
-                        call.op = PluginMainThreadOp::Reconfigure;
-                        call.sampleRate = request.sampleRate;
-                        call.blockSize = request.blockSize;
-                        const bool changed =
-                            SendMessageW(guiContext.surrogate,
-                                         kPluginMainThreadMessage, 0,
-                                         reinterpret_cast<LPARAM>(&call)) != 0 &&
-                            call.ok;
+                        const bool changed = submitRealtimeControl(
+                            RealtimeControlOp::Reconfigure,
+                            0, request.sampleRate, request.blockSize);
                         resp.status = changed
                             ? ipc::ControlStatus::Ok
                             : ipc::ControlStatus::PluginError;
@@ -2285,15 +2325,49 @@ int runSharedVst2Server(const std::filesystem::path& path,
 
     int resultCode = 0;
     for (;;) {
-        if (!channel.waitForInput(std::chrono::seconds(10))) {
+        HANDLE waitHandles[2]{
+            static_cast<HANDLE>(channel.inputEventHandle()),
+            realtimeControlRequest
+        };
+        const DWORD waitResult = WaitForMultipleObjects(
+            2, waitHandles, FALSE, 10000);
+
+        if (waitResult == WAIT_TIMEOUT) {
             if (controlStop.load(std::memory_order_acquire))
                 break;
 
             // A host may suspend audio callbacks while transport is stopped,
-            // the track is idle, or an editor is open. Lack of an audio block
-            // is therefore not a helper failure. Keep the bridge/control/UI
-            // process alive and continue waiting; actual helper death is
-            // detected by the x64 process handle/recovery path.
+            // the track is idle, or an editor is open.
+            continue;
+        }
+
+        if (waitResult == WAIT_OBJECT_0 + 1) {
+            const auto op = realtimeControlOp.exchange(
+                RealtimeControlOp::None, std::memory_order_acq_rel);
+            bool commandOk = false;
+            {
+                std::lock_guard<std::mutex> lock(moduleMutex);
+                if (op == RealtimeControlOp::SetMains) {
+                    commandOk = module.setMains(
+                        realtimeControlArg0.load(
+                            std::memory_order_relaxed) != 0);
+                } else if (op == RealtimeControlOp::Reconfigure) {
+                    commandOk = module.reconfigureProcessing(
+                        realtimeControlSampleRate.load(
+                            std::memory_order_relaxed),
+                        realtimeControlBlockSize.load(
+                            std::memory_order_relaxed));
+                }
+            }
+            realtimeControlResult.store(
+                commandOk, std::memory_order_release);
+            SetEvent(realtimeControlDone);
+            continue;
+        }
+
+        if (waitResult != WAIT_OBJECT_0) {
+            if (controlStop.load(std::memory_order_acquire))
+                break;
             continue;
         }
 
@@ -2501,6 +2575,11 @@ int runSharedVst2Server(const std::filesystem::path& path,
         CloseHandle(hostCallbackContext.available);
         hostCallbackContext.available = nullptr;
     }
+
+    if (realtimeControlRequest)
+        CloseHandle(realtimeControlRequest);
+    if (realtimeControlDone)
+        CloseHandle(realtimeControlDone);
 
     return resultCode;
 }
