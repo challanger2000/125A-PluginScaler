@@ -331,6 +331,9 @@ jobs:
           if ($joined -notmatch "plugin-midi-out-note-off=PASS") {
             throw "Plugin to host MIDI note-off marker missing"
           }
+          if ($joined -notmatch "realtime-thread-affinity=PASS") {
+            throw "Realtime lifecycle thread-affinity marker missing"
+          }
           if ($joined -notmatch "rt-callback-context=PASS") {
             throw "Realtime callback context marker missing"
           }
