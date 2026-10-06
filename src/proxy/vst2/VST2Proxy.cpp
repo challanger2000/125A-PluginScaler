@@ -142,6 +142,8 @@ struct ProxyInstance {
     int dragSurfaceStartY{0};
     int dragNativeStartX{0};
     int dragNativeStartY{0};
+    ULONGLONG lastGdiDragMouseForward{0};
+    std::atomic<std::uint64_t> gdiMouseMoveForwards{0};
     bool editorOpen{false};
     ULONGLONG gdiCaptureNotBefore{0};
 
@@ -879,6 +881,7 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
         inst->dragSurfaceStartY = scaledY;
         inst->dragNativeStartX = nativeX;
         inst->dragNativeStartY = nativeY;
+        inst->lastGdiDragMouseForward = 0;
     } else if ((message == WM_MOUSEMOVE || message == WM_LBUTTONUP) &&
                inst->dragActive) {
         // Captured Win32 drags are allowed to continue outside the client
@@ -905,11 +908,34 @@ bool forwardScaledMouse(ProxyInstance* inst, UINT message,
     mouse.y = nativeY;
     mouse.keyFlags = static_cast<std::uint32_t>(wp);
 
+    // High-polling-rate mice can generate hundreds or thousands of drag
+    // messages per second. Each forwarded move is a synchronous cross-process
+    // control transaction into the legacy GUI thread. The control itself uses
+    // relative-from-drag-start coordinates, so intermediate events may be
+    // coalesced safely. Cap active GDI drags at ~250 Hz while keeping button
+    // transitions and the final release position synchronous.
+    if (message == WM_MOUSEMOVE &&
+        inst->settings.gdiEditor &&
+        inst->dragActive) {
+        const ULONGLONG now = GetTickCount64();
+        if (inst->lastGdiDragMouseForward != 0 &&
+            now - inst->lastGdiDragMouseForward < 4ULL) {
+            return true;
+        }
+        inst->lastGdiDragMouseForward = now;
+    }
+
     std::vector<std::uint8_t> ignored;
     const bool ok = controlCall(inst, pluginscaler::ipc::ControlCommand::SendEditorMouse,
                                 0, &mouse, sizeof(mouse), ignored);
-    if (message == WM_LBUTTONUP)
+    if (ok && message == WM_MOUSEMOVE && inst->settings.gdiEditor) {
+        inst->gdiMouseMoveForwards.fetch_add(
+            1, std::memory_order_relaxed);
+    }
+    if (message == WM_LBUTTONUP) {
         inst->dragActive = false;
+        inst->lastGdiDragMouseForward = 0;
+    }
     return ok;
 }
 
@@ -1861,6 +1887,10 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             if (index == 0x1273)
                 return static_cast<VstIntPtr>(
                     inst->gdiCaptureCalls.load(
+                        std::memory_order_acquire));
+            if (index == 0x1274)
+                return static_cast<VstIntPtr>(
+                    inst->gdiMouseMoveForwards.load(
                         std::memory_order_acquire));
         }
 
