@@ -2402,10 +2402,14 @@ int runSharedVst2Server(const std::filesystem::path& path,
                     auto& dst = midi[static_cast<std::size_t>(i)];
                     const auto& src = block->midiEvents[i];
                     dst.type = formats::vst2abi::kVstMidiType;
-                    // Legacy VST2 MIDI uses byteSize=24. FM7-era hosts/plugins
-                    // use this value even though the in-memory structure contains
-                    // additional reserved fields.
-                    dst.byteSize = 24;
+                    // Normalize host-side legacy MIDI into the canonical
+                    // VST2 event ABI before crossing into the target plug-in.
+                    // Some hosts deliver 24-byte legacy payloads, which the
+                    // proxy accepts, but the plug-in receives the full 32-byte
+                    // VstMidiEvent described by this ABI.
+                    dst.byteSize =
+                        static_cast<formats::vst2abi::VstInt32>(
+                            sizeof(formats::vst2abi::VstMidiEvent));
                     dst.deltaFrames = src.deltaFrames;
                     dst.flags = src.flags;
                     for (int b = 0; b < 4; ++b)
