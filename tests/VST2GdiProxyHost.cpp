@@ -268,9 +268,15 @@ bool runScale(EntryProc entry, int scale) {
 
 
             if(cycle==1 && ok) {
+                const auto deferredBefore=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1271,0,nullptr,0.0f);
+                const auto watchdogBefore=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
+
                 std::atomic<bool> beginAudio{false};
                 std::atomic<bool> guiDone{false};
                 std::atomic<bool> stressSignal{true};
+                std::atomic<int> badAudioBlocks{0};
                 std::vector<double> stressTimes;
                 stressTimes.reserve(2048);
 
@@ -279,8 +285,11 @@ bool runScale(EntryProc entry, int scale) {
                         std::this_thread::yield();
                     while(!guiDone.load(std::memory_order_acquire) ||
                           stressTimes.size()<256) {
-                        if(!processTimed64(effect,stressTimes))
+                        if(!processTimed64(effect,stressTimes)) {
                             stressSignal.store(false,std::memory_order_release);
+                            badAudioBlocks.fetch_add(
+                                1,std::memory_order_relaxed);
+                        }
                         if(stressTimes.size()>=2048)
                             break;
                     }
@@ -301,6 +310,17 @@ bool runScale(EntryProc entry, int scale) {
                              MAKELPARAM(knobX,knobEndY));
                 guiDone.store(true,std::memory_order_release);
                 audioThread.join();
+
+                const auto deferredAfter=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1271,0,nullptr,0.0f);
+                const auto watchdogAfter=effect->dispatcher(
+                    effect,EffVendorSpecific,0x1272,0,nullptr,0.0f);
+                const auto deferredDelta=
+                    deferredAfter>=deferredBefore
+                        ? deferredAfter-deferredBefore : -1;
+                const auto watchdogDelta=
+                    watchdogAfter>=watchdogBefore
+                        ? watchdogAfter-watchdogBefore : -1;
 
                 const auto stressTiming=summarizeTimings(stressTimes);
                 const bool timingMeasured=!stressTimes.empty();
@@ -323,7 +343,10 @@ bool runScale(EntryProc entry, int scale) {
                          <<" max_us="<<stressTiming.maxUs
                          <<" overruns="<<stressTiming.deadlineOverruns
                          <<" baseline_overruns="<<baselineTiming.deadlineOverruns
-                         <<" p99_ratio="<<p99Ratio<<"\n";
+                         <<" p99_ratio="<<p99Ratio
+                         <<" bad_blocks="<<badAudioBlocks.load(std::memory_order_relaxed)
+                         <<" deferred104="<<deferredDelta
+                         <<" watchdogs="<<watchdogDelta<<"\n";
                 ok=ok&&realtimeSignal&&timingMeasured&&realtimeTimingOk;
             }
 
