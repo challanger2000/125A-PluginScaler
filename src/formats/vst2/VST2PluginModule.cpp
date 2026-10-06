@@ -111,6 +111,8 @@ VST2PluginModule* moduleForHostCallback(AEffect* effect) noexcept {
 VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
                                VstIntPtr value, void* ptr, float opt) {
     auto* module = moduleForHostCallback(effect);
+    if (module)
+        module->traceHostCallback(opcode);
     switch (opcode) {
     case AudioMasterVersion:
         return 2400;
