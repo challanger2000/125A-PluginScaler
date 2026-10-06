@@ -37,6 +37,13 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+      - name: Upload jBridge window probe
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-jBridge-WindowProbe
+          path: build/src/jbridge_probe/Release/PluginScalerJBridgeProbe.exe
+
   cross-bitness-vst2:
     name: x64 proxy -> x86 VST2 helper
     runs-on: windows-2022
