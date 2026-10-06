@@ -2322,8 +2322,22 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         static_cast<HANDLE>(inst->channel.outputEventHandle()),
         inst->helperProcess.hProcess
     };
-    const DWORD audioWaitMs =
-        block->header.hostProcessLevel == 4 ? 1000 : 100;
+    DWORD audioWaitMs = 1000;
+    if (block->header.hostProcessLevel != 4) {
+        // Realtime watchdog: never allow a live helper to stall the DAW audio
+        // callback for an arbitrary 100 ms. Use four block durations plus a
+        // small scheduler margin, clamped to a practical 5..50 ms window.
+        const std::uint64_t sr =
+            std::max<std::uint32_t>(1u, block->header.sampleRateHz);
+        const std::uint64_t blockUs =
+            (static_cast<std::uint64_t>(block->header.frames) * 1000000ull +
+             sr - 1ull) / sr;
+        const std::uint64_t watchdogUs =
+            std::clamp<std::uint64_t>(blockUs * 4ull + 2000ull,
+                                      5000ull, 50000ull);
+        audioWaitMs = static_cast<DWORD>(
+            (watchdogUs + 999ull) / 1000ull);
+    }
     const DWORD waitResult =
         (waitHandles[0] && waitHandles[1])
             ? WaitForMultipleObjects(2, waitHandles, FALSE, audioWaitMs)
