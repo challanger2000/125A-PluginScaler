@@ -62,6 +62,8 @@ public:
     using HostWindowResizeSink = bool (*)(void* context,
                                          std::int32_t width,
                                          std::int32_t height) noexcept;
+    using HostMidiOutputSink = bool (*)(void* context,
+                                       const vst2abi::VstEvents* events) noexcept;
 
     VST2PluginModule() = default;
     ~VST2PluginModule();
@@ -109,6 +111,16 @@ public:
                                  std::int32_t height) noexcept {
         return hostWindowResizeSink_
             ? hostWindowResizeSink_(hostWindowResizeContext_, width, height)
+            : false;
+    }
+    void setHostMidiOutputSink(HostMidiOutputSink sink,
+                               void* context) noexcept {
+        hostMidiOutputSink_ = sink;
+        hostMidiOutputContext_ = context;
+    }
+    bool emitHostMidiOutput(const vst2abi::VstEvents* events) noexcept {
+        return hostMidiOutputSink_
+            ? hostMidiOutputSink_(hostMidiOutputContext_, events)
             : false;
     }
     bool processReplacing(float** inputs, float** outputs, std::int32_t frames) noexcept;
@@ -160,6 +172,8 @@ private:
     void* hostCallbackContext_{nullptr};
     HostWindowResizeSink hostWindowResizeSink_{nullptr};
     void* hostWindowResizeContext_{nullptr};
+    HostMidiOutputSink hostMidiOutputSink_{nullptr};
+    void* hostMidiOutputContext_{nullptr};
 };
 
 } // namespace pluginscaler::formats

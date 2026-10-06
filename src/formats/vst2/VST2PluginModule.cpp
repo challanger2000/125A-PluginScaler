@@ -140,8 +140,13 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
             module->emitHostCallback(opcode, index, value, opt);
         return 0;
     case AudioMasterProcessEvents:
-        // Plug-in -> host event/MIDI output is not bridged yet.
-        return 0;
+        // Plug-in -> host events are captured synchronously on the realtime
+        // processing path. No control pipe or UI callback queue is involved.
+        return module && ptr &&
+               module->emitHostMidiOutput(
+                   static_cast<const VstEvents*>(ptr))
+            ? 1
+            : 0;
     case AudioMasterGetTime:
         return module
             ? reinterpret_cast<VstIntPtr>(
@@ -175,11 +180,10 @@ VstIntPtr __cdecl hostCallback(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!ptr) return 0;
         if (std::strcmp(static_cast<const char*>(ptr), "sendVstEvents") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sendVstMidiEvent") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
+            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0 ||
             std::strcmp(static_cast<const char*>(ptr), "sizeWindow") == 0)
             return 1;
-        if (std::strcmp(static_cast<const char*>(ptr), "receiveVstEvents") == 0 ||
-            std::strcmp(static_cast<const char*>(ptr), "receiveVstMidiEvent") == 0)
-            return -1;
         return 0;
     default:
         (void)value;

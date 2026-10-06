@@ -64,6 +64,53 @@ struct HostCallbackPipeContext {
     }
 };
 
+struct RealtimeMidiOutputContext {
+    std::atomic<pluginscaler::ipc::AudioSharedBlock*> block{nullptr};
+};
+
+bool collectRealtimeMidiOutput(
+    void* raw,
+    const pluginscaler::formats::vst2abi::VstEvents* events) noexcept {
+    auto* context = static_cast<RealtimeMidiOutputContext*>(raw);
+    auto* block = context
+        ? context->block.load(std::memory_order_acquire)
+        : nullptr;
+    if (!block || !events || events->numEvents < 0)
+        return false;
+
+    const auto count = std::min<std::uint32_t>(
+        static_cast<std::uint32_t>(events->numEvents),
+        pluginscaler::ipc::kMaxMidiEvents);
+    auto* eventPtrs =
+        reinterpret_cast<pluginscaler::formats::vst2abi::VstEvent* const*>(
+            reinterpret_cast<const std::uint8_t*>(events) +
+            offsetof(pluginscaler::formats::vst2abi::VstEvents, events));
+
+    std::uint32_t written = std::min<std::uint32_t>(
+        block->header.outputMidiEventCount,
+        pluginscaler::ipc::kMaxMidiEvents);
+    for (std::uint32_t i = 0;
+         i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
+        const auto* event = eventPtrs[i];
+        if (!event ||
+            event->type != pluginscaler::formats::vst2abi::kVstMidiType ||
+            event->byteSize < 24)
+            continue;
+
+        const auto* midi =
+            reinterpret_cast<const pluginscaler::formats::vst2abi::VstMidiEvent*>(
+                event);
+        auto& dst = block->outputMidiEvents[written++];
+        dst.deltaFrames = midi->deltaFrames;
+        dst.flags = midi->flags;
+        for (int b = 0; b < 4; ++b)
+            dst.data[b] = static_cast<std::uint8_t>(midi->midiData[b]);
+    }
+
+    block->header.outputMidiEventCount = written;
+    return true;
+}
+
 bool callbackWriteExact(HANDLE pipe, const void* data, DWORD bytes) noexcept {
     const auto* p = static_cast<const std::uint8_t*>(data);
     DWORD done = 0;
@@ -1695,6 +1742,10 @@ int runSharedVst2Server(const std::filesystem::path& path,
             &queueLegacyHostCallback, &hostCallbackContext);
     }
 
+    RealtimeMidiOutputContext realtimeMidiOutputContext{};
+    module.setHostMidiOutputSink(
+        &collectRealtimeMidiOutput, &realtimeMidiOutputContext);
+
     std::mutex moduleMutex;
     std::vector<std::uint8_t> persistedChunk;
     std::int32_t persistedChunkIndex = 0;
@@ -2199,6 +2250,15 @@ int runSharedVst2Server(const std::filesystem::path& path,
             if (!realtimeDeferred)
                 module.setHostTimeInfo(hostTime);
 
+            block->header.outputMidiEventCount = 0;
+            if (!realtimeDeferred && ok) {
+                realtimeMidiOutputContext.block.store(
+                    block, std::memory_order_release);
+            } else {
+                realtimeMidiOutputContext.block.store(
+                    nullptr, std::memory_order_release);
+            }
+
             if (!realtimeDeferred && ok && block->header.parameterCount > 0 &&
                 appliedParameterGeneration != block->header.parameterGeneration) {
                 for (std::uint32_t i = 0; i < block->header.parameterCount; ++i) {
@@ -2247,7 +2307,11 @@ int runSharedVst2Server(const std::filesystem::path& path,
                 ok = module.processReplacing(
                     inputs.data(), outputs.data(),
                     static_cast<std::int32_t>(block->header.frames));
+
             }
+
+            realtimeMidiOutputContext.block.store(
+                nullptr, std::memory_order_release);
         }
 
         block->header.errorCode =
@@ -2276,6 +2340,7 @@ int runSharedVst2Server(const std::filesystem::path& path,
     if (guiThread.joinable())
         guiThread.join();
 
+    module.setHostMidiOutputSink(nullptr, nullptr);
     module.setHostCallbackSink(nullptr, nullptr);
     hostCallbackContext.accepting.store(false, std::memory_order_release);
     hostCallbackContext.stop.store(true, std::memory_order_release);

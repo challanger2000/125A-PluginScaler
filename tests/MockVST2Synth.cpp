@@ -257,8 +257,8 @@ VstIntPtr __cdecl dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index,
             char unknown[] = "125AUnknownCapability";
             return gHostCallback(effect, AudioMasterCanDo, 0, 0, sendEvents, 0.0f) == 1 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, sendMidi, 0.0f) == 1 &&
-                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvEvents, 0.0f) == -1 &&
-                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvMidi, 0.0f) == -1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvEvents, 0.0f) == 1 &&
+                   gHostCallback(effect, AudioMasterCanDo, 0, 0, recvMidi, 0.0f) == 1 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, sizeWindow, 0.0f) == 1 &&
                    gHostCallback(effect, AudioMasterCanDo, 0, 0, unknown, 0.0f) == 0
                 ? 1 : 0;
@@ -470,6 +470,28 @@ void __cdecl processReplacing(AEffect* effect, float**, float** outputs, VstInt3
     const VstInt32 eventFrame = state->pendingEvent
         ? std::clamp<VstInt32>(state->pendingDelta, 0, frames)
         : frames;
+
+    if (state->pendingEvent && gHostCallback && effect) {
+        VstMidiEvent outgoing{};
+        outgoing.type = kVstMidiType;
+        outgoing.byteSize = 24;
+        outgoing.deltaFrames = state->pendingDelta;
+        outgoing.midiData[0] = static_cast<char>(
+            state->pendingNoteOn ? 0x90u : 0x80u);
+        outgoing.midiData[1] = static_cast<char>(state->pendingNote);
+        outgoing.midiData[2] = static_cast<char>(
+            state->pendingNoteOn ? state->pendingVelocity : 0);
+
+        struct OneEventList {
+            VstInt32 numEvents;
+            VstIntPtr reserved;
+            VstEvent* events[2];
+        } list{};
+        list.numEvents = 1;
+        list.events[0] = reinterpret_cast<VstEvent*>(&outgoing);
+        (void)gHostCallback(
+            effect, AudioMasterProcessEvents, 0, 0, &list, 0.0f);
+    }
 
     for (VstInt32 i = 0; i < frames; ++i) {
         if (state->pendingEvent && i == eventFrame) {

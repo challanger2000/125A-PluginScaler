@@ -17,6 +17,11 @@ namespace {
 
 int gIoChangedCount = 0;
 int gUpdateDisplayCount = 0;
+int gPluginMidiOutputCount = 0;
+VstInt32 gPluginMidiDelta = -1;
+std::uint8_t gPluginMidiStatus = 0;
+std::uint8_t gPluginMidiNote = 0;
+std::uint8_t gPluginMidiVelocity = 0;
 
 LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -65,7 +70,7 @@ void pumpMessagesFor(DWORD milliseconds) {
 }
 
 VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
-                               VstIntPtr, void*, float) {
+                               VstIntPtr, void* ptr, float) {
     switch (opcode) {
     case AudioMasterVersion: return 2400;
     case AudioMasterGetSampleRate: return 48000;
@@ -77,6 +82,27 @@ VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
     case AudioMasterUpdateDisplay:
         ++gUpdateDisplayCount;
         return 1;
+    case AudioMasterProcessEvents: {
+        auto* events = static_cast<VstEvents*>(ptr);
+        if (!events || events->numEvents <= 0)
+            return 0;
+        auto** eventPtrs = reinterpret_cast<VstEvent**>(
+            reinterpret_cast<std::uint8_t*>(events) +
+            offsetof(VstEvents, events));
+        auto* event = eventPtrs[0];
+        if (!event || event->type != kVstMidiType || event->byteSize < 24)
+            return 0;
+        auto* midi = reinterpret_cast<VstMidiEvent*>(event);
+        ++gPluginMidiOutputCount;
+        gPluginMidiDelta = midi->deltaFrames;
+        gPluginMidiStatus =
+            static_cast<std::uint8_t>(midi->midiData[0]);
+        gPluginMidiNote =
+            static_cast<std::uint8_t>(midi->midiData[1]);
+        gPluginMidiVelocity =
+            static_cast<std::uint8_t>(midi->midiData[2]);
+        return 1;
+    }
     default: return 0;
     }
 }
@@ -500,10 +526,30 @@ int wmain(int argc, wchar_t** argv) {
              processNoteOnBlock(effect, 64, 7, expectedAmplitude);
     std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << "\n";
 
+    const bool midiOutNoteOnOk =
+        gPluginMidiOutputCount == 1 &&
+        gPluginMidiDelta == 7 &&
+        (gPluginMidiStatus & 0xF0u) == 0x90u &&
+        gPluginMidiNote == 60 &&
+        gPluginMidiVelocity == 100;
+    std::cout << "plugin-midi-out-note-on="
+              << (midiOutNoteOnOk ? "PASS" : "FAIL") << "\n";
+    ok = ok && midiOutNoteOnOk;
+
     if (ok)
         ok = sendMidi(effect, 0x80, 60, 0, 11) &&
              processNoteOffBlock(effect, 64, 11, expectedAmplitude);
     std::cout << "synth-note-off=" << (ok ? "PASS" : "FAIL") << "\n";
+
+    const bool midiOutNoteOffOk =
+        gPluginMidiOutputCount == 2 &&
+        gPluginMidiDelta == 11 &&
+        (gPluginMidiStatus & 0xF0u) == 0x80u &&
+        gPluginMidiNote == 60 &&
+        gPluginMidiVelocity == 0;
+    std::cout << "plugin-midi-out-note-off="
+              << (midiOutNoteOffOk ? "PASS" : "FAIL") << "\n";
+    ok = ok && midiOutNoteOffOk;
 
     if (effect) {
         effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);

@@ -255,6 +255,12 @@ jobs:
           if ($joined -notmatch "synth-note-off=PASS") {
             throw "Synth note-off marker missing"
           }
+          if ($joined -notmatch "plugin-midi-out-note-on=PASS") {
+            throw "Plugin to host MIDI note-on marker missing"
+          }
+          if ($joined -notmatch "plugin-midi-out-note-off=PASS") {
+            throw "Plugin to host MIDI note-off marker missing"
+          }
           if ($joined -notmatch "synth=PASS") {
             throw "Synth bridge marker missing"
           }

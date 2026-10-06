@@ -2140,6 +2140,8 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
     for (std::uint32_t i = 0; i < inst->pendingMidiCount; ++i)
         block->midiEvents[i] = inst->pendingMidi[i];
 
+    block->header.outputMidiEventCount = 0;
+
     block->header.parameterCount = static_cast<std::uint32_t>(
         std::min<std::size_t>(inst->parameterValues.size(),
                               pluginscaler::ipc::kMaxParameters));
@@ -2202,6 +2204,37 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
         // later successful transaction instead of creating stuck notes.
         zeroOutputs(effect, outputs, frames);
         return;
+    }
+
+    const auto outputMidiCount = std::min<std::uint32_t>(
+        block->header.outputMidiEventCount,
+        pluginscaler::ipc::kMaxMidiEvents);
+    if (outputMidiCount > 0 && inst->host) {
+        std::array<VstMidiEvent, pluginscaler::ipc::kMaxMidiEvents> midi{};
+        struct FixedVstEvents {
+            VstInt32 numEvents;
+            VstIntPtr reserved;
+            VstEvent* events[pluginscaler::ipc::kMaxMidiEvents];
+        };
+        static_assert(
+            offsetof(FixedVstEvents, events) == offsetof(VstEvents, events));
+
+        FixedVstEvents list{};
+        list.numEvents = static_cast<VstInt32>(outputMidiCount);
+        for (std::uint32_t i = 0; i < outputMidiCount; ++i) {
+            const auto& src = block->outputMidiEvents[i];
+            auto& dst = midi[i];
+            dst.type = kVstMidiType;
+            dst.byteSize = 24;
+            dst.deltaFrames = src.deltaFrames;
+            dst.flags = src.flags;
+            for (int b = 0; b < 4; ++b)
+                dst.midiData[b] = static_cast<char>(src.data[b]);
+            list.events[i] = reinterpret_cast<VstEvent*>(&dst);
+        }
+
+        (void)inst->host(
+            effect, AudioMasterProcessEvents, 0, 0, &list, 0.0f);
     }
 
     inst->pendingMidiCount = 0;
