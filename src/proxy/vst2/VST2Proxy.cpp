@@ -665,6 +665,13 @@ bool controlCall(ProxyInstance* inst,
            readExact(inst->controlPipe, reply.data(), resp.responseBytes);
 }
 
+void closeControlPipe(ProxyInstance* inst) noexcept {
+    if (!inst)
+        return;
+    std::lock_guard<std::mutex> controlLock(inst->controlMutex);
+    closeControlPipe(inst);
+}
+
 bool legacyDispatchCall(ProxyInstance* inst,
                         VstInt32 opcode,
                         VstInt32 index,
@@ -1245,10 +1252,7 @@ void discardDeadBridge(ProxyInstance* inst) noexcept {
     inst->bridgeUsable.store(false, std::memory_order_release);
     inst->bridgeStarted = false;
 
-    if (inst->controlPipe != INVALID_HANDLE_VALUE) {
-        CloseHandle(inst->controlPipe);
-        inst->controlPipe = INVALID_HANDLE_VALUE;
-    }
+    closeControlPipe(inst);
 
     inst->callbackStop.store(true, std::memory_order_release);
     if (inst->callbackPipe != INVALID_HANDLE_VALUE) {
@@ -1453,7 +1457,10 @@ bool startBridge(ProxyInstance* inst) {
         return false;
     }
 
-    inst->controlPipe = control;
+    {
+        std::lock_guard<std::mutex> controlLock(inst->controlMutex);
+        inst->controlPipe = control;
+    }
     inst->helperProcess = pi;
     inst->bridgeStarted = true;
 
