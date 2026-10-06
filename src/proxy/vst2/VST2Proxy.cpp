@@ -99,6 +99,14 @@ struct ProxySettings {
 
 HMODULE g_moduleHandle{nullptr};
 
+struct PendingMidiQueueCell {
+    std::atomic<std::size_t> sequence{0};
+    pluginscaler::ipc::MidiSharedEvent event{};
+};
+
+static_assert((pluginscaler::ipc::kMaxMidiEvents &
+               (pluginscaler::ipc::kMaxMidiEvents - 1)) == 0);
+
 struct ProxyInstance {
     AEffect effect{};
     AudioMasterCallback host{nullptr};
@@ -144,6 +152,14 @@ struct ProxyInstance {
     std::atomic<bool> bridgeUsable{false};
     std::atomic<bool> recoveryRequested{false};
     std::uint64_t sequence{0};
+
+    // Host/API threads publish MIDI into this bounded lock-free ingress queue.
+    // The audio thread drains it into pendingMidi, which remains audio-thread
+    // owned so failed helper transactions can retry the exact same events.
+    std::array<PendingMidiQueueCell, pluginscaler::ipc::kMaxMidiEvents> midiIngress{};
+    std::atomic<std::size_t> midiEnqueuePos{0};
+    std::atomic<std::size_t> midiDequeuePos{0};
+    std::atomic<std::uint32_t> midiIngressDrops{0};
     std::array<pluginscaler::ipc::MidiSharedEvent, pluginscaler::ipc::kMaxMidiEvents> pendingMidi{};
     std::uint32_t pendingMidiCount{0};
     std::array<std::atomic<float>, pluginscaler::ipc::kMaxParameters> parameterValues{};
@@ -154,7 +170,73 @@ struct ProxyInstance {
     std::atomic<VstInt32> runtimeInputs{0};
     std::atomic<VstInt32> runtimeOutputs{0};
     std::atomic<VstInt32> runtimeInitialDelay{0};
+
+    ProxyInstance() {
+        for (std::size_t i = 0; i < midiIngress.size(); ++i)
+            midiIngress[i].sequence.store(i, std::memory_order_relaxed);
+    }
 };
+
+bool enqueuePendingMidi(
+    ProxyInstance* inst,
+    const pluginscaler::ipc::MidiSharedEvent& event) noexcept {
+    if (!inst) return false;
+    std::size_t pos = inst->midiEnqueuePos.load(std::memory_order_relaxed);
+    for (;;) {
+        auto& cell =
+            inst->midiIngress[pos & (pluginscaler::ipc::kMaxMidiEvents - 1)];
+        const std::size_t seq =
+            cell.sequence.load(std::memory_order_acquire);
+        const auto diff = static_cast<std::intptr_t>(seq) -
+                          static_cast<std::intptr_t>(pos);
+        if (diff == 0) {
+            if (inst->midiEnqueuePos.compare_exchange_weak(
+                    pos, pos + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                cell.event = event;
+                cell.sequence.store(pos + 1, std::memory_order_release);
+                return true;
+            }
+        } else if (diff < 0) {
+            inst->midiIngressDrops.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        } else {
+            pos = inst->midiEnqueuePos.load(std::memory_order_relaxed);
+        }
+    }
+}
+
+bool dequeuePendingMidi(
+    ProxyInstance* inst,
+    pluginscaler::ipc::MidiSharedEvent& event) noexcept {
+    if (!inst) return false;
+    std::size_t pos = inst->midiDequeuePos.load(std::memory_order_relaxed);
+    for (;;) {
+        auto& cell =
+            inst->midiIngress[pos & (pluginscaler::ipc::kMaxMidiEvents - 1)];
+        const std::size_t seq =
+            cell.sequence.load(std::memory_order_acquire);
+        const auto diff = static_cast<std::intptr_t>(seq) -
+                          static_cast<std::intptr_t>(pos + 1);
+        if (diff == 0) {
+            if (inst->midiDequeuePos.compare_exchange_weak(
+                    pos, pos + 1,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed)) {
+                event = cell.event;
+                cell.sequence.store(
+                    pos + pluginscaler::ipc::kMaxMidiEvents,
+                    std::memory_order_release);
+                return true;
+            }
+        } else if (diff < 0) {
+            return false;
+        } else {
+            pos = inst->midiDequeuePos.load(std::memory_order_relaxed);
+        }
+    }
+}
 
 std::atomic<std::uint64_t> g_instanceCounter{1};
 
@@ -2145,23 +2227,25 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         auto** eventPtrs = reinterpret_cast<VstEvent**>(
             reinterpret_cast<std::uint8_t*>(events) + offsetof(VstEvents, events));
 
-        std::uint32_t written = inst->pendingMidiCount;
-        for (std::uint32_t i = 0; i < count && written < pluginscaler::ipc::kMaxMidiEvents; ++i) {
+        bool accepted = true;
+        for (std::uint32_t i = 0; i < count; ++i) {
             auto* ev = eventPtrs[i];
             // Studio One has been observed to deliver valid VST2 MIDI with a
             // 24-byte payload size. Accept that host-side legacy form here,
             // then normalize it before forwarding to the x86 plug-in.
             if (!ev || ev->type != kVstMidiType || ev->byteSize < 24)
                 continue;
+
             auto* midi = reinterpret_cast<VstMidiEvent*>(ev);
-            auto& dst = inst->pendingMidi[written++];
+            pluginscaler::ipc::MidiSharedEvent dst{};
             dst.deltaFrames = midi->deltaFrames;
             dst.flags = midi->flags;
             for (int b = 0; b < 4; ++b)
                 dst.data[b] = static_cast<std::uint8_t>(midi->midiData[b]);
+
+            accepted = enqueuePendingMidi(inst, dst) && accepted;
         }
-        inst->pendingMidiCount = written;
-        return 1;
+        return accepted ? 1 : 0;
     }
 
     case EffGetPlugCategory:
@@ -2292,6 +2376,12 @@ void __cdecl processReplacing(AEffect* effect, float** inputs, float** outputs,
             block->hostTime.sampleRate =
                 inst->sampleRate.load(std::memory_order_acquire);
         }
+    }
+
+    pluginscaler::ipc::MidiSharedEvent queuedMidi{};
+    while (inst->pendingMidiCount < pluginscaler::ipc::kMaxMidiEvents &&
+           dequeuePendingMidi(inst, queuedMidi)) {
+        inst->pendingMidi[inst->pendingMidiCount++] = queuedMidi;
     }
 
     block->header.midiEventCount = inst->pendingMidiCount;
