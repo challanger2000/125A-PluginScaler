@@ -32,3 +32,12 @@ add_executable(PluginScalerJBridge150Viewer WIN32
 target_compile_features(PluginScalerJBridge150Viewer PRIVATE cxx_std_20)
 target_compile_definitions(PluginScalerJBridge150Viewer PRIVATE UNICODE _UNICODE)
 target_link_libraries(PluginScalerJBridge150Viewer PRIVATE user32 gdi32)
+
+
+add_executable(PluginScalerJBridgeMultiInstanceProbe WIN32
+    instance_probe.cpp
+)
+
+target_compile_features(PluginScalerJBridgeMultiInstanceProbe PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeMultiInstanceProbe PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeMultiInstanceProbe PRIVATE user32)
