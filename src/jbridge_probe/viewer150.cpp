@@ -30,6 +30,9 @@ struct AppState {
     bool leftDown{};
     bool rightDown{};
     bool middleDown{};
+    bool dragActive{};
+    POINT dragOriginScreen{};
+    POINT dragOriginNative{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -169,6 +172,17 @@ POINT toNativeClient(const AppState& s, LPARAM lp) {
         (std::clamp)(MulDiv(y, 100, kScalePercent), 0, (std::max)(0, s.nativeH - 1))
     };
     return p;
+}
+
+POINT dragNativePoint(const AppState& s) {
+    POINT now{};
+    if (!GetCursorPos(&now))
+        return s.dragOriginNative;
+
+    return POINT{
+        s.dragOriginNative.x + MulDiv(now.x - s.dragOriginScreen.x, 100, kScalePercent),
+        s.dragOriginNative.y + MulDiv(now.y - s.dragOriginScreen.y, 100, kScalePercent)
+    };
 }
 
 LPARAM packPoint(POINT p) {
