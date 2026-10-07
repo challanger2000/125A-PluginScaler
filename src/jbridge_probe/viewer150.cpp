@@ -248,7 +248,7 @@ void restoreWholeEditorTree(AppState& s) {
         static_cast<LONG>(1), s.parkedRect.bottom - s.parkedRect.top));
 
     SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
     s.parked = false;
 }
 
