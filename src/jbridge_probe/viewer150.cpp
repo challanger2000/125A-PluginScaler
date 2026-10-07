@@ -36,6 +36,7 @@ struct AppState {
     HWND parkedWindow{};
     RECT parkedRect{};
     bool parked{};
+    bool initialTopmostShield{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -326,11 +327,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTimer(hwnd, kCaptureTimer, kCaptureIntervalMs, nullptr);
         return 0;
 
-    case WM_MOUSEACTIVATE:
-        SetForegroundWindow(hwnd);
-        BringWindowToTop(hwnd);
-        return MA_ACTIVATE;
-
     case WM_TIMER:
         if (state && wp == kCaptureTimer) {
             if (!IsWindow(state->source)) {
@@ -377,8 +373,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (state) {
-            SetForegroundWindow(hwnd);
-            BringWindowToTop(hwnd);
             state->leftDown = true;
             state->dragActive = true;
             state->dragOriginNative = toNativeClient(*state, lp);
@@ -404,6 +398,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!state->rightDown && !state->middleDown && GetCapture() == hwnd)
                 ReleaseCapture();
 
+            if (state->initialTopmostShield) {
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                state->initialTopmostShield = false;
+            }
         }
         return 0;
 
@@ -542,6 +541,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     ShowWindow(window, show);
     UpdateWindow(window);
 
+    if (SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) {
+        state.initialTopmostShield = true;
+    }
 
     if (!parkWholeEditorTree(state)) {
         DestroyWindow(window);
