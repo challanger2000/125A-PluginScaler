@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <tlhelp32.h>
 
 #include <algorithm>
@@ -172,8 +173,8 @@ POINT toNativeClient(const AppState& s, LPARAM lp) {
 
 LPARAM packPoint(POINT p) {
     return MAKELPARAM(
-        static_cast<short>((std::clamp)(p.x, -32768, 32767)),
-        static_cast<short>((std::clamp)(p.y, -32768, 32767)));
+        static_cast<short>((std::clamp)(p.x, static_cast<LONG>(-32768), static_cast<LONG>(32767))),
+        static_cast<short>((std::clamp)(p.y, static_cast<LONG>(-32768), static_cast<LONG>(32767))));
 }
 
 WPARAM buttonState(const AppState& s, WPARAM incoming = 0) {
