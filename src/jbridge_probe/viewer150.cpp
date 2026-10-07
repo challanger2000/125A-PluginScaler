@@ -26,6 +26,9 @@ struct AppState {
     HGDIOBJ oldBitmap{};
     void* bits{};
     BITMAPINFO bmi{};
+    bool leftDown{};
+    bool rightDown{};
+    bool middleDown{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -65,14 +68,11 @@ void maybe(HWND h, EnumContext& c) {
     DWORD pid = 0;
     GetWindowThreadProcessId(h, &pid);
     if (!c.pids->contains(pid) || !IsWindowVisible(h)) return;
-
     const auto name = cls(h);
     if (name.rfind(L"NIVSTChildWindow", 0) != 0) return;
-
     RECT cr{};
     if (!GetClientRect(h, &cr)) return;
     if (cr.right - cr.left < 100 || cr.bottom - cr.top < 100) return;
-
     c.found->push_back(h);
 }
 
@@ -97,7 +97,6 @@ HWND findSource() {
     EnumContext c{&pids, &found};
     if (!pids.empty())
         EnumWindows(topProc, reinterpret_cast<LPARAM>(&c));
-
     if (found.empty()) return nullptr;
 
     return *std::max_element(found.begin(), found.end(), [](HWND a, HWND b) {
@@ -151,16 +150,52 @@ void destroyCaptureSurface(AppState& s) {
         DeleteObject(s.dib);
     if (s.memoryDc)
         DeleteDC(s.memoryDc);
-
     s = {};
 }
 
 bool capture(AppState& s) {
     if (!s.source || !IsWindow(s.source) || !s.memoryDc)
         return false;
-
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
+}
+
+POINT toNativeClient(const AppState& s, LPARAM lp) {
+    const int x = GET_X_LPARAM(lp);
+    const int y = GET_Y_LPARAM(lp);
+    POINT p{
+        (std::clamp)(MulDiv(x, 100, kScalePercent), 0, (std::max)(0, s.nativeW - 1)),
+        (std::clamp)(MulDiv(y, 100, kScalePercent), 0, (std::max)(0, s.nativeH - 1))
+    };
+    return p;
+}
+
+LPARAM packPoint(POINT p) {
+    return MAKELPARAM(
+        static_cast<short>((std::clamp)(p.x, -32768, 32767)),
+        static_cast<short>((std::clamp)(p.y, -32768, 32767)));
+}
+
+WPARAM buttonState(const AppState& s, WPARAM incoming = 0) {
+    WPARAM state = incoming &
+        (MK_SHIFT | MK_CONTROL | MK_XBUTTON1 | MK_XBUTTON2);
+    if (s.leftDown) state |= MK_LBUTTON;
+    if (s.rightDown) state |= MK_RBUTTON;
+    if (s.middleDown) state |= MK_MBUTTON;
+    return state;
+}
+
+void sendClientMouse(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!IsWindow(s.source)) return;
+    const POINT p = toNativeClient(s, lp);
+    PostMessageW(s.source, msg, wp, packPoint(p));
+}
+
+void sendWheel(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
+    if (!IsWindow(s.source)) return;
+    POINT p = toNativeClient(s, lp);
+    ClientToScreen(s.source, &p);
+    PostMessageW(s.source, msg, wp, packPoint(p));
 }
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -190,7 +225,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 DestroyWindow(hwnd);
                 return 0;
             }
-
             if (capture(*state))
                 InvalidateRect(hwnd, nullptr, FALSE);
         }
@@ -215,12 +249,94 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
 
+    case WM_MOUSEMOVE:
+        if (state)
+            sendClientMouse(*state, WM_MOUSEMOVE, buttonState(*state, wp), lp);
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        if (state) {
+            state->leftDown = true;
+            SetCapture(hwnd);
+            SetFocus(hwnd);
+            sendClientMouse(*state, WM_LBUTTONDOWN, buttonState(*state, wp), lp);
+        }
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (state) {
+            sendClientMouse(*state, WM_LBUTTONUP, buttonState(*state, wp) & ~MK_LBUTTON, lp);
+            state->leftDown = false;
+            if (!state->rightDown && !state->middleDown && GetCapture() == hwnd)
+                ReleaseCapture();
+        }
+        return 0;
+
+    case WM_LBUTTONDBLCLK:
+        if (state)
+            sendClientMouse(*state, WM_LBUTTONDBLCLK, buttonState(*state, wp) | MK_LBUTTON, lp);
+        return 0;
+
+    case WM_RBUTTONDOWN:
+        if (state) {
+            state->rightDown = true;
+            SetCapture(hwnd);
+            sendClientMouse(*state, WM_RBUTTONDOWN, buttonState(*state, wp), lp);
+        }
+        return 0;
+
+    case WM_RBUTTONUP:
+        if (state) {
+            sendClientMouse(*state, WM_RBUTTONUP, buttonState(*state, wp) & ~MK_RBUTTON, lp);
+            state->rightDown = false;
+            if (!state->leftDown && !state->middleDown && GetCapture() == hwnd)
+                ReleaseCapture();
+        }
+        return 0;
+
+    case WM_MBUTTONDOWN:
+        if (state) {
+            state->middleDown = true;
+            SetCapture(hwnd);
+            sendClientMouse(*state, WM_MBUTTONDOWN, buttonState(*state, wp), lp);
+        }
+        return 0;
+
+    case WM_MBUTTONUP:
+        if (state) {
+            sendClientMouse(*state, WM_MBUTTONUP, buttonState(*state, wp) & ~MK_MBUTTON, lp);
+            state->middleDown = false;
+            if (!state->leftDown && !state->rightDown && GetCapture() == hwnd)
+                ReleaseCapture();
+        }
+        return 0;
+
+    case WM_MOUSEWHEEL:
+        if (state)
+            sendWheel(*state, WM_MOUSEWHEEL, wp, lp);
+        return 0;
+
+    case WM_MOUSEHWHEEL:
+        if (state)
+            sendWheel(*state, WM_MOUSEHWHEEL, wp, lp);
+        return 0;
+
+    case WM_CAPTURECHANGED:
+        if (state) {
+            state->leftDown = false;
+            state->rightDown = false;
+            state->middleDown = false;
+        }
+        return 0;
+
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
         KillTimer(hwnd, kCaptureTimer);
+        if (GetCapture() == hwnd)
+            ReleaseCapture();
         PostQuitMessage(0);
         return 0;
     }
@@ -262,6 +378,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     const wchar_t* className = L"125A.PluginScaler.JBridge150Viewer";
     WNDCLASSW wc{};
+    wc.style = CS_DBLCLKS;
     wc.lpfnWndProc = windowProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -273,7 +390,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     HWND window = CreateWindowExW(
-        0, className, L"125A jBridge 150% Viewer",
+        0, className, L"125A jBridge 150% Interactive Viewer",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
