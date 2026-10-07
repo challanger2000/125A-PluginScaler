@@ -357,10 +357,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             syncContextZOrder(hwnd, *state);
             if (!IsWindow(state->source)) {
                 KillTimer(hwnd, kCaptureTimer);
-                MessageBoxW(hwnd,
-                    L"Das jBridge-Pluginfenster wurde geschlossen.",
-                    L"125A jBridge 150% Viewer",
-                    MB_OK | MB_ICONINFORMATION);
                 DestroyWindow(hwnd);
                 return 0;
             }
