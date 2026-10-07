@@ -76,7 +76,10 @@ void maybe(HWND h, EnumContext& c) {
     GetWindowThreadProcessId(h, &pid);
     if (!c.pids->contains(pid) || !IsWindowVisible(h)) return;
     const auto name = cls(h);
-    if (name.rfind(L"NIVSTChildWindow", 0) != 0) return;
+    const bool legacyNiEditor =
+        name.rfind(L"NIVSTChildWindow", 0) == 0 ||
+        name.rfind(L"NINormalWindow", 0) == 0;
+    if (!legacyNiEditor) return;
     RECT cr{};
     if (!GetClientRect(h, &cr)) return;
     if (cr.right - cr.left < 100 || cr.bottom - cr.top < 100) return;
@@ -516,16 +519,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     RECT wr{0, 0, state.scaledW, state.scaledH};
     AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
-    HWND dawOwner = GetAncestor(state.source, GA_ROOT);
-    if (!dawOwner || !IsWindow(dawOwner))
-        dawOwner = nullptr;
-
     HWND window = CreateWindowExW(
         0, className, L"125A jBridge 150% Interactive Viewer",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
-        dawOwner, nullptr, instance, &state);
+        nullptr, nullptr, instance, &state);
 
     if (!window) {
         destroyCaptureSurface(state);
