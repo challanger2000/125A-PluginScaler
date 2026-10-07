@@ -378,6 +378,13 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostMessageW(state->source, WM_LBUTTONDOWN,
                          buttonState(*state, wp),
                          packPoint(state->dragOriginNative));
+
+            // Old NI editors can activate their offscreen jBridge wrapper when
+            // they receive the forwarded click. Reassert the real visible
+            // scaler window immediately after forwarding user input.
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+            SetFocus(hwnd);
         }
         return 0;
 
