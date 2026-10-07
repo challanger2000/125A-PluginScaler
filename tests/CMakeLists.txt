@@ -1,0 +1,125 @@
+add_executable(PluginScalerBootstrapTests
+    BootstrapTests.cpp
+)
+
+target_link_libraries(PluginScalerBootstrapTests PRIVATE
+    PluginScalerCore
+    PluginScalerIPC
+    PluginScalerVST3Adapter
+    PluginScalerVST2Adapter
+)
+
+target_compile_features(PluginScalerBootstrapTests PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(PluginScalerBootstrapTests)
+
+add_test(NAME PluginScaler.Bootstrap COMMAND PluginScalerBootstrapTests)
+
+add_library(MockVST2 SHARED MockVST2.cpp)
+target_include_directories(MockVST2 PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_features(MockVST2 PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2)
+set_target_properties(MockVST2 PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2")
+
+add_library(MockVST2NoChunk SHARED MockVST2.cpp)
+target_include_directories(MockVST2NoChunk PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_definitions(MockVST2NoChunk PRIVATE PLUGINSCALER_MOCK_NO_CHUNK=1)
+target_compile_features(MockVST2NoChunk PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2NoChunk)
+set_target_properties(MockVST2NoChunk PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2NoChunk")
+
+add_library(MockVST2LegacyProcess SHARED MockVST2.cpp)
+target_include_directories(MockVST2LegacyProcess PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_definitions(MockVST2LegacyProcess PRIVATE PLUGINSCALER_MOCK_LEGACY_PROCESS=1)
+target_compile_features(MockVST2LegacyProcess PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2LegacyProcess)
+set_target_properties(MockVST2LegacyProcess PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2LegacyProcess")
+
+add_library(MockVST2Synth SHARED MockVST2Synth.cpp)
+target_include_directories(MockVST2Synth PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_features(MockVST2Synth PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2Synth)
+set_target_properties(MockVST2Synth PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2Synth")
+
+add_test(
+    NAME PluginScaler.VST2Probe
+    COMMAND PluginScalerHelper --probe-vst2 $<TARGET_FILE:MockVST2>
+)
+set_tests_properties(PluginScaler.VST2Probe PROPERTIES
+    PASS_REGULAR_EXPRESSION "loaded=1;opened=1;closed=1;entry=VSTPluginMain;effect=125A Mock VST2"
+    TIMEOUT 20
+)
+
+add_test(
+    NAME PluginScaler.VST2AudioProbe
+    COMMAND PluginScalerHelper --probe-vst2-audio $<TARGET_FILE:MockVST2>
+)
+set_tests_properties(PluginScaler.VST2AudioProbe PROPERTIES
+    PASS_REGULAR_EXPRESSION "configured=1;mainsOn=1;processed=1;mainsOff=1;closed=1;outL=0.1450;outR=0.1650"
+    TIMEOUT 20
+)
+
+add_library(MockVST2LegacyGdi SHARED MockVST2LegacyGdi.cpp)
+target_include_directories(MockVST2LegacyGdi PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_compile_features(MockVST2LegacyGdi PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(MockVST2LegacyGdi)
+set_target_properties(MockVST2LegacyGdi PROPERTIES PREFIX "" OUTPUT_NAME "MockVST2LegacyGdi")
+
+add_executable(PluginScalerBridgeClient BridgeClient.cpp)
+target_include_directories(PluginScalerBridgeClient PRIVATE "${PROJECT_SOURCE_DIR}/include")
+target_link_libraries(PluginScalerBridgeClient PRIVATE PluginScalerIPC)
+target_compile_features(PluginScalerBridgeClient PRIVATE cxx_std_20)
+pluginscaler_enable_warnings(PluginScalerBridgeClient)
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_test(
+        NAME PluginScaler.VST2SharedMemoryBridge
+        COMMAND PluginScalerBridgeClient
+            $<TARGET_FILE:PluginScalerHelper>
+            $<TARGET_FILE:MockVST2>
+    )
+    set_tests_properties(PluginScaler.VST2SharedMemoryBridge PROPERTIES
+        PASS_REGULAR_EXPRESSION "state=3;error=0;outL0=0.145;outR0=0.165;outL63=1.405;outR63=2.685"
+        TIMEOUT 20
+    )
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_executable(PluginScalerVST2ProxyHost VST2ProxyHost.cpp)
+    target_include_directories(PluginScalerVST2ProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2ProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2ProxyHost)
+
+    add_executable(PluginScalerVST2GdiProxyHost VST2GdiProxyHost.cpp)
+    target_include_directories(PluginScalerVST2GdiProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2GdiProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2GdiProxyHost)
+
+    add_executable(PluginScalerVST2SynthProxyHost VST2SynthProxyHost.cpp)
+    target_include_directories(PluginScalerVST2SynthProxyHost PRIVATE "${PROJECT_SOURCE_DIR}/include")
+    target_compile_features(PluginScalerVST2SynthProxyHost PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2SynthProxyHost)
+endif()
+
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_executable(PluginScalerVST2LegacyHostTests
+        VST2LegacyHostTests.cpp
+    )
+    target_include_directories(PluginScalerVST2LegacyHostTests PRIVATE
+        "${PROJECT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(PluginScalerVST2LegacyHostTests PRIVATE
+        PluginScalerVST2Host
+    )
+    target_compile_features(PluginScalerVST2LegacyHostTests PRIVATE cxx_std_20)
+    pluginscaler_enable_warnings(PluginScalerVST2LegacyHostTests)
+
+    add_test(
+        NAME PluginScaler.VST2LegacyHost
+        COMMAND PluginScalerVST2LegacyHostTests $<TARGET_FILE:MockVST2Synth>
+    )
+    set_tests_properties(PluginScaler.VST2LegacyHost PROPERTIES
+        PASS_REGULAR_EXPRESSION "legacy-host=PASS"
+        TIMEOUT 20
+    )
+endif()
