@@ -31,7 +31,6 @@ struct AppState {
     bool rightDown{};
     bool middleDown{};
     HWND parkedWindow{};
-    HWND parkedParent{};
     RECT parkedOriginalRect{};
     bool parked{};
 };
@@ -166,10 +165,47 @@ bool capture(AppState& s) {
 }
 
 
+HWND chooseParkingTarget(const AppState& s) {
+    if (!s.source || !IsWindow(s.source))
+        return nullptr;
+
+    HWND target = s.source;
+    HWND current = s.source;
+
+    while (HWND parent = GetParent(current)) {
+        RECT wr{};
+        RECT cr{};
+        if (!GetWindowRect(parent, &wr) || !GetClientRect(parent, &cr))
+            break;
+
+        const int windowW = wr.right - wr.left;
+        const int windowH = wr.bottom - wr.top;
+        const int clientW = cr.right - cr.left;
+        const int clientH = cr.bottom - cr.top;
+
+        // Keep climbing only through wrappers that are still plausibly
+        // part of this plugin editor. Stop before the large DAW workspace.
+        const bool plausibleWidth =
+            windowW > 0 && windowW <= s.nativeW + 260 &&
+            clientW > 0 && clientW <= s.nativeW + 240;
+        const bool plausibleHeight =
+            windowH > 0 && windowH <= s.nativeH + 260 &&
+            clientH > 0 && clientH <= s.nativeH + 240;
+
+        if (!plausibleWidth || !plausibleHeight)
+            break;
+
+        target = parent;
+        current = parent;
+    }
+
+    return target;
+}
+
 bool parkOriginal(AppState& s) {
-    HWND target = GetParent(s.source);
+    HWND target = chooseParkingTarget(s);
     if (!target || !IsWindow(target))
-        target = s.source;
+        return false;
 
     HWND parent = GetParent(target);
     RECT rect{};
@@ -184,17 +220,16 @@ bool parkOriginal(AppState& s) {
     }
 
     s.parkedWindow = target;
-    s.parkedParent = parent;
     s.parkedOriginalRect = {
         topLeft.x, topLeft.y, bottomRight.x, bottomRight.y
     };
 
-    const int w = (std::max)(static_cast<LONG>(1), bottomRight.x - topLeft.x);
-    const int h = (std::max)(static_cast<LONG>(1), bottomRight.y - topLeft.y);
-    const int parkX = -30000;
-    const int parkY = -30000;
+    const int w = static_cast<int>((std::max)(
+        static_cast<LONG>(1), bottomRight.x - topLeft.x));
+    const int h = static_cast<int>((std::max)(
+        static_cast<LONG>(1), bottomRight.y - topLeft.y));
 
-    if (!SetWindowPos(target, nullptr, parkX, parkY, w, h,
+    if (!SetWindowPos(target, nullptr, -30000, -30000, w, h,
                       SWP_NOZORDER | SWP_NOACTIVATE))
         return false;
 
@@ -206,10 +241,14 @@ void restoreOriginal(AppState& s) {
     if (!s.parked || !s.parkedWindow || !IsWindow(s.parkedWindow))
         return;
 
-    const int x = s.parkedOriginalRect.left;
-    const int y = s.parkedOriginalRect.top;
-    const int w = (std::max)(static_cast<LONG>(1), s.parkedOriginalRect.right - s.parkedOriginalRect.left);
-    const int h = (std::max)(static_cast<LONG>(1), s.parkedOriginalRect.bottom - s.parkedOriginalRect.top);
+    const int x = static_cast<int>(s.parkedOriginalRect.left);
+    const int y = static_cast<int>(s.parkedOriginalRect.top);
+    const int w = static_cast<int>((std::max)(
+        static_cast<LONG>(1),
+        s.parkedOriginalRect.right - s.parkedOriginalRect.left));
+    const int h = static_cast<int>((std::max)(
+        static_cast<LONG>(1),
+        s.parkedOriginalRect.bottom - s.parkedOriginalRect.top));
 
     SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
