@@ -33,11 +33,6 @@ struct AppState {
     bool dragActive{};
     POINT dragOriginScreen{};
     POINT dragOriginNative{};
-    HWND originalParent{};
-    RECT originalChildRect{};
-    HWND surrogate{};
-    bool detached{};
-    bool originalParentWasVisible{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -168,98 +163,6 @@ bool capture(AppState& s) {
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
 }
-
-
-LRESULT CALLBACK surrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_ERASEBKGND)
-        return 1;
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-bool detachEditorToSurrogate(AppState& s, HINSTANCE instance) {
-    if (!s.source || !IsWindow(s.source))
-        return false;
-
-    s.originalParent = GetParent(s.source);
-    if (!s.originalParent || !IsWindow(s.originalParent))
-        return false;
-
-    RECT childRect{};
-    if (!GetWindowRect(s.source, &childRect))
-        return false;
-
-    POINT tl{childRect.left, childRect.top};
-    POINT br{childRect.right, childRect.bottom};
-    ScreenToClient(s.originalParent, &tl);
-    ScreenToClient(s.originalParent, &br);
-    s.originalChildRect = {tl.x, tl.y, br.x, br.y};
-    s.originalParentWasVisible = IsWindowVisible(s.originalParent) != FALSE;
-
-    const wchar_t* clsName = L"125A.PluginScaler.Surrogate";
-    WNDCLASSW wc{};
-    wc.lpfnWndProc = surrogateProc;
-    wc.hInstance = instance;
-    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    wc.lpszClassName = clsName;
-    RegisterClassW(&wc);
-
-    s.surrogate = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        clsName, L"",
-        WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        -32000, -32000, s.nativeW, s.nativeH,
-        nullptr, nullptr, instance, nullptr);
-
-    if (!s.surrogate)
-        return false;
-
-    ShowWindow(s.surrogate, SW_SHOWNOACTIVATE);
-
-    SetLastError(0);
-    HWND previous = SetParent(s.source, s.surrogate);
-    if (!previous && GetLastError() != 0) {
-        DestroyWindow(s.surrogate);
-        s.surrogate = nullptr;
-        return false;
-    }
-
-    SetWindowPos(s.source, nullptr, 0, 0, s.nativeW, s.nativeH,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-
-    if (s.originalParentWasVisible)
-        ShowWindow(s.originalParent, SW_HIDE);
-
-    s.detached = true;
-    return true;
-}
-
-void restoreDetachedEditor(AppState& s) {
-    if (!s.detached)
-        return;
-
-    if (s.originalParent && IsWindow(s.originalParent)) {
-        if (s.originalParentWasVisible)
-            ShowWindow(s.originalParent, SW_SHOWNA);
-
-        if (s.source && IsWindow(s.source)) {
-            SetParent(s.source, s.originalParent);
-            const int x = static_cast<int>(s.originalChildRect.left);
-            const int y = static_cast<int>(s.originalChildRect.top);
-            const int w = static_cast<int>(s.originalChildRect.right - s.originalChildRect.left);
-            const int h = static_cast<int>(s.originalChildRect.bottom - s.originalChildRect.top);
-            SetWindowPos(s.source, nullptr, x, y, w, h,
-                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        }
-    }
-
-    if (s.surrogate && IsWindow(s.surrogate))
-        DestroyWindow(s.surrogate);
-
-    s.surrogate = nullptr;
-    s.detached = false;
-}
-
 
 POINT toNativeClient(const AppState& s, LPARAM lp) {
     const int x = GET_X_LPARAM(lp);
@@ -471,8 +374,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kCaptureTimer);
         if (GetCapture() == hwnd)
             ReleaseCapture();
-        if (state)
-            restoreDetachedEditor(*state);
         PostQuitMessage(0);
         return 0;
     }
@@ -539,29 +440,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
-
-    if (!detachEditorToSurrogate(state, instance)) {
-        DestroyWindow(window);
-        destroyCaptureSurface(state);
-        MessageBoxW(nullptr,
-            L"Der NI-Editor konnte nicht in den 125A-Surrogate-Host uebernommen werden.",
-            L"125A jBridge 150% Viewer",
-            MB_OK | MB_ICONERROR);
-        return 6;
-    }
-
-    if (!capture(state)) {
-        restoreDetachedEditor(state);
-        DestroyWindow(window);
-        destroyCaptureSurface(state);
-        MessageBoxW(nullptr,
-            L"PrintWindow funktioniert nach der Editor-Uebernahme nicht.",
-            L"125A jBridge 150% Viewer",
-            MB_OK | MB_ICONERROR);
-        return 7;
-    }
-
-    InvalidateRect(window, nullptr, FALSE);
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
