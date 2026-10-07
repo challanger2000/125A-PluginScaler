@@ -30,6 +30,10 @@ struct AppState {
     bool leftDown{};
     bool rightDown{};
     bool middleDown{};
+    HWND parkedWindow{};
+    HWND parkedParent{};
+    RECT parkedOriginalRect{};
+    bool parked{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -159,6 +163,57 @@ bool capture(AppState& s) {
         return false;
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
+}
+
+
+bool parkOriginal(AppState& s) {
+    HWND target = GetParent(s.source);
+    if (!target || !IsWindow(target))
+        target = s.source;
+
+    HWND parent = GetParent(target);
+    RECT rect{};
+    if (!GetWindowRect(target, &rect))
+        return false;
+
+    POINT topLeft{rect.left, rect.top};
+    POINT bottomRight{rect.right, rect.bottom};
+    if (parent) {
+        ScreenToClient(parent, &topLeft);
+        ScreenToClient(parent, &bottomRight);
+    }
+
+    s.parkedWindow = target;
+    s.parkedParent = parent;
+    s.parkedOriginalRect = {
+        topLeft.x, topLeft.y, bottomRight.x, bottomRight.y
+    };
+
+    const int w = (std::max)(1, bottomRight.x - topLeft.x);
+    const int h = (std::max)(1, bottomRight.y - topLeft.y);
+    const int parkX = -30000;
+    const int parkY = -30000;
+
+    if (!SetWindowPos(target, nullptr, parkX, parkY, w, h,
+                      SWP_NOZORDER | SWP_NOACTIVATE))
+        return false;
+
+    s.parked = true;
+    return true;
+}
+
+void restoreOriginal(AppState& s) {
+    if (!s.parked || !s.parkedWindow || !IsWindow(s.parkedWindow))
+        return;
+
+    const int x = s.parkedOriginalRect.left;
+    const int y = s.parkedOriginalRect.top;
+    const int w = (std::max)(1, s.parkedOriginalRect.right - s.parkedOriginalRect.left);
+    const int h = (std::max)(1, s.parkedOriginalRect.bottom - s.parkedOriginalRect.top);
+
+    SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    s.parked = false;
 }
 
 POINT toNativeClient(const AppState& s, LPARAM lp) {
@@ -338,6 +393,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kCaptureTimer);
         if (GetCapture() == hwnd)
             ReleaseCapture();
+        if (state)
+            restoreOriginal(*state);
         PostQuitMessage(0);
         return 0;
     }
@@ -404,6 +461,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
+
+    if (!parkOriginal(state)) {
+        DestroyWindow(window);
+        destroyCaptureSurface(state);
+        MessageBoxW(nullptr,
+            L"Das originale jBridge-Fenster konnte nicht geparkt werden.",
+            L"125A jBridge 150% Viewer",
+            MB_OK | MB_ICONERROR);
+        return 6;
+    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
