@@ -523,12 +523,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     RECT wr{0, 0, state.scaledW, state.scaledH};
     AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
+    HWND dawOwner = GetAncestor(state.source, GA_ROOT);
+    if (!dawOwner || !IsWindow(dawOwner))
+        dawOwner = nullptr;
+
     HWND window = CreateWindowExW(
         0, className, L"125A jBridge 150% Interactive Viewer",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
-        nullptr, nullptr, instance, &state);
+        dawOwner, nullptr, instance, &state);
 
     if (!window) {
         destroyCaptureSurface(state);
