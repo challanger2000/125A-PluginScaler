@@ -33,6 +33,9 @@ struct AppState {
     bool dragActive{};
     POINT dragOriginScreen{};
     POINT dragOriginNative{};
+    HWND parkedWindow{};
+    RECT parkedRect{};
+    bool parked{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -162,6 +165,91 @@ bool capture(AppState& s) {
         return false;
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
+}
+
+
+HWND chooseWholeEditorWindow(HWND source) {
+    if (!source || !IsWindow(source))
+        return nullptr;
+
+    HWND target = source;
+    HWND current = source;
+
+    RECT sourceRect{};
+    if (!GetWindowRect(source, &sourceRect))
+        return nullptr;
+
+    const int sourceW = sourceRect.right - sourceRect.left;
+    const int sourceH = sourceRect.bottom - sourceRect.top;
+
+    while (HWND parent = GetParent(current)) {
+        RECT r{};
+        if (!GetWindowRect(parent, &r))
+            break;
+
+        const int w = r.right - r.left;
+        const int h = r.bottom - r.top;
+
+        // Climb only through the compact editor wrapper hierarchy.
+        // Stop before the large Studio One workspace/root window.
+        if (w <= 0 || h <= 0 || w > sourceW + 320 || h > sourceH + 380)
+            break;
+
+        target = parent;
+        current = parent;
+    }
+
+    return target;
+}
+
+bool parkWholeEditorTree(AppState& s) {
+    HWND target = chooseWholeEditorWindow(s.source);
+    if (!target || !IsWindow(target))
+        return false;
+
+    HWND parent = GetParent(target);
+
+    RECT r{};
+    if (!GetWindowRect(target, &r))
+        return false;
+
+    POINT tl{r.left, r.top};
+    POINT br{r.right, r.bottom};
+    if (parent) {
+        ScreenToClient(parent, &tl);
+        ScreenToClient(parent, &br);
+    }
+
+    s.parkedWindow = target;
+    s.parkedRect = {tl.x, tl.y, br.x, br.y};
+
+    const int w = static_cast<int>((std::max)(
+        static_cast<LONG>(1), br.x - tl.x));
+    const int h = static_cast<int>((std::max)(
+        static_cast<LONG>(1), br.y - tl.y));
+
+    if (!SetWindowPos(target, nullptr, -30000, -30000, w, h,
+                      SWP_NOZORDER | SWP_NOACTIVATE))
+        return false;
+
+    s.parked = true;
+    return true;
+}
+
+void restoreWholeEditorTree(AppState& s) {
+    if (!s.parked || !s.parkedWindow || !IsWindow(s.parkedWindow))
+        return;
+
+    const int x = static_cast<int>(s.parkedRect.left);
+    const int y = static_cast<int>(s.parkedRect.top);
+    const int w = static_cast<int>((std::max)(
+        static_cast<LONG>(1), s.parkedRect.right - s.parkedRect.left));
+    const int h = static_cast<int>((std::max)(
+        static_cast<LONG>(1), s.parkedRect.bottom - s.parkedRect.top));
+
+    SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    s.parked = false;
 }
 
 POINT toNativeClient(const AppState& s, LPARAM lp) {
@@ -374,6 +462,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kCaptureTimer);
         if (GetCapture() == hwnd)
             ReleaseCapture();
+        if (state)
+            restoreWholeEditorTree(*state);
         PostQuitMessage(0);
         return 0;
     }
@@ -440,6 +530,29 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
+
+    if (!parkWholeEditorTree(state)) {
+        DestroyWindow(window);
+        destroyCaptureSurface(state);
+        MessageBoxW(nullptr,
+            L"Der komplette jBridge-Editor konnte nicht offscreen geparkt werden.",
+            L"125A jBridge 150% Viewer",
+            MB_OK | MB_ICONERROR);
+        return 6;
+    }
+
+    if (!capture(state)) {
+        restoreWholeEditorTree(state);
+        DestroyWindow(window);
+        destroyCaptureSurface(state);
+        MessageBoxW(nullptr,
+            L"PrintWindow funktioniert nach dem Offscreen-Parken nicht.",
+            L"125A jBridge 150% Viewer",
+            MB_OK | MB_ICONERROR);
+        return 7;
+    }
+
+    InvalidateRect(window, nullptr, FALSE);
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
