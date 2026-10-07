@@ -206,6 +206,12 @@ void sendClientMouse(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
     PostMessageW(s.source, msg, wp, packPoint(p));
 }
 
+void sendDragMouse(AppState& s, UINT msg, WPARAM wp) {
+    if (!IsWindow(s.source)) return;
+    const POINT p = dragNativePoint(s);
+    PostMessageW(s.source, msg, wp, packPoint(p));
+}
+
 void sendWheel(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
     if (!IsWindow(s.source)) return;
     POINT p = toNativeClient(s, lp);
@@ -265,8 +271,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_MOUSEMOVE:
-        if (state)
-            sendClientMouse(*state, WM_MOUSEMOVE, buttonState(*state, wp), lp);
+        if (state) {
+            if (state->leftDown && state->dragActive)
+                sendDragMouse(*state, WM_MOUSEMOVE, buttonState(*state, wp));
+            else
+                sendClientMouse(*state, WM_MOUSEMOVE, buttonState(*state, wp), lp);
+        }
         return 0;
 
     case WM_LBUTTONDOWN:
