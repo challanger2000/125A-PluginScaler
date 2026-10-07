@@ -36,6 +36,7 @@ struct AppState {
     HWND parkedWindow{};
     RECT parkedRect{};
     bool parked{};
+    bool initialTopmostShield{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -396,6 +397,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             state->dragActive = false;
             if (!state->rightDown && !state->middleDown && GetCapture() == hwnd)
                 ReleaseCapture();
+
+            if (state->initialTopmostShield) {
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                state->initialTopmostShield = false;
+            }
         }
         return 0;
 
@@ -533,6 +540,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
+
+    if (SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)) {
+        state.initialTopmostShield = true;
+    }
 
     if (!parkWholeEditorTree(state)) {
         DestroyWindow(window);
