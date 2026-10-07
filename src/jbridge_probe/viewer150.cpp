@@ -33,6 +33,9 @@ struct AppState {
     bool dragActive{};
     POINT dragOriginScreen{};
     POINT dragOriginNative{};
+    HWND visualContainer{};
+    LONG_PTR visualOldExStyle{};
+    bool visualHidden{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -162,6 +165,47 @@ bool capture(AppState& s) {
         return false;
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
+}
+
+
+bool makeOriginalTransparent(AppState& s) {
+    HWND target = GetParent(s.source);
+    if (!target || !IsWindow(target))
+        return false;
+
+    s.visualContainer = target;
+    s.visualOldExStyle = GetWindowLongPtrW(target, GWL_EXSTYLE);
+
+    if ((s.visualOldExStyle & WS_EX_LAYERED) == 0) {
+        SetLastError(0);
+        const LONG_PTR changed = SetWindowLongPtrW(
+            target, GWL_EXSTYLE, s.visualOldExStyle | WS_EX_LAYERED);
+        if (changed == 0 && GetLastError() != 0) {
+            s.visualContainer = nullptr;
+            return false;
+        }
+    }
+
+    if (!SetLayeredWindowAttributes(target, 0, 0, LWA_ALPHA)) {
+        SetWindowLongPtrW(target, GWL_EXSTYLE, s.visualOldExStyle);
+        s.visualContainer = nullptr;
+        return false;
+    }
+
+    s.visualHidden = true;
+    return true;
+}
+
+void restoreOriginalVisibility(AppState& s) {
+    if (!s.visualHidden || !s.visualContainer || !IsWindow(s.visualContainer))
+        return;
+
+    SetWindowLongPtrW(s.visualContainer, GWL_EXSTYLE, s.visualOldExStyle);
+    SetWindowPos(s.visualContainer, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    InvalidateRect(s.visualContainer, nullptr, TRUE);
+    s.visualHidden = false;
 }
 
 POINT toNativeClient(const AppState& s, LPARAM lp) {
@@ -374,6 +418,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kCaptureTimer);
         if (GetCapture() == hwnd)
             ReleaseCapture();
+        if (state)
+            restoreOriginalVisibility(*state);
         PostQuitMessage(0);
         return 0;
     }
@@ -440,6 +486,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
+
+    if (makeOriginalTransparent(state)) {
+        Sleep(40);
+        if (!capture(state)) {
+            restoreOriginalVisibility(state);
+        } else {
+            InvalidateRect(window, nullptr, FALSE);
+        }
+    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
