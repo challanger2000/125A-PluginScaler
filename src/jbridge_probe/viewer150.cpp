@@ -390,19 +390,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     RECT wr{0, 0, state.scaledW, state.scaledH};
     AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
-    RECT sourceRect{};
-    GetWindowRect(source, &sourceRect);
-
-    const int viewerW = wr.right - wr.left;
-    const int viewerH = wr.bottom - wr.top;
-    const int viewerX = sourceRect.left;
-    const int viewerY = sourceRect.top;
-
     HWND window = CreateWindowExW(
-        WS_EX_TOOLWINDOW, className, L"125A jBridge 150% Interactive Viewer",
+        0, className, L"125A jBridge 150% Interactive Viewer",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        viewerX, viewerY,
-        viewerW, viewerH,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, instance, &state);
 
     if (!window) {
@@ -411,8 +403,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     }
 
     ShowWindow(window, show);
-    SetWindowPos(window, HWND_TOP, viewerX, viewerY, viewerW, viewerH,
-                 SWP_SHOWWINDOW | SWP_NOACTIVATE);
     UpdateWindow(window);
 
     MSG msg{};
