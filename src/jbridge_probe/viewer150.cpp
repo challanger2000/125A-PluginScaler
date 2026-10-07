@@ -30,9 +30,6 @@ struct AppState {
     bool leftDown{};
     bool rightDown{};
     bool middleDown{};
-    HWND parkedWindow{};
-    RECT parkedOriginalRect{};
-    bool parked{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -162,97 +159,6 @@ bool capture(AppState& s) {
         return false;
     PatBlt(s.memoryDc, 0, 0, s.nativeW, s.nativeH, BLACKNESS);
     return PrintWindow(s.source, s.memoryDc, PW_RENDERFULLCONTENT) != FALSE;
-}
-
-
-HWND chooseParkingTarget(const AppState& s) {
-    if (!s.source || !IsWindow(s.source))
-        return nullptr;
-
-    HWND target = s.source;
-    HWND current = s.source;
-
-    while (HWND parent = GetParent(current)) {
-        RECT wr{};
-        RECT cr{};
-        if (!GetWindowRect(parent, &wr) || !GetClientRect(parent, &cr))
-            break;
-
-        const int windowW = wr.right - wr.left;
-        const int windowH = wr.bottom - wr.top;
-        const int clientW = cr.right - cr.left;
-        const int clientH = cr.bottom - cr.top;
-
-        // Keep climbing only through wrappers that are still plausibly
-        // part of this plugin editor. Stop before the large DAW workspace.
-        const bool plausibleWidth =
-            windowW > 0 && windowW <= s.nativeW + 260 &&
-            clientW > 0 && clientW <= s.nativeW + 240;
-        const bool plausibleHeight =
-            windowH > 0 && windowH <= s.nativeH + 260 &&
-            clientH > 0 && clientH <= s.nativeH + 240;
-
-        if (!plausibleWidth || !plausibleHeight)
-            break;
-
-        target = parent;
-        current = parent;
-    }
-
-    return target;
-}
-
-bool parkOriginal(AppState& s) {
-    HWND target = chooseParkingTarget(s);
-    if (!target || !IsWindow(target))
-        return false;
-
-    HWND parent = GetParent(target);
-    RECT rect{};
-    if (!GetWindowRect(target, &rect))
-        return false;
-
-    POINT topLeft{rect.left, rect.top};
-    POINT bottomRight{rect.right, rect.bottom};
-    if (parent) {
-        ScreenToClient(parent, &topLeft);
-        ScreenToClient(parent, &bottomRight);
-    }
-
-    s.parkedWindow = target;
-    s.parkedOriginalRect = {
-        topLeft.x, topLeft.y, bottomRight.x, bottomRight.y
-    };
-
-    const int w = static_cast<int>((std::max)(
-        static_cast<LONG>(1), bottomRight.x - topLeft.x));
-    const int h = static_cast<int>((std::max)(
-        static_cast<LONG>(1), bottomRight.y - topLeft.y));
-
-    if (!SetWindowPos(target, nullptr, -30000, -30000, w, h,
-                      SWP_NOZORDER | SWP_NOACTIVATE))
-        return false;
-
-    s.parked = true;
-    return true;
-}
-
-void restoreOriginal(AppState& s) {
-    if (!s.parked || !s.parkedWindow || !IsWindow(s.parkedWindow))
-        return;
-
-    const int x = static_cast<int>(s.parkedOriginalRect.left);
-    const int y = static_cast<int>(s.parkedOriginalRect.top);
-    const int w = static_cast<int>((std::max)(
-        static_cast<LONG>(1),
-        s.parkedOriginalRect.right - s.parkedOriginalRect.left));
-    const int h = static_cast<int>((std::max)(
-        static_cast<LONG>(1),
-        s.parkedOriginalRect.bottom - s.parkedOriginalRect.top));
-
-    SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    s.parked = false;
 }
 
 POINT toNativeClient(const AppState& s, LPARAM lp) {
@@ -432,8 +338,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kCaptureTimer);
         if (GetCapture() == hwnd)
             ReleaseCapture();
-        if (state)
-            restoreOriginal(*state);
         PostQuitMessage(0);
         return 0;
     }
@@ -486,11 +390,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     RECT wr{0, 0, state.scaledW, state.scaledH};
     AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
+    RECT sourceRect{};
+    GetWindowRect(source, &sourceRect);
+
+    const int viewerW = wr.right - wr.left;
+    const int viewerH = wr.bottom - wr.top;
+    const int viewerX = sourceRect.left;
+    const int viewerY = sourceRect.top;
+
     HWND window = CreateWindowExW(
-        0, className, L"125A jBridge 150% Interactive Viewer",
+        WS_EX_TOOLWINDOW, className, L"125A jBridge 150% Interactive Viewer",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        wr.right - wr.left, wr.bottom - wr.top,
+        viewerX, viewerY,
+        viewerW, viewerH,
         nullptr, nullptr, instance, &state);
 
     if (!window) {
@@ -499,17 +411,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     }
 
     ShowWindow(window, show);
+    SetWindowPos(window, HWND_TOP, viewerX, viewerY, viewerW, viewerH,
+                 SWP_SHOWWINDOW | SWP_NOACTIVATE);
     UpdateWindow(window);
-
-    if (!parkOriginal(state)) {
-        DestroyWindow(window);
-        destroyCaptureSurface(state);
-        MessageBoxW(nullptr,
-            L"Das originale jBridge-Fenster konnte nicht geparkt werden.",
-            L"125A jBridge 150% Viewer",
-            MB_OK | MB_ICONERROR);
-        return 6;
-    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
