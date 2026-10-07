@@ -36,6 +36,8 @@ struct AppState {
     HWND parkedWindow{};
     RECT parkedRect{};
     bool parked{};
+    HWND contextRoot{};
+    bool contextTopmost{};
 };
 
 std::wstring lower(std::wstring v) {
@@ -310,6 +312,30 @@ void sendWheel(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
     PostMessageW(s.source, msg, wp, packPoint(p));
 }
 
+
+void syncContextZOrder(HWND viewer, AppState& s) {
+    if (!viewer || !IsWindow(viewer))
+        return;
+
+    HWND fg = GetForegroundWindow();
+    HWND fgRoot = fg ? GetAncestor(fg, GA_ROOT) : nullptr;
+
+    const bool sameContext =
+        fg == viewer ||
+        (s.contextRoot && fgRoot == s.contextRoot);
+
+    if (sameContext == s.contextTopmost)
+        return;
+
+    SetWindowPos(
+        viewer,
+        sameContext ? HWND_TOPMOST : HWND_NOTOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    s.contextTopmost = sameContext;
+}
+
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -326,13 +352,9 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTimer(hwnd, kCaptureTimer, kCaptureIntervalMs, nullptr);
         return 0;
 
-    case WM_MOUSEACTIVATE:
-        SetForegroundWindow(hwnd);
-        BringWindowToTop(hwnd);
-        return MA_ACTIVATE;
-
     case WM_TIMER:
         if (state && wp == kCaptureTimer) {
+            syncContextZOrder(hwnd, *state);
             if (!IsWindow(state->source)) {
                 KillTimer(hwnd, kCaptureTimer);
                 MessageBoxW(hwnd,
@@ -377,8 +399,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (state) {
-            SetForegroundWindow(hwnd);
-            BringWindowToTop(hwnd);
             state->leftDown = true;
             state->dragActive = true;
             state->dragOriginNative = toNativeClient(*state, lp);
@@ -403,7 +423,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             state->dragActive = false;
             if (!state->rightDown && !state->middleDown && GetCapture() == hwnd)
                 ReleaseCapture();
-
         }
         return 0;
 
@@ -471,6 +490,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_DESTROY:
         KillTimer(hwnd, kCaptureTimer);
+        if (state && state->contextTopmost) {
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            state->contextTopmost = false;
+        }
         if (GetCapture() == hwnd)
             ReleaseCapture();
         if (state)
@@ -497,6 +521,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     AppState state{};
     state.source = source;
+    state.contextRoot = GetAncestor(source, GA_ROOT);
     if (!createCaptureSurface(state)) {
         MessageBoxW(nullptr,
             L"Capture-Oberflaeche konnte nicht erstellt werden.",
@@ -524,12 +549,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.lpszClassName = className;
     RegisterClassW(&wc);
 
+    constexpr DWORD viewerStyle =
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+
     RECT wr{0, 0, state.scaledW, state.scaledH};
-    AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    AdjustWindowRectEx(&wr, viewerStyle, FALSE, 0);
 
     HWND window = CreateWindowExW(
         0, className, L"125A jBridge 150% Interactive Viewer",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        viewerStyle | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, instance, &state);
@@ -541,7 +569,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
-
+    syncContextZOrder(window, state);
 
     if (!parkWholeEditorTree(state)) {
         DestroyWindow(window);
