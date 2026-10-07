@@ -34,7 +34,6 @@ struct AppState {
     POINT dragOriginScreen{};
     POINT dragOriginNative{};
     HWND visualContainer{};
-    LONG_PTR visualOldExStyle{};
     bool visualHidden{};
 };
 
@@ -168,26 +167,62 @@ bool capture(AppState& s) {
 }
 
 
-bool makeOriginalTransparent(AppState& s) {
-    HWND target = GetParent(s.source);
+HWND chooseVisualContainer(HWND source) {
+    if (!source || !IsWindow(source))
+        return nullptr;
+
+    HWND target = source;
+    HWND current = source;
+    RECT sourceRect{};
+    if (!GetWindowRect(source, &sourceRect))
+        return nullptr;
+
+    const int sourceW = sourceRect.right - sourceRect.left;
+    const int sourceH = sourceRect.bottom - sourceRect.top;
+
+    while (HWND parent = GetParent(current)) {
+        RECT r{};
+        if (!GetWindowRect(parent, &r))
+            break;
+
+        const int w = r.right - r.left;
+        const int h = r.bottom - r.top;
+
+        if (w <= 0 || h <= 0 || w > sourceW + 300 || h > sourceH + 340)
+            break;
+
+        target = parent;
+        current = parent;
+    }
+
+    return target;
+}
+
+bool cloakOriginal(AppState& s) {
+    HWND target = chooseVisualContainer(s.source);
     if (!target || !IsWindow(target))
         return false;
 
     s.visualContainer = target;
-    s.visualOldExStyle = GetWindowLongPtrW(target, GWL_EXSTYLE);
 
-    if ((s.visualOldExStyle & WS_EX_LAYERED) == 0) {
-        SetLastError(0);
-        const LONG_PTR changed = SetWindowLongPtrW(
-            target, GWL_EXSTYLE, s.visualOldExStyle | WS_EX_LAYERED);
-        if (changed == 0 && GetLastError() != 0) {
-            s.visualContainer = nullptr;
-            return false;
-        }
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm)
+        return false;
+
+    using DwmSetWindowAttributeFn = HRESULT (WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    const auto setAttr = reinterpret_cast<DwmSetWindowAttributeFn>(
+        GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    if (!setAttr) {
+        FreeLibrary(dwm);
+        return false;
     }
 
-    if (!SetLayeredWindowAttributes(target, 0, 0, LWA_ALPHA)) {
-        SetWindowLongPtrW(target, GWL_EXSTYLE, s.visualOldExStyle);
+    constexpr DWORD kDwmwaCloak = 13;
+    const BOOL cloak = TRUE;
+    const HRESULT hr = setAttr(target, kDwmwaCloak, &cloak, sizeof(cloak));
+    FreeLibrary(dwm);
+
+    if (FAILED(hr)) {
         s.visualContainer = nullptr;
         return false;
     }
@@ -200,11 +235,19 @@ void restoreOriginalVisibility(AppState& s) {
     if (!s.visualHidden || !s.visualContainer || !IsWindow(s.visualContainer))
         return;
 
-    SetWindowLongPtrW(s.visualContainer, GWL_EXSTYLE, s.visualOldExStyle);
-    SetWindowPos(s.visualContainer, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    InvalidateRect(s.visualContainer, nullptr, TRUE);
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (dwm) {
+        using DwmSetWindowAttributeFn = HRESULT (WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+        const auto setAttr = reinterpret_cast<DwmSetWindowAttributeFn>(
+            GetProcAddress(dwm, "DwmSetWindowAttribute"));
+        if (setAttr) {
+            constexpr DWORD kDwmwaCloak = 13;
+            const BOOL cloak = FALSE;
+            setAttr(s.visualContainer, kDwmwaCloak, &cloak, sizeof(cloak));
+        }
+        FreeLibrary(dwm);
+    }
+
     s.visualHidden = false;
 }
 
@@ -487,7 +530,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     ShowWindow(window, show);
     UpdateWindow(window);
 
-    if (makeOriginalTransparent(state)) {
+    if (cloakOriginal(state)) {
         Sleep(40);
         if (!capture(state)) {
             restoreOriginalVisibility(state);
