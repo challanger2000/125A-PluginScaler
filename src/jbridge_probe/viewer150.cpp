@@ -523,12 +523,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.lpszClassName = className;
     RegisterClassW(&wc);
 
+    constexpr DWORD viewerStyle =
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+
     RECT wr{0, 0, state.scaledW, state.scaledH};
-    AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    AdjustWindowRectEx(&wr, viewerStyle, FALSE, 0);
 
     HWND window = CreateWindowExW(
         0, className, L"125A jBridge 150% Interactive Viewer",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        viewerStyle | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, instance, &state);
