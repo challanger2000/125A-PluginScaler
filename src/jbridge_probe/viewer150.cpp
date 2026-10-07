@@ -9,15 +9,11 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <fstream>
-#include <sstream>
 
 namespace {
 
 constexpr int kScalePercent = 150;
 constexpr UINT_PTR kCaptureTimer = 1;
-constexpr UINT_PTR kZDiagTimer50 = 2;
-constexpr UINT_PTR kZDiagTimer200 = 3;
 constexpr UINT kCaptureIntervalMs = 33;
 
 struct AppState {
@@ -40,7 +36,6 @@ struct AppState {
     HWND parkedWindow{};
     RECT parkedRect{};
     bool parked{};
-    bool zDiagArmed{true};
 };
 
 std::wstring lower(std::wstring v) {
@@ -315,59 +310,6 @@ void sendWheel(AppState& s, UINT msg, WPARAM wp, LPARAM lp) {
     PostMessageW(s.source, msg, wp, packPoint(p));
 }
 
-
-std::wstring titleOf(HWND h) {
-    if (!h || !IsWindow(h)) return L"<null>";
-    std::array<wchar_t, 512> b{};
-    const int n = GetWindowTextW(h, b.data(), static_cast<int>(b.size()));
-    return n > 0 ? std::wstring(b.data(), static_cast<std::size_t>(n)) : L"";
-}
-
-void appendWindowDiag(const wchar_t* phase, HWND viewer, const AppState* s) {
-    wchar_t tempPath[MAX_PATH]{};
-    if (!GetTempPathW(MAX_PATH, tempPath)) return;
-    std::wstring path = tempPath;
-    path += L"125A_PluginScaler_ZOrder.txt";
-
-    auto describe = [](HWND h) {
-        std::wstringstream ss;
-        if (!h || !IsWindow(h)) {
-            ss << L"<null>";
-            return ss.str();
-        }
-        DWORD pid = 0;
-        DWORD tid = GetWindowThreadProcessId(h, &pid);
-        RECT r{};
-        GetWindowRect(h, &r);
-        const LONG_PTR ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
-        ss << L"hwnd=0x" << std::hex << reinterpret_cast<std::uintptr_t>(h) << std::dec
-           << L" pid=" << pid
-           << L" tid=" << tid
-           << L" class=\"" << cls(h) << L"\""
-           << L" title=\"" << titleOf(h) << L"\""
-           << L" visible=" << (IsWindowVisible(h) ? 1 : 0)
-           << L" topmost=" << ((ex & WS_EX_TOPMOST) ? 1 : 0)
-           << L" rect=" << r.left << L"," << r.top << L"," << r.right << L"," << r.bottom
-           << L" parent=0x" << std::hex << reinterpret_cast<std::uintptr_t>(GetParent(h))
-           << L" owner=0x" << reinterpret_cast<std::uintptr_t>(GetWindow(h, GW_OWNER))
-           << L" root=0x" << reinterpret_cast<std::uintptr_t>(GetAncestor(h, GA_ROOT))
-           << L" rootowner=0x" << reinterpret_cast<std::uintptr_t>(GetAncestor(h, GA_ROOTOWNER))
-           << std::dec;
-        return ss.str();
-    };
-
-    std::wofstream out(path, std::ios::app);
-    if (!out) return;
-    out << L"\n=== " << phase << L" ===\n";
-    out << L"viewer: " << describe(viewer) << L"\n";
-    out << L"source: " << describe(s ? s->source : nullptr) << L"\n";
-    out << L"parked: " << describe(s ? s->parkedWindow : nullptr) << L"\n";
-    out << L"foreground: " << describe(GetForegroundWindow()) << L"\n";
-    out << L"active-this-thread: " << describe(GetActiveWindow()) << L"\n";
-    out << L"focus-this-thread: " << describe(GetFocus()) << L"\n";
-    out.flush();
-}
-
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* state = reinterpret_cast<AppState*>(
         GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -384,17 +326,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTimer(hwnd, kCaptureTimer, kCaptureIntervalMs, nullptr);
         return 0;
 
+    case WM_MOUSEACTIVATE:
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        return MA_ACTIVATE;
+
     case WM_TIMER:
-        if (state && wp == kZDiagTimer50) {
-            KillTimer(hwnd, kZDiagTimer50);
-            appendWindowDiag(L"50ms-after-first-click", hwnd, state);
-            return 0;
-        }
-        if (state && wp == kZDiagTimer200) {
-            KillTimer(hwnd, kZDiagTimer200);
-            appendWindowDiag(L"200ms-after-first-click", hwnd, state);
-            return 0;
-        }
         if (state && wp == kCaptureTimer) {
             if (!IsWindow(state->source)) {
                 KillTimer(hwnd, kCaptureTimer);
@@ -440,8 +377,8 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (state) {
-            if (state->zDiagArmed)
-                appendWindowDiag(L"before-first-click-forward", hwnd, state);
+            SetForegroundWindow(hwnd);
+            BringWindowToTop(hwnd);
             state->leftDown = true;
             state->dragActive = true;
             state->dragOriginNative = toNativeClient(*state, lp);
@@ -451,12 +388,6 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             PostMessageW(state->source, WM_LBUTTONDOWN,
                          buttonState(*state, wp),
                          packPoint(state->dragOriginNative));
-            if (state->zDiagArmed) {
-                appendWindowDiag(L"immediately-after-first-click-forward", hwnd, state);
-                SetTimer(hwnd, kZDiagTimer50, 50, nullptr);
-                SetTimer(hwnd, kZDiagTimer200, 200, nullptr);
-                state->zDiagArmed = false;
-            }
         }
         return 0;
 
@@ -593,15 +524,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     wc.lpszClassName = className;
     RegisterClassW(&wc);
 
-    constexpr DWORD viewerStyle =
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-
     RECT wr{0, 0, state.scaledW, state.scaledH};
-    AdjustWindowRectEx(&wr, viewerStyle, FALSE, 0);
+    AdjustWindowRectEx(&wr, WS_OVERLAPPEDWINDOW, FALSE, 0);
 
     HWND window = CreateWindowExW(
         0, className, L"125A jBridge 150% Interactive Viewer",
-        viewerStyle | WS_VISIBLE,
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
         wr.right - wr.left, wr.bottom - wr.top,
         nullptr, nullptr, instance, &state);
@@ -613,6 +541,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     ShowWindow(window, show);
     UpdateWindow(window);
+
 
     if (!parkWholeEditorTree(state)) {
         DestroyWindow(window);
