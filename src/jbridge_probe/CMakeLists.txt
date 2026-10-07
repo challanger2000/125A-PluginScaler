@@ -23,3 +23,12 @@ add_executable(PluginScalerJBridgeCaptureProbe WIN32
 target_compile_features(PluginScalerJBridgeCaptureProbe PRIVATE cxx_std_20)
 target_compile_definitions(PluginScalerJBridgeCaptureProbe PRIVATE UNICODE _UNICODE)
 target_link_libraries(PluginScalerJBridgeCaptureProbe PRIVATE user32 gdi32)
+
+
+add_executable(PluginScalerJBridge150Viewer WIN32
+    viewer150.cpp
+)
+
+target_compile_features(PluginScalerJBridge150Viewer PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridge150Viewer PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridge150Viewer PRIVATE user32 gdi32)
