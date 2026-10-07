@@ -189,8 +189,8 @@ bool parkOriginal(AppState& s) {
         topLeft.x, topLeft.y, bottomRight.x, bottomRight.y
     };
 
-    const int w = (std::max)(1, bottomRight.x - topLeft.x);
-    const int h = (std::max)(1, bottomRight.y - topLeft.y);
+    const int w = (std::max)(static_cast<LONG>(1), bottomRight.x - topLeft.x);
+    const int h = (std::max)(static_cast<LONG>(1), bottomRight.y - topLeft.y);
     const int parkX = -30000;
     const int parkY = -30000;
 
@@ -208,8 +208,8 @@ void restoreOriginal(AppState& s) {
 
     const int x = s.parkedOriginalRect.left;
     const int y = s.parkedOriginalRect.top;
-    const int w = (std::max)(1, s.parkedOriginalRect.right - s.parkedOriginalRect.left);
-    const int h = (std::max)(1, s.parkedOriginalRect.bottom - s.parkedOriginalRect.top);
+    const int w = (std::max)(static_cast<LONG>(1), s.parkedOriginalRect.right - s.parkedOriginalRect.left);
+    const int h = (std::max)(static_cast<LONG>(1), s.parkedOriginalRect.bottom - s.parkedOriginalRect.top);
 
     SetWindowPos(s.parkedWindow, nullptr, x, y, w, h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
