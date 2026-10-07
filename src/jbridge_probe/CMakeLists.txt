@@ -14,3 +14,12 @@ add_executable(PluginScalerJBridge150 WIN32
 target_compile_features(PluginScalerJBridge150 PRIVATE cxx_std_20)
 target_compile_definitions(PluginScalerJBridge150 PRIVATE UNICODE _UNICODE)
 target_link_libraries(PluginScalerJBridge150 PRIVATE user32)
+
+
+add_executable(PluginScalerJBridgeCaptureProbe WIN32
+    capture_probe.cpp
+)
+
+target_compile_features(PluginScalerJBridgeCaptureProbe PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeCaptureProbe PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeCaptureProbe PRIVATE user32 gdi32)

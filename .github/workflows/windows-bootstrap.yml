@@ -51,6 +51,13 @@ jobs:
           name: 125A-jBridge-150-GeometryTest
           path: build/src/jbridge_probe/Release/PluginScalerJBridge150.exe
 
+      - name: Upload jBridge capture probe
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-jBridge-CaptureProbe
+          path: build/src/jbridge_probe/Release/PluginScalerJBridgeCaptureProbe.exe
+
   cross-bitness-vst2:
     name: x64 proxy -> x86 VST2 helper
     runs-on: windows-2022
