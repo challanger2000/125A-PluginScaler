@@ -282,16 +282,27 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN:
         if (state) {
             state->leftDown = true;
+            state->dragActive = true;
+            state->dragOriginNative = toNativeClient(*state, lp);
+            GetCursorPos(&state->dragOriginScreen);
             SetCapture(hwnd);
             SetFocus(hwnd);
-            sendClientMouse(*state, WM_LBUTTONDOWN, buttonState(*state, wp), lp);
+            PostMessageW(state->source, WM_LBUTTONDOWN,
+                         buttonState(*state, wp),
+                         packPoint(state->dragOriginNative));
         }
         return 0;
 
     case WM_LBUTTONUP:
         if (state) {
-            sendClientMouse(*state, WM_LBUTTONUP, buttonState(*state, wp) & ~MK_LBUTTON, lp);
+            if (state->dragActive)
+                sendDragMouse(*state, WM_LBUTTONUP,
+                              buttonState(*state, wp) & ~MK_LBUTTON);
+            else
+                sendClientMouse(*state, WM_LBUTTONUP,
+                                buttonState(*state, wp) & ~MK_LBUTTON, lp);
             state->leftDown = false;
+            state->dragActive = false;
             if (!state->rightDown && !state->middleDown && GetCapture() == hwnd)
                 ReleaseCapture();
         }
@@ -351,6 +362,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             state->leftDown = false;
             state->rightDown = false;
             state->middleDown = false;
+            state->dragActive = false;
         }
         return 0;
 
