@@ -234,10 +234,16 @@ void attachToAlreadyOpenEditor() {
                     command->originalOuterWidth ? command->originalOuterWidth : logicalWidth,
                     command->originalOuterHeight ? command->originalOuterHeight : logicalHeight,
                     SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+            const HWND root=reinterpret_cast<HWND>(
+                static_cast<std::uintptr_t>(command->rootHwnd));
+            const BOOL rootSized=!root||!IsWindow(root)||
+                SetWindowPos(root,nullptr,0,0,
+                  command->rootOuterWidth,command->rootOuterHeight,
+                  SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
             if(IsWindow(target))InvalidateRect(target,nullptr,FALSE);
             target=nullptr;
             zoom=100;
-            InterlockedExchange(&command->status,sized?2:-6);
+            InterlockedExchange(&command->status,sized&&rootSized?2:-6);
         }
     }
     if(command->status==0 && !target) {
@@ -292,16 +298,56 @@ void attachToAlreadyOpenEditor() {
                     target=nullptr;
                     InterlockedExchange(&command->status,-4);
                 } else {
-                    InterlockedExchange(&command->dibImported,originalSetDIBits?1:0);
-                    InterlockedExchange(&command->beginImported,originalBeginPaint?1:0);
-                    InterlockedExchange(&command->originalWidth,logicalWidth);
-                    InterlockedExchange(&command->originalHeight,logicalHeight);
-                    InterlockedExchange(&command->originalOuterWidth,
-                        outer.right-outer.left);
-                    InterlockedExchange(&command->originalOuterHeight,
-                        outer.bottom-outer.top);
-                    InvalidateRect(hwnd,nullptr,FALSE);
-                    InterlockedExchange(&command->status,1);
+                    // The original plug-in may be a child of the separate
+                    // jBridge presentation frame. Enlarge only a same-process
+                    // root explicitly titled Pro-53, never the Studio One frame.
+                    HWND root=GetAncestor(hwnd,GA_ROOT);
+                    DWORD rootPid=0;
+                    if(root)GetWindowThreadProcessId(root,&rootPid);
+                    wchar_t caption[256]{};
+                    if(root)GetWindowTextW(root,caption,256);
+                    const bool trustedRoot=root&&root!=hwnd &&
+                        rootPid==GetCurrentProcessId() &&
+                        (wcsstr(caption,L"Pro-53")||wcsstr(caption,L"Pro53"));
+                    bool rootOK=true;
+                    if(trustedRoot) {
+                        RECT rootRect{};
+                        if(!GetWindowRect(root,&rootRect))rootOK=false;
+                        else {
+                            const int rootW=rootRect.right-rootRect.left;
+                            const int rootH=rootRect.bottom-rootRect.top;
+                            const int addW=MulDiv(logicalWidth,zoom,100)-logicalWidth;
+                            const int addH=MulDiv(logicalHeight,zoom,100)-logicalHeight;
+                            rootOK=SetWindowPos(root,nullptr,0,0,
+                                rootW+addW,rootH+addH,
+                                SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)!=FALSE;
+                            if(rootOK) {
+                                InterlockedExchange(&command->rootHwnd,
+                                    static_cast<LONG>(reinterpret_cast<std::uintptr_t>(root)));
+                                InterlockedExchange(&command->rootOuterWidth,rootW);
+                                InterlockedExchange(&command->rootOuterHeight,rootH);
+                            }
+                        }
+                    }
+                    if(!rootOK) {
+                        SetWindowPos(hwnd,nullptr,0,0,
+                            outer.right-outer.left,outer.bottom-outer.top,
+                            SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+                        restoreOriginalImports();
+                        target=nullptr;
+                        InterlockedExchange(&command->status,-9);
+                    }else{
+                        InterlockedExchange(&command->dibImported,originalSetDIBits?1:0);
+                        InterlockedExchange(&command->beginImported,originalBeginPaint?1:0);
+                        InterlockedExchange(&command->originalWidth,logicalWidth);
+                        InterlockedExchange(&command->originalHeight,logicalHeight);
+                        InterlockedExchange(&command->originalOuterWidth,
+                            outer.right-outer.left);
+                        InterlockedExchange(&command->originalOuterHeight,
+                            outer.bottom-outer.top);
+                        InvalidateRect(hwnd,nullptr,FALSE);
+                        InterlockedExchange(&command->status,1);
+                    }
                 }
             }
         }
