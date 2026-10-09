@@ -36,3 +36,28 @@ Code: `src/jbridge_hook/{cbt_hook.cpp,hook_smoke.cpp,smoke_shared.h,CMakeLists.t
 Microsoft primary reference: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowshookexw
 
 **Decision:** Keep the old Magnifier clone unmodified. Targeted in-process hooks are a viable access mechanism, **not yet a scaling solution**.
+
+## Update: Real native GDI scaling inside hooked x86 renderer DLL — PASS
+
+CI: https://github.com/challanger2000/125A-PluginScaler/actions/runs/37980741128
+
+Two separate 32-bit test hosts loaded the **same unmodified GDI renderer DLL**. The 125A hook DLL was installed on the original editor threads, recognized the editor during `HCBT_CREATEWND`, resolved its registered window-procedure image using `GetClassInfoExW` and `VirtualQuery`, and modified that module's `BeginPaint` import to configure a 150% or 200% GDI transform. A separate `WH_GETMESSAGE` hook translated native queued client mouse coordinates into the original logical coordinates. The actual original HWNDs, including native `SetCapture` behavior, remained in use; no clone or external bitmap forwarding was involved.
+
+CI observed:
+
+```
+in-process-unmodified-gdi-150=PASS hwnd=262578 hook=1 iat=1 pixels=1 down=1 move=1 up=1 mismatch=0
+in-process-unmodified-gdi-200=PASS hwnd=262524 hook=1 iat=1 pixels=1 down=1 move=1 up=1 mismatch=0
+injected-gdi-150-200-native-mouse=PASS
+```
+
+Code: `src/jbridge_hook/native_scale_hook.cpp`, `native_scale_hook_smoke.cpp`, `mock_legacy_renderer.cpp`, `native_scale_shared.h`. The renderer itself contains no scaling logic; painting occurs in its own DLL rather than the host EXE. Independent original HWNDs and processes were exercised at two different scaling factors.
+
+### Limits still blocking release
+
+- **No original jBridge/Pro-53/FM7 testing yet.** The renderer and window-class identification are mock-specific; attaching to an already-open editor is also not proved. This design currently intercepts creation-time `HCBT_CREATEWND`.
+- **Rendering coverage is narrow:** GDI `BeginPaint` imported by the module containing the window procedure. `GetDC`, `SetDIBitsToDevice`, DirectDraw/OpenGL, other DLLs and custom renderer paths remain unsupported and need identification and separate proofs.
+- **Native mouse input is only partly covered:** `WM_LBUTTONDOWN/MOVE/UP` delivered through the Windows queue works. Direct `GetCursorPos`, raw input, wheel, right-click, keyboard focus, popups, mouse capture edge cases and mixed DPI remain unproved.
+- Robust unload, multiple editor windows in one process, x64 coordination, jBridge process discovery and real DAW audio/MIDI stability remain untested.
+
+**Decision:** Positive proof for 32-bit GDI bitmap/control renderers via an in-process native hook, **not a universal product release**. Do not modify or redistribute jBridge binaries, and do not call the existing Magnifier clone finished.
