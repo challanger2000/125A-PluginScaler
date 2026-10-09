@@ -15,6 +15,7 @@ struct NativeScaleState {
     volatile LONG mismatch;
     volatile LONG originalLogicalX;
     volatile LONG originalLogicalY;
+    volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB
 };
 constexpr wchar_t kNativeScaleMapName[] = L"125A_NATIVE_SCALE_SMOKE_MAP";
 constexpr wchar_t kNativeScaleEditorClass[] = L"125A.OriginalUnscaledGdiEditor";

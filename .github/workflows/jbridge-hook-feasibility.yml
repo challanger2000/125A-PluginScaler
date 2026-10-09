@@ -42,3 +42,9 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open
           if ($LASTEXITCODE -ne 0) { throw "Already-open native editor attach failed" }
+
+      - name: Attach to original DIB-rendering 32-bit editors (Pro-53-style API)
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib
+          if ($LASTEXITCODE -ne 0) { throw "Real DIB rendering at 150/200 percent failed" }

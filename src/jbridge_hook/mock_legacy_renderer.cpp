@@ -2,6 +2,8 @@
 #include <windowsx.h>
 #include <cstdlib>
 #include <cwchar>
+#include <vector>
+#include <cstdint>
 
 namespace {
 NativeScaleState* state{};
@@ -23,14 +25,33 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         PAINTSTRUCT ps{};
         HDC dc=BeginPaint(hwnd,&ps);
         if(dc) {
-            HBRUSH bg=CreateSolidBrush(RGB(10,12,16));
-            HBRUSH bright=CreateSolidBrush(RGB(25,190,100));
-            SelectObject(dc,GetStockObject(NULL_PEN));
-            SelectObject(dc,bg);
-            Rectangle(dc,0,0,kLogicalWidth,kLogicalHeight);
-            SelectObject(dc,bright);
-            Rectangle(dc,48,30,80,66);
-            DeleteObject(bg);DeleteObject(bright);
+            if(state && state->rendererMode==1) {
+                // A realistic unscaled VST-style bitmap renderer.
+                // No StretchDIBits or zoom code belongs to this DLL.
+                BITMAPINFO bitmap{};
+                bitmap.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+                bitmap.bmiHeader.biWidth=kLogicalWidth;
+                bitmap.bmiHeader.biHeight=-kLogicalHeight; // top-down
+                bitmap.bmiHeader.biPlanes=1;
+                bitmap.bmiHeader.biBitCount=32;
+                bitmap.bmiHeader.biCompression=BI_RGB;
+                std::vector<std::uint32_t> pixels(kLogicalWidth*kLogicalHeight,
+                                                   0x00100C0A);
+                for(int y=30;y<66;++y)
+                    for(int x=48;x<80;++x)
+                        pixels[y*kLogicalWidth+x]=0x0064BE19;
+                SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
+                    0,0,0,kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
+            } else {
+                HBRUSH bg=CreateSolidBrush(RGB(10,12,16));
+                HBRUSH bright=CreateSolidBrush(RGB(25,190,100));
+                SelectObject(dc,GetStockObject(NULL_PEN));
+                SelectObject(dc,bg);
+                Rectangle(dc,0,0,kLogicalWidth,kLogicalHeight);
+                SelectObject(dc,bright);
+                Rectangle(dc,48,30,80,66);
+                DeleteObject(bg);DeleteObject(bright);
+            }
             EndPaint(hwnd,&ps);
         }
         return 0;

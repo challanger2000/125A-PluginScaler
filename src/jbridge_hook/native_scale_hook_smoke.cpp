@@ -137,6 +137,7 @@ int wmain(int argc,wchar_t** argv) {
     if(argc>1 && wcscmp(argv[1],L"--child")==0)return child(false,argc>2?_wtoi(argv[2]):0);
     if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)return child(true,argc>2?_wtoi(argv[2]):0);
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
+    const bool bitmap=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--dib")==0;
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr,exe,MAX_PATH);
     std::wstring directory=exe;
@@ -160,6 +161,7 @@ int wmain(int argc,wchar_t** argv) {
         if(!t.state){ok=false;break;}
         ZeroMemory(t.state,sizeof(NativeScaleState));
         t.state->scale=(i==0 ? 150 : 200);
+        t.state->rendererMode=bitmap?1:0;
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
         std::wstring command=L"\""+std::wstring(exe)+
             (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+std::to_wstring(i);
@@ -278,8 +280,9 @@ int wmain(int argc,wchar_t** argv) {
     }
     for(auto& t:target)dispose(t);
     FreeLibrary(dll);
-    std::printf("%s-gdi-150-200-native-mouse=%s\n",
-        alreadyOpen?"already-open-injected":"creation-injected",ok?"PASS":"FAIL");
+    std::printf("%s-%s-gdi-150-200-native-mouse=%s\n",
+        alreadyOpen?"already-open-injected":"creation-injected",
+        bitmap?"dib":"vector",ok?"PASS":"FAIL");
     std::puts("LIMIT: Controlled Win32 GDI mock; does not establish jBridge or arbitrary VST support.");
     return ok?0:4;
 }
