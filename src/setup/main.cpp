@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 #include <cwctype>
+#include <algorithm>
+#include <cstring>
 
 namespace fs = std::filesystem;
 
@@ -93,13 +95,56 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             notice(L"Setup-Pfad konnte nicht gelesen werden.");
             return 1;
         }
-        const fs::path source = fs::path(binaryPath).parent_path();
-        const fs::path proxy = source / L"PluginScalerVST2Proxy.dll";
-        const fs::path helper = source / L"PluginScalerHelper-x86.exe";
-        if (!fs::exists(proxy) || !fs::exists(helper)) {
-            notice(L"Die Proxy-DLL und Helper-EXE muessen neben PluginScalerSetup.exe liegen.");
+        const fs::path self = binaryPath;
+        // Packed executable layout: EXE | x64 proxy | x86 helper |
+        // 2x uint64 little-endian lengths | 16-byte magic identifier.
+        constexpr char marker[16] = {'1','2','5','A','_','S','C','A','L','E','R','_','P','K','G','1'};
+        HANDLE input = CreateFileW(self.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (input == INVALID_HANDLE_VALUE) {
+            notice(L"Die Setup-EXE konnte nicht gelesen werden.");
             return 1;
         }
+        LARGE_INTEGER total{};
+        GetFileSizeEx(input, &total);
+        struct Footer { unsigned long long proxyBytes; unsigned long long helperBytes; char magic[16]; } footer{};
+        LARGE_INTEGER pos{};
+        pos.QuadPart = total.QuadPart - static_cast<LONGLONG>(sizeof(Footer));
+        DWORD read = 0;
+        const bool validFooter = pos.QuadPart > 0 &&
+            SetFilePointerEx(input, pos, nullptr, FILE_BEGIN) &&
+            ReadFile(input, &footer, sizeof(footer), &read, nullptr) &&
+            read == sizeof(footer) &&
+            memcmp(footer.magic, marker, sizeof(marker)) == 0 &&
+            footer.proxyBytes > 0 && footer.helperBytes > 0 &&
+            footer.proxyBytes + footer.helperBytes < static_cast<unsigned long long>(pos.QuadPart);
+        if (!validFooter) {
+            CloseHandle(input);
+            notice(L"Setup-Datei enthaelt keine gueltigen eingebetteten Komponenten.");
+            return 1;
+        }
+        auto extract = [&](const fs::path& dest, unsigned long long offset,
+                           unsigned long long bytes) -> bool {
+            if (bytes > 100ULL * 1024 * 1024) return false;
+            LARGE_INTEGER start{};
+            start.QuadPart = static_cast<LONGLONG>(offset);
+            if (!SetFilePointerEx(input, start, nullptr, FILE_BEGIN)) return false;
+            HANDLE out = CreateFileW(dest.c_str(), GENERIC_WRITE, 0, nullptr,
+                                     CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (out == INVALID_HANDLE_VALUE) return false;
+            bool ok = true;
+            char buffer[65536];
+            while (bytes > 0 && ok) {
+                const DWORD count = static_cast<DWORD>((std::min<unsigned long long>)(bytes, sizeof(buffer)));
+                DWORD got = 0, wrote = 0;
+                ok = ReadFile(input, buffer, count, &got, nullptr) && got == count &&
+                     WriteFile(out, buffer, got, &wrote, nullptr) && wrote == got;
+                bytes -= count;
+            }
+            CloseHandle(out);
+            if (!ok) DeleteFileW(dest.c_str());
+            return ok;
+        };
         const std::wstring selected = chooseDll();
         if (selected.empty()) return 0;
         const fs::path target = fs::absolute(selected);
@@ -122,13 +167,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const fs::path dll = dir / (name + L".dll");
         const fs::path manifest = dir / (name + L".pluginscaler.txt");
         const fs::path iniPath = dir / (name + L".pluginscaler.ini");
-        fs::copy_file(helper, localHelper, fs::copy_options::none);
+        const unsigned long long payloadStart = static_cast<unsigned long long>(pos.QuadPart) - footer.helperBytes - footer.proxyBytes;
+        const bool unpacked = extract(dll, payloadStart, footer.proxyBytes) &&
+                              extract(localHelper, payloadStart + footer.proxyBytes, footer.helperBytes);
+        CloseHandle(input);
+        if (!unpacked) {
+            fs::remove_all(dir);
+            notice(L"Die eingebetteten Komponenten konnten nicht entpackt werden.");
+            return 1;
+        }
         if (!generateManifest(localHelper, target, manifest)) {
             fs::remove_all(dir);
             notice(L"Manifest-Erstellung gescheitert. Pruefe, ob das Ziel ein 32-Bit-VST2-Plugin ist.");
             return 1;
         }
-        fs::copy_file(proxy, dll, fs::copy_options::none);
         const std::wstring ini = L"[PluginScaler]\r\nhelper=PluginScalerHelper-x86.exe\r\ntarget=" +
             target.wstring() + L"\r\nmanifest=" + manifest.filename().wstring() +
             L"\r\nscale=150\r\neditor=gdi\r\n";

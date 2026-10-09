@@ -332,16 +332,30 @@ jobs:
             }
           }
 
-      - name: Package real VST2 test kit
+      - name: Embed bridge binaries into standalone setup
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          from struct import pack
+          setup = Path(r"build-x64\src\setup\Release\PluginScalerSetup.exe")
+          proxy = Path(r"build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll").read_bytes()
+          helper = Path(r"build-x86\src\helper\Release\PluginScalerHelper-x86.exe").read_bytes()
+          with setup.open("ab") as f:
+              f.write(proxy)
+              f.write(helper)
+              f.write(pack("<QQ", len(proxy), len(helper)))
+              f.write(b"125A_SCALER_PKG1")
+          print(f"Standalone setup bytes: {setup.stat().st_size}")
+          '@ | python -
+
+      - name: Package standalone Windows setup
         shell: pwsh
         run: |
           $kit = Join-Path $PWD "PluginScaler-TestKit"
           New-Item -ItemType Directory -Force -Path $kit | Out-Null
 
-          Copy-Item "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll" (Join-Path $kit "PluginScalerVST2Proxy.dll") -Force
-          Copy-Item "build-x86\src\helper\Release\PluginScalerHelper-x86.exe" (Join-Path $kit "PluginScalerHelper-x86.exe") -Force
           Copy-Item "build-x64\src\setup\Release\PluginScalerSetup.exe" (Join-Path $kit "PluginScalerSetup.exe") -Force
-          Copy-Item "docs\REAL-VST2-TEST.md" (Join-Path $kit "REAL-VST2-TEST.md") -Force
 
           @"
           125A PluginScaler - 150% Pro-53 GUI test
@@ -355,7 +369,7 @@ jobs:
       - name: Upload real VST2 test kit
         uses: actions/upload-artifact@v4
         with:
-          name: 125A-PluginScaler-Pro53-TestKit
-          path: PluginScaler-TestKit
+          name: 125A-PluginScaler-Standalone-Setup
+          path: PluginScaler-TestKit/PluginScalerSetup.exe
           if-no-files-found: error
           retention-days: 14
