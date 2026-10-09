@@ -12,6 +12,7 @@ HWND target{};
 int zoom=100;
 int logicalWidth=kLogicalWidth, logicalHeight=kLogicalHeight;
 bool patched=false;
+volatile LONG* patchedIat{};
 HDC WINAPI scaledBeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
     const HDC dc=realBeginPaint ? realBeginPaint(hwnd,ps) : nullptr;
     if(dc && hwnd==target && zoom>=100 && zoom<=200) {
@@ -43,9 +44,8 @@ bool patchEditorModuleIAT(HINSTANCE registeredInstance,LPCWSTR className) {
     if(nt->Signature!=IMAGE_NT_SIGNATURE) return false;
     const auto imports=nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     if(!imports.VirtualAddress) return false;
-    realBeginPaint=reinterpret_cast<BeginPaintFn>(
-        GetProcAddress(GetModuleHandleW(L"user32.dll"),"BeginPaint"));
-    if(!realBeginPaint) return false;
+    if(!GetProcAddress(GetModuleHandleW(L"user32.dll"),"BeginPaint"))
+        return false;
     auto* desc=reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(base+imports.VirtualAddress);
     for(;desc->Name;++desc) {
         const char* module=reinterpret_cast<char*>(base+desc->Name);
@@ -59,6 +59,8 @@ bool patchEditorModuleIAT(HINSTANCE registeredInstance,LPCWSTR className) {
                 base+names->u1.AddressOfData);
             if(std::strcmp(reinterpret_cast<const char*>(imported->Name),
                            "BeginPaint")!=0)continue;
+            realBeginPaint=reinterpret_cast<BeginPaintFn>(iat->u1.Function);
+            if(!realBeginPaint)return false;
             DWORD previous{};
             if(!VirtualProtect(&iat->u1.Function,sizeof(iat->u1.Function),
                                PAGE_READWRITE,&previous))return false;
@@ -69,6 +71,7 @@ bool patchEditorModuleIAT(HINSTANCE registeredInstance,LPCWSTR className) {
                            previous,&ignored);
             FlushInstructionCache(GetCurrentProcess(),&iat->u1.Function,
                                   sizeof(iat->u1.Function));
+            patchedIat=reinterpret_cast<volatile LONG*>(&iat->u1.Function);
             patched=true;
             return true;
         }
@@ -90,6 +93,25 @@ void closeState(NativeScaleState* state,HANDLE mapping) {
     if(state)UnmapViewOfFile(state);
     if(mapping)CloseHandle(mapping);
 }
+bool restoreOriginalBeginPaint() {
+    if(!patched || !patchedIat || !realBeginPaint)return false;
+    DWORD oldProtection{};
+    if(!VirtualProtect(const_cast<LONG*>(patchedIat),sizeof(LONG),
+                       PAGE_READWRITE,&oldProtection))return false;
+    const auto prior=InterlockedExchange(patchedIat,
+        static_cast<LONG>(reinterpret_cast<std::uintptr_t>(realBeginPaint)));
+    DWORD ignored{};
+    VirtualProtect(const_cast<LONG*>(patchedIat),sizeof(LONG),
+                   oldProtection,&ignored);
+    FlushInstructionCache(GetCurrentProcess(),
+                          const_cast<LONG*>(patchedIat),sizeof(LONG));
+    if(prior!=static_cast<LONG>(reinterpret_cast<std::uintptr_t>(&scaledBeginPaint)))
+        return false;
+    patched=false;
+    patchedIat=nullptr;
+    realBeginPaint=nullptr;
+    return true;
+}
 void attachToAlreadyOpenEditor() {
     // PID/TID-based control block, usable long after auxhost starts.
     wchar_t name[192]{};
@@ -100,6 +122,21 @@ void attachToAlreadyOpenEditor() {
     auto* command=static_cast<NativeAttachCommand*>(
         MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(NativeAttachCommand)));
     if(!command){CloseHandle(mapping);return;}
+    if(command->status==1 && command->detach && target) {
+        // Restore the original DLL import BEFORE releasing the Windows hook.
+        // Otherwise the module would retain a pointer into an unloaded DLL.
+        if(!restoreOriginalBeginPaint()) {
+            InterlockedExchange(&command->status,-5);
+        } else {
+            const BOOL sized=SetWindowPos(target,nullptr,0,0,
+                logicalWidth,logicalHeight,
+                SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+            InvalidateRect(target,nullptr,FALSE);
+            target=nullptr;
+            zoom=100;
+            InterlockedExchange(&command->status,sized?2:-6);
+        }
+    }
     if(command->status==0 && !target) {
         const HWND hwnd=reinterpret_cast<HWND>(
              static_cast<std::uintptr_t>(command->hwnd));
@@ -177,8 +214,9 @@ LRESULT CALLBACK NativeCBTHook(int code,WPARAM wp,LPARAM lp) {
 extern "C" __declspec(dllexport)
 LRESULT CALLBACK NativeMouseHook(int code,WPARAM wp,LPARAM lp) {
     if(code==HC_ACTION && wp==PM_REMOVE) {
-        if(!target)attachToAlreadyOpenEditor();
         auto* message=reinterpret_cast<MSG*>(lp);
+        if(message && message->message==WM_NULL)
+            attachToAlreadyOpenEditor();
         if(message && message->hwnd==target &&
            (message->message==WM_LBUTTONDOWN ||
             message->message==WM_LBUTTONUP ||

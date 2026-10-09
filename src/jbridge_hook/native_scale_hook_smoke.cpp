@@ -248,6 +248,24 @@ int wmain(int argc,wchar_t** argv) {
                t.state->mouseDown,t.state->mouseMove,t.state->mouseUp,
                t.state->mismatch);
             ok &= pass;
+            if(alreadyOpen && pass) {
+                // Stop scaling while original editor is STILL running.
+                // A safe detach must restore both the GDI import and HWND.
+                t.attach->detach=1;
+                PostMessageW(hwnd,WM_NULL,0,0);
+                for(int n=0;n<400 && t.attach->status==1;++n)Sleep(10);
+                Sleep(90);
+                const bool restored=t.attach->status==2&&checkPixels(hwnd,100);
+                InterlockedExchange(&t.state->scale,100);
+                const bool clicked=restored&&injectInput(hwnd);
+                Sleep(60);
+                const bool inputBack=clicked&&t.state->mouseDown==2 &&
+                      t.state->mouseUp==2&&t.state->mismatch==0;
+                std::printf("already-open-detach-restore-%ld=%s status=%ld originalPixels=%d originalMouse=%d\n",
+                   t.attach->scale,(restored&&inputBack)?"PASS":"FAIL",
+                   t.attach->status,int(restored),int(inputBack));
+                ok &= restored&&inputBack;
+            }
         }
     }
     for(auto& t:target) {

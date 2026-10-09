@@ -26,4 +26,5 @@ struct NativeAttachCommand {
     volatile LONG status; // 0=pending, 1=ready, negative=error
     volatile LONG originalWidth;
     volatile LONG originalHeight;
+    volatile LONG detach;
 };
