@@ -21,7 +21,7 @@ jobs:
       - name: Build only hook and cross-process mock
         shell: pwsh
         run: |
-          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke PluginScalerMockLegacyRenderer
+          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke PluginScalerMockLegacyRenderer PluginScalerPro53
       - name: Test two independent native 32-bit editor threads
         shell: pwsh
         run: |
@@ -48,3 +48,16 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib
           if ($LASTEXITCODE -ne 0) { throw "Real DIB rendering at 150/200 percent failed" }
+
+      - name: Single EXE resource packaging smoke test
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/125A-PluginScaler-Pro53.exe" --self-test
+          if ($LASTEXITCODE -ne 0) { throw "EXE DLL resource loading failed" }
+      - name: Save gated Pro-53 test candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-PluginScaler-Pro53-Experimental-x86
+          path: build-hook-x86/src/jbridge_hook/Release/125A-PluginScaler-Pro53.exe
+          if-no-files-found: error
+          retention-days: 7
