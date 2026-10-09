@@ -1,0 +1,4 @@
+add_executable(PluginScalerSetup WIN32 main.cpp)
+target_compile_features(PluginScalerSetup PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerSetup PRIVATE comdlg32 shell32 ole32)
+pluginscaler_enable_warnings(PluginScalerSetup)
