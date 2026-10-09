@@ -1773,11 +1773,22 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        // Direct mode deliberately keeps the real legacy editor parented to
-        // the helper-owned container for its entire lifetime. The x64 proxy
-        // must never touch that foreign x86 HWND during close; doing so can
-        // synchronously block across the process boundary. The helper closes
-        // the plugin editor and destroys its container on its own GUI thread.
+        // Direct mode keeps the real legacy editor parented to the helper-owned
+        // container for its entire lifetime. Before asking the helper to close
+        // and destroy that container, detach the container itself from the x64
+        // host. Otherwise DestroyWindow in the x86 helper can synchronously
+        // notify the x64 parent while this thread is blocked in controlCall,
+        // creating a cross-process parent/child deadlock.
+        if (inst->settings.directEditor &&
+            inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
+            SetLastError(0);
+            HWND previousParent = SetParent(inst->editorSurrogate, nullptr);
+            if (!previousParent && GetLastError() != 0)
+                return 0;
+        }
+
+        // Other experimental editor modes still move the actual editor HWND
+        // and therefore retain their existing restoration path.
         if ((inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
