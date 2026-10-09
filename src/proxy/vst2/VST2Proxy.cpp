@@ -1499,14 +1499,14 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
     case EffEditOpen: {
         if (!ptr || !startBridge(inst)) return 0;
         pluginscaler::ipc::EditorOpenRequest openRequest{};
-        if (inst->settings.directEditor) {
+        if (inst->settings.directEditor || inst->settings.gdiEditor) {
             openRequest.hostParentWindow = static_cast<std::uint64_t>(
                 reinterpret_cast<std::uintptr_t>(static_cast<HWND>(ptr)));
         }
 
         std::vector<std::uint8_t> reply;
         if (!controlCall(inst, pluginscaler::ipc::ControlCommand::OpenEditor,
-                         inst->settings.gdiEditor ? 100 : 0,
+                         inst->settings.gdiEditor ? inst->scalePercent : 0,
                          &openRequest, sizeof(openRequest), reply) ||
             reply.size() != sizeof(pluginscaler::ipc::EditorOpenResult))
             return 0;
@@ -1527,7 +1527,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         inst->editorHost = parent;
         inst->dragActive = false;
 
-        if (inst->settings.directEditor) {
+        if (inst->settings.directEditor || inst->settings.gdiEditor) {
             RECT rc{};
             if (!GetClientRect(editor, &rc))
                 return 0;
@@ -1558,51 +1558,6 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
             inst->editorSurface = nullptr;
             inst->editorMagnifier = nullptr;
             inst->editorOpen = true;
-            return 1;
-        }
-
-        if (inst->settings.gdiEditor) {
-            if (!ensureScalerSurfaceClass())
-                return 0;
-
-            RECT nativeRc{};
-            if (!GetClientRect(editor, &nativeRc))
-                return 0;
-            const int nativeWidth = nativeRc.right - nativeRc.left;
-            const int nativeHeight = nativeRc.bottom - nativeRc.top;
-            const int scaledWidth = nativeWidth * inst->scalePercent / 100;
-            const int scaledHeight = nativeHeight * inst->scalePercent / 100;
-            if (nativeWidth <= 0 || nativeHeight <= 0 ||
-                scaledWidth <= 0 || scaledHeight <= 0)
-                return 0;
-
-            // TV-style scaler: the real x86 editor stays native in the helper.
-            // Studio One sees only our x64 surface, which displays a scaled
-            // capture and maps input back to native plugin coordinates.
-            HWND surface = CreateWindowExW(
-                0, L"125A_PluginScaler_ScaledSurface", L"",
-                WS_CHILD | WS_VISIBLE,
-                0, 0, scaledWidth, scaledHeight,
-                parent, nullptr, GetModuleHandleW(nullptr), inst);
-            if (!surface)
-                return 0;
-
-            inst->editorSurface = surface;
-            inst->editorMagnifier = nullptr;
-            inst->editorBitmapWidth = static_cast<std::uint32_t>(nativeWidth);
-            inst->editorBitmapHeight = static_cast<std::uint32_t>(nativeHeight);
-            inst->editorBitmapStride = static_cast<std::uint32_t>(nativeWidth * 4);
-            inst->editorOpen = true;
-
-            // Give very old GDI editors time to finish their own startup
-            // painting before the wrapper starts asking for frames.
-            // The surface is available immediately, but capture begins only
-            // after a quiet 5-second grace period. 100 ms polling is enough
-            // for GUI work and avoids hammering the 32-bit editor.
-            inst->gdiCaptureNotBefore = GetTickCount64() + 5000ULL;
-            SetTimer(surface, 0x125A, 100, nullptr);
-            InvalidateRect(surface, nullptr, FALSE);
-            UpdateWindow(surface);
             return 1;
         }
 
@@ -1779,7 +1734,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         // host. Otherwise DestroyWindow in the x86 helper can synchronously
         // notify the x64 parent while this thread is blocked in controlCall,
         // creating a cross-process parent/child deadlock.
-        if (inst->settings.directEditor &&
+        if ((inst->settings.directEditor || inst->settings.gdiEditor) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             SetLastError(0);
             HWND previousParent = SetParent(inst->editorSurrogate, nullptr);
@@ -1789,7 +1744,7 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
 
         // Other experimental editor modes still move the actual editor HWND
         // and therefore retain their existing restoration path.
-        if ((inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
+        if ((inst->settings.magEditor || inst->settings.graphicsEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             ShowWindow(inst->editorWindow, SW_HIDE);
