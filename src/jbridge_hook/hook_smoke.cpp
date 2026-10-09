@@ -162,12 +162,14 @@ int controllerProcess() {
             if (wait==WAIT_OBJECT_0) GetExitCodeProcess(x.proc.hProcess,&code);
             bool reached = wait==WAIT_OBJECT_0 && code==0 &&
                 x.state->created>0 &&
-                static_cast<DWORD>(x.state->lastPid)==x.proc.dwProcessId &&
-                static_cast<DWORD>(x.state->lastTid)==x.proc.dwThreadId &&
-                x.state->lastHwnd==x.state->childHwnd;
-            std::printf("hook-in-target-pid=%s pid=%lu callbackPid=%ld events=%ld\n",
+                x.state->matchedCount>0 &&
+                static_cast<DWORD>(x.state->matchedPid)==x.proc.dwProcessId &&
+                static_cast<DWORD>(x.state->matchedTid)==x.proc.dwThreadId &&
+                x.state->matchedHwnd==x.state->childHwnd;
+            std::printf("hook-matched-editor=%s pid=%lu callbackPid=%ld events=%ld matched=%ld hwnd=%ld expected=%ld\n",
                 reached?"PASS":"FAIL",x.proc.dwProcessId,
-                x.state->lastPid,x.state->created);
+                x.state->matchedPid,x.state->created,x.state->matchedCount,
+                x.state->matchedHwnd,x.state->childHwnd);
             okay &= reached;
         }
     }

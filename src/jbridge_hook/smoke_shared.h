@@ -11,5 +11,9 @@ struct HookSmokeState {
     volatile LONG lastTid;
     volatile LONG lastHwnd;
     volatile LONG childHwnd;
+    volatile LONG matchedCount;
+    volatile LONG matchedPid;
+    volatile LONG matchedTid;
+    volatile LONG matchedHwnd;
 };
 constexpr wchar_t kHookSmokeEnvironment[] = L"125A_HOOK_SMOKE_MAPPING";
