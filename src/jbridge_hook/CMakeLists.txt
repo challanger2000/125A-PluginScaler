@@ -1,0 +1,11 @@
+if(NOT WIN32)
+  return()
+endif()
+add_library(PluginScalerJBridgeCbtHook SHARED cbt_hook.cpp)
+target_compile_features(PluginScalerJBridgeCbtHook PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerJBridgeCbtHook PRIVATE user32)
+set_target_properties(PluginScalerJBridgeCbtHook PROPERTIES
+  OUTPUT_NAME "PluginScalerJBridgeHook-x86")
+add_executable(PluginScalerJBridgeHookSmoke hook_smoke.cpp)
+target_compile_features(PluginScalerJBridgeHookSmoke PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerJBridgeHookSmoke PRIVATE user32)
