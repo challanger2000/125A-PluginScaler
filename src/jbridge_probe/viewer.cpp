@@ -4,7 +4,6 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <tlhelp32.h>
-#include <commctrl.h>
 #include <sstream>
 #include <magnification.h>
 #include <algorithm>
@@ -98,25 +97,19 @@ HWND locateSource() {
            << c.rect.bottom-c.rect.top << L")";
         labels.push_back(ss.str());
     }
-    std::vector<TASKDIALOG_BUTTON> options;
-    for (std::size_t i=0;i<labels.size();++i)
-        options.push_back({static_cast<int>(1000+i),labels[i].c_str()});
-    TASKDIALOGCONFIG config{};
-    config.cbSize=sizeof(config);
-    config.dwFlags=TDF_ALLOW_DIALOG_CANCELLATION;
-    config.dwCommonButtons=TDCBF_OK_BUTTON|TDCBF_CANCEL_BUTTON;
-    config.pszWindowTitle=L"125A PluginScaler";
-    config.pszMainInstruction=L"Welches Plugin skalieren?";
-    config.pszContent=L"Eine Scaler-Instanz bleibt an genau dieses Fenster gebunden.";
-    config.cRadioButtons=static_cast<UINT>(options.size());
-    config.pRadioButtons=options.data();
-    config.nDefaultRadioButton=1000;
-    int pressed=0,selected=0;
-    if (FAILED(TaskDialogIndirect(&config,&pressed,&selected,nullptr)) ||
-        pressed!=IDOK) return nullptr;
-    const int index=selected-1000;
-    if (index<0 || static_cast<std::size_t>(index)>=scan.candidates.size()) return nullptr;
-    return scan.candidates[index].hwnd;
+    // Standard USER32 dialog: compatible with Windows systems that do not
+    // export TaskDialogIndirect from ComCtl32 (ordinal 345).
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        std::wstring question = L"Dieses Plugin skalieren?\\n\\n";
+        question += labels[i];
+        question += L"\\n\\nJa = auswaehlen, Nein = naechstes, Abbrechen = beenden.";
+        const int answer = MessageBoxW(nullptr, question.c_str(),
+            L"125A PluginScaler - Pluginauswahl",
+            MB_YESNOCANCEL | MB_ICONQUESTION | MB_TOPMOST);
+        if (answer == IDYES) return scan.candidates[i].hwnd;
+        if (answer == IDCANCEL) return nullptr;
+    }
+    return nullptr;
 }
 
 // The magnification control fills the whole viewer. It is the actual mouse
