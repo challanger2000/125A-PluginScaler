@@ -213,13 +213,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         refresh();
         return 0;
     case WM_LBUTTONDOWN:
-        SetCapture(hwnd);
-        dragging = true;
-        [[fallthrough]];
     case WM_LBUTTONUP:
     case WM_MOUSEMOVE:
     case WM_RBUTTONDOWN:
     case WM_RBUTTONUP: {
+        if (msg == WM_LBUTTONDOWN) {
+            SetCapture(hwnd);
+            dragging = true;
+        }
         if (!IsWindow(source)) return 0;
         const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         POINT mapped{sourceRect.left + MulDiv(x,100,percent),
