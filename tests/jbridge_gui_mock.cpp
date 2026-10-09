@@ -36,10 +36,28 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     return DefWindowProcW(hwnd,msg,w,l);
 }
+LRESULT CALLBACK occluderProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc{}; GetClientRect(hwnd, &rc);
+        HBRUSH brush = CreateSolidBrush(RGB(230, 15, 90));
+        FillRect(dc, &rc, brush);
+        DeleteObject(brush);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
 int main() {
     HINSTANCE instance=GetModuleHandleW(nullptr);
     WNDCLASSW wc{};wc.hInstance=instance;wc.lpfnWndProc=editorProc;
     wc.lpszClassName=L"125A.MockLegacyEditor";RegisterClassW(&wc);
+    WNDCLASSW blocker{};
+    blocker.hInstance=instance;
+    blocker.lpfnWndProc=occluderProc;
+    blocker.lpszClassName=L"125A.MockOccluder";
+    RegisterClassW(&blocker);
     Editor first{},second{};
     HWND a=CreateWindowW(wc.lpszClassName,L"Mock Pro53-style",
         WS_OVERLAPPEDWINDOW|WS_VISIBLE,100,100,440,290,nullptr,nullptr,instance,&first);
@@ -114,7 +132,7 @@ int main() {
             imagePassed = (pixel==RGB(33,39,46));
             // Regression: unrelated windows overlapping the original editor
             // must never replace the editor's pixels in the scaled viewer.
-            HWND occluder = CreateWindowW(wc.lpszClassName,
+            HWND occluder = CreateWindowW(blocker.lpszClassName,
                 L"Unrelated overlay", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 110, 115, 300, 230, nullptr, nullptr, instance, &second);
             if (occluder) {
