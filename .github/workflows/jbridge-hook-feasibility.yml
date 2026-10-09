@@ -61,3 +61,9 @@ jobs:
           path: build-hook-x86/src/jbridge_hook/Release/125A-PluginScaler-Pro53.exe
           if-no-files-found: error
           retention-days: 7
+
+      - name: Resize and restore mock jBridge frame around existing DIB editor
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib --nested
+          if ($LASTEXITCODE -ne 0) { throw "Nested jBridge frame + original editor zoom failed" }

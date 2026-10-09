@@ -20,7 +20,7 @@ void pump(int duration) {
         Sleep(5);
     }
 }
-int child(bool alreadyOpen,int slot) {
+int child(bool alreadyOpen,int slot,bool nested) {
     wchar_t name[192]{};
     if(!GetEnvironmentVariableW(kNativeScaleMapName,name,192))return 11;
     HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name);
@@ -58,9 +58,21 @@ int child(bool alreadyOpen,int slot) {
     wc.lpszClassName=kNativeScaleEditorClass;
     if(!RegisterClassW(&wc))return 15;
     // The original renderer is completely unaware of any scaling.
+    HWND frame=nullptr;
+    if(nested) {
+        WNDCLASSW container{};
+        container.hInstance=wc.hInstance;
+        container.lpfnWndProc=DefWindowProcW;
+        container.lpszClassName=L"125A.MockJBridgeContainer";
+        if(!RegisterClassW(&container))return 25;
+        frame=CreateWindowExW(0,container.lpszClassName,
+            L"jBridge 1.75 | Pro-53",WS_OVERLAPPEDWINDOW|WS_VISIBLE,
+            slot==0?70:530,100,245,210,nullptr,nullptr,wc.hInstance,nullptr);
+        if(!frame)return 26;
+    }
     HWND hwnd=CreateWindowExW(0,kNativeScaleEditorClass,L"Unscaled original",
-       WS_POPUP|WS_VISIBLE,slot==0 ? 70:530,100,
-       kLogicalWidth,kLogicalHeight,nullptr,nullptr,wc.hInstance,nullptr);
+       (nested?WS_CHILD:WS_POPUP)|WS_VISIBLE,nested?0:(slot==0?70:530),
+       nested?0:100,kLogicalWidth,kLogicalHeight,frame,nullptr,wc.hInstance,nullptr);
     if(!hwnd)return 16;
     ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
     if(alreadyOpen) {
@@ -75,6 +87,7 @@ int child(bool alreadyOpen,int slot) {
         pump(10);
     }
     DestroyWindow(hwnd);
+    if(frame)DestroyWindow(frame);
     UnmapViewOfFile(state);CloseHandle(mapping);
     return 0;
 }
@@ -142,10 +155,14 @@ bool checkPixels(HWND hwnd,int zoom) {
 }
 }
 int wmain(int argc,wchar_t** argv) {
-    if(argc>1 && wcscmp(argv[1],L"--child")==0)return child(false,argc>2?_wtoi(argv[2]):0);
-    if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)return child(true,argc>2?_wtoi(argv[2]):0);
+    if(argc>1 && wcscmp(argv[1],L"--child")==0)
+        return child(false,argc>2?_wtoi(argv[2]):0,argc>3&&wcscmp(argv[3],L"--nested")==0);
+    if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)
+        return child(true,argc>2?_wtoi(argv[2]):0,argc>3&&wcscmp(argv[3],L"--nested")==0);
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
     const bool bitmap=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--dib")==0;
+    const bool nested=alreadyOpen && (argc>2&&wcscmp(argv[2],L"--nested")==0 ||
+                                     argc>3&&wcscmp(argv[3],L"--nested")==0);
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr,exe,MAX_PATH);
     std::wstring directory=exe;
@@ -172,7 +189,8 @@ int wmain(int argc,wchar_t** argv) {
         t.state->rendererMode=bitmap?1:0;
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
         std::wstring command=L"\""+std::wstring(exe)+
-            (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+std::to_wstring(i);
+            (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+
+            std::to_wstring(i)+(nested?L" --nested":L"");
         std::vector<wchar_t> cmd(command.begin(),command.end());
         cmd.push_back(0);
         STARTUPINFOW si{};si.cb=sizeof(si);
@@ -249,7 +267,22 @@ int wmain(int argc,wchar_t** argv) {
                   t.attach->originalWidth==kLogicalWidth &&
                   t.attach->originalHeight==kLogicalHeight) :
                  (t.state->hooked==1 && t.state->patchOK==1);
-            const bool pass=attached&&painted&&mouseVerified;
+            bool rootGrowth=true;
+            if(nested && alreadyOpen) {
+                const HWND root=reinterpret_cast<HWND>(
+                    static_cast<std::uintptr_t>(t.attach->rootHwnd));
+                RECT rootRect{};
+                rootGrowth=IsWindow(root) && GetWindowRect(root,&rootRect) &&
+                    rootRect.right-rootRect.left ==
+                       t.attach->rootOuterWidth+
+                         MulDiv(kLogicalWidth,t.state->scale,100)-kLogicalWidth &&
+                    rootRect.bottom-rootRect.top ==
+                       t.attach->rootOuterHeight+
+                         MulDiv(kLogicalHeight,t.state->scale,100)-kLogicalHeight;
+                std::printf("nested-jbridge-container-%ld=%s root=%ld\\n",
+                    t.state->scale,rootGrowth?"PASS":"FAIL",t.attach->rootHwnd);
+            }
+            const bool pass=attached&&painted&&mouseVerified&&rootGrowth;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -268,7 +301,15 @@ int wmain(int argc,wchar_t** argv) {
                 PostMessageW(hwnd,WM_NULL,0,0);
                 for(int n=0;n<400 && t.attach->status==1;++n)Sleep(10);
                 Sleep(90);
-                const bool restored=t.attach->status==2&&checkPixels(hwnd,100);
+                bool restored=t.attach->status==2&&checkPixels(hwnd,100);
+                if(nested) {
+                    const HWND root=reinterpret_cast<HWND>(
+                        static_cast<std::uintptr_t>(t.attach->rootHwnd));
+                    RECT original{};
+                    restored=restored&&GetWindowRect(root,&original)&&
+                        original.right-original.left==t.attach->rootOuterWidth&&
+                        original.bottom-original.top==t.attach->rootOuterHeight;
+                }
                 InterlockedExchange(&t.state->scale,100);
                 // Ignore input already queued under the preceding 150/200% mode.
                 // Assert native coordinates only after the original mode settles.
