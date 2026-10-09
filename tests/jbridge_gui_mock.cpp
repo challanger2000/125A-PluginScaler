@@ -71,6 +71,65 @@ int main() {
     std::printf("mock-real-mouse=%s\n",passed?"PASS":"FAIL");
     std::printf("mock-independent-windows=%s\n",
         first.window!=second.window?"PASS":"FAIL");
+    // Launch the viewer bound to this exact mock HWND. Exercise viewer -> editor,
+    // not merely direct mouse gestures to an unscaled dummy.
+    wchar_t exePath[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring exe=exePath;
+    auto slash=exe.find_last_of(L"\\/");
+    exe.resize(slash+1);
+    exe+=L"PluginScalerJBridgeViewer.exe";
+    std::wstring command=L"\""+exe+L"\" --mock-hwnd "+
+        std::to_wstring(reinterpret_cast<UINT_PTR>(a));
+    std::vector<wchar_t> commandBuffer(command.begin(),command.end());
+    commandBuffer.push_back(0);
+    STARTUPINFOW startup{};startup.cb=sizeof(startup);
+    PROCESS_INFORMATION proc{};
+    bool viewerPassed=false;
+    if(CreateProcessW(exe.c_str(),commandBuffer.data(),nullptr,nullptr,
+                      FALSE,0,nullptr,nullptr,&startup,&proc)) {
+        HWND scaled=nullptr;
+        for(int i=0;i<120 && !scaled;++i) {
+            EnumWindows([](HWND w,LPARAM p)->BOOL {
+                wchar_t cls[128]{};
+                GetClassNameW(w,cls,128);
+                if(wcscmp(cls,L"125A.JBridgeScaler.Viewer")==0)
+                    *reinterpret_cast<HWND*>(p)=w;
+                return TRUE;
+            },reinterpret_cast<LPARAM>(&scaled));
+            if(!scaled) Sleep(50);
+        }
+        if(scaled) {
+            SetForegroundWindow(scaled);
+            RECT client{};GetClientRect(scaled,&client);
+            POINT mouse{client.left+120,client.top+110};
+            ClientToScreen(scaled,&mouse);
+            SetCursorPos(mouse.x,mouse.y);
+            INPUT down{};down.type=INPUT_MOUSE;down.mi.dwFlags=MOUSEEVENTF_LEFTDOWN;
+            INPUT move{};move.type=INPUT_MOUSE;move.mi.dwFlags=MOUSEEVENTF_MOVE;
+            move.mi.dx=12;move.mi.dy=15;
+            INPUT up{};up.type=INPUT_MOUSE;up.mi.dwFlags=MOUSEEVENTF_LEFTUP;
+            const int before=first.down;
+            for(const INPUT input:{down,move,up}) {
+                INPUT copy=input;
+                SendInput(1,&copy,sizeof(copy));
+                for(int n=0;n<15;++n) {
+                    MSG msg{};
+                    while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {
+                        TranslateMessage(&msg);DispatchMessageW(&msg);
+                    }
+                    Sleep(10);
+                }
+            }
+            viewerPassed=first.down>before && first.up>0 &&
+                !first.drag && second.down==0;
+        }
+        TerminateProcess(proc.hProcess,0);
+        WaitForSingleObject(proc.hProcess,1000);
+        CloseHandle(proc.hThread);
+        CloseHandle(proc.hProcess);
+    }
+    std::printf("viewer-through-mouse=%s\n",viewerPassed?"PASS":"FAIL");
     DestroyWindow(a);DestroyWindow(b);
-    return passed?0:2;
+    return passed && viewerPassed ?0:3;
 }
