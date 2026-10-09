@@ -101,6 +101,19 @@ int main() {
         }
         if(scaled) {
             SetForegroundWindow(scaled);
+            // Verify actual rendered pixels, not only a successful process start.
+            // The mock editor has a known opaque background. Its top-left
+            // client sample must remain that color in the 150% viewer.
+            Sleep(300);
+            bool imagePassed=false;
+            POINT sample{45,160};
+            ClientToScreen(scaled,&sample);
+            HDC desktop=GetDC(nullptr);
+            const COLORREF pixel=GetPixel(desktop,sample.x,sample.y);
+            ReleaseDC(nullptr,desktop);
+            imagePassed = (pixel==RGB(33,39,46));
+            std::printf("viewer-150pct-image=%s (pixel=%lu)\\n",
+                        imagePassed?"PASS":"FAIL",static_cast<unsigned long>(pixel));
             RECT client{};GetClientRect(scaled,&client);
             POINT mouse{client.left+120,client.top+110};
             ClientToScreen(scaled,&mouse);
@@ -121,7 +134,7 @@ int main() {
                     Sleep(10);
                 }
             }
-            viewerPassed=first.down>before && first.up>0 &&
+            viewerPassed=imagePassed && first.down>before && first.up>0 &&
                 !first.drag && second.down==0;
         }
         TerminateProcess(proc.hProcess,0);
