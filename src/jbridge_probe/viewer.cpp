@@ -226,9 +226,23 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetTimer(hwnd, refreshTimer, 30, nullptr);
         return 0;
     }
-    case WM_SIZE:
-        if (magnifier) MoveWindow(magnifier, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+    case WM_SIZE: {
+        if (!magnifier) return 0;
+        const int clientWidth = LOWORD(lp);
+        const int clientHeight = HIWORD(lp);
+        // A resized viewer must not map clicks against an obsolete fixed
+        // 150% transform: preserve the source aspect ratio and rescale the
+        // magnifier's presentation rather than stretching arbitrarily.
+        const int naturalWidth = sourceRect.right-sourceRect.left;
+        const int naturalHeight = sourceRect.bottom-sourceRect.top;
+        if (naturalWidth <= 0 || naturalHeight <= 0) return 0;
+        const int fitW = MulDiv(naturalWidth,percent,100);
+        const int fitH = MulDiv(naturalHeight,percent,100);
+        const int x = (clientWidth-fitW)/2;
+        const int y = (clientHeight-fitH)/2;
+        MoveWindow(magnifier,x,y,fitW,fitH,TRUE);
         return 0;
+    }
     case WM_TIMER:
         refresh();
         return 0;
