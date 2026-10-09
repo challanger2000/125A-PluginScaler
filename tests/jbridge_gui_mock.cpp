@@ -136,6 +136,15 @@ int main() {
                 L"Unrelated overlay", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 110, 115, 300, 230, nullptr, nullptr, instance, &second);
             if (occluder) {
+                // Ensure the occluder actually covers the source pixel; an
+                // occlusion test that never overlaps is a false PASS.
+                RECT occlusion{}, original{};
+                GetWindowRect(occluder,&occlusion);
+                GetWindowRect(a,&original);
+                RECT intersection{};
+                const bool overlaps = IntersectRect(&intersection,
+                    &occlusion,&original) != FALSE;
+                if (!overlaps) imagePassed = false;
                 SetWindowPos(occluder, HWND_TOP, 110,115,300,230,
                              SWP_SHOWWINDOW);
                 SetWindowPos(scaled, HWND_TOP, 0,0,0,0,
