@@ -26,6 +26,23 @@ struct Patch {
 Patch patches[3]{};
 unsigned patchCount{};
 bool patched=false;
+bool restoreOriginalImports();
+bool pro53WindowProc(HINSTANCE instance,LPCWSTR className) {
+    WNDCLASSEXW klass{};
+    klass.cbSize=sizeof(klass);
+    if(!GetClassInfoExW(instance,className,&klass)||!klass.lpfnWndProc)
+        return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if(!VirtualQuery(reinterpret_cast<const void*>(klass.lpfnWndProc),&mbi,sizeof(mbi)) ||
+       mbi.Type!=MEM_IMAGE) return false;
+    wchar_t module[MAX_PATH]{};
+    if(!GetModuleFileNameW(reinterpret_cast<HMODULE>(mbi.AllocationBase),
+                           module,MAX_PATH))return false;
+    const wchar_t* name=wcsrchr(module,L'\\');
+    name=name?name+1:module;
+    return _wcsicmp(name,L"Pro-53.dll")==0;
+}
+
 void transformDC(HDC dc) {
     if(!dc||zoom<100||zoom>200)return;
     SetMapMode(dc,MM_ANISOTROPIC);
@@ -147,8 +164,14 @@ bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className) {
             }
         }
     }
-    patched=patchCount>0&&!failed;
-    return patched;
+    if(failed||!patchCount){
+        // Restore every successful import replacement if a later patch
+        // fails. Never leave a proprietary renderer half-hooked.
+        if(patchCount){patched=true;restoreOriginalImports();}
+        return false;
+    }
+    patched=true;
+    return true;
 }
 NativeScaleState* mapState(HANDLE& mapping) {
     wchar_t name[192]{};
@@ -206,10 +229,12 @@ void attachToAlreadyOpenEditor() {
         if(!restoreOriginalImports()) {
             InterlockedExchange(&command->status,-5);
         } else {
-            const BOOL sized=SetWindowPos(target,nullptr,0,0,
-                logicalWidth,logicalHeight,
-                SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
-            InvalidateRect(target,nullptr,FALSE);
+            const BOOL sized=!IsWindow(target) ||
+                SetWindowPos(target,nullptr,0,0,
+                    command->originalOuterWidth ? command->originalOuterWidth : logicalWidth,
+                    command->originalOuterHeight ? command->originalOuterHeight : logicalHeight,
+                    SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+            if(IsWindow(target))InvalidateRect(target,nullptr,FALSE);
             target=nullptr;
             zoom=100;
             InterlockedExchange(&command->status,sized?2:-6);
@@ -222,15 +247,27 @@ void attachToAlreadyOpenEditor() {
         const DWORD tid=GetWindowThreadProcessId(hwnd,&pid);
         const LONG factor=InterlockedCompareExchange(&command->scale,0,0);
         wchar_t klass[192]{};
+        const LONG kind=InterlockedCompareExchange(&command->targetKind,0,0);
+        wchar_t exe[MAX_PATH]{};
+        GetModuleFileNameW(nullptr,exe,MAX_PATH);
+        const wchar_t* exeName=wcsrchr(exe,L'\\');
+        exeName=exeName?exeName+1:exe;
+        const bool realAuxhost=(_wcsicmp(exeName,L"auxhost.exe")==0 ||
+                                _wcsicmp(exeName,L"gauxhost.exe")==0);
         if(!IsWindow(hwnd)||pid!=GetCurrentProcessId()||
            tid!=GetCurrentThreadId()||(factor!=150&&factor!=200)||
            !GetClassNameW(hwnd,klass,192)||
-           std::wcscmp(klass,kNativeScaleEditorClass)!=0) {
+           !((kind==0 && std::wcscmp(klass,kNativeScaleEditorClass)==0) ||
+             (kind==1 && realAuxhost &&
+              pro53WindowProc(reinterpret_cast<HINSTANCE>(
+                  GetWindowLongPtrW(hwnd,GWLP_HINSTANCE)),klass)))) {
             InterlockedExchange(&command->status,-1);
         } else {
-            RECT client{};
-            if(!GetClientRect(hwnd,&client)||client.right<=0||
-               client.bottom<=0) {
+            RECT client{},outer{};
+            if(!GetClientRect(hwnd,&client)||!GetWindowRect(hwnd,&outer)||
+               client.right<=0||client.bottom<=0||
+               (kind==1 && (client.right<300 || client.bottom<160 ||
+                             client.right>1600 || client.bottom>1200))) {
                 InterlockedExchange(&command->status,-2);
             } else {
                 logicalWidth=client.right;
@@ -239,19 +276,30 @@ void attachToAlreadyOpenEditor() {
                 target=hwnd;
                 const auto module=reinterpret_cast<HINSTANCE>(
                     GetWindowLongPtrW(hwnd,GWLP_HINSTANCE));
-                if(!patchEditorModuleIAT(module,klass)) {
+                const bool compatible=patchEditorModuleIAT(module,klass);
+                if(!compatible ||
+                   (kind==1 && (!originalBeginPaint||!originalSetDIBits))) {
+                    if(patched)restoreOriginalImports();
                     target=nullptr;
                     InterlockedExchange(&command->status,-3);
                 } else if(!SetWindowPos(hwnd,nullptr,0,0,
-                              MulDiv(logicalWidth,zoom,100),
-                              MulDiv(logicalHeight,zoom,100),
+                              MulDiv(logicalWidth,zoom,100)+
+                                  (outer.right-outer.left-client.right),
+                              MulDiv(logicalHeight,zoom,100)+
+                                  (outer.bottom-outer.top-client.bottom),
                               SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)) {
+                    if(patched)restoreOriginalImports();
+                    target=nullptr;
                     InterlockedExchange(&command->status,-4);
                 } else {
                     InterlockedExchange(&command->dibImported,originalSetDIBits?1:0);
                     InterlockedExchange(&command->beginImported,originalBeginPaint?1:0);
                     InterlockedExchange(&command->originalWidth,logicalWidth);
                     InterlockedExchange(&command->originalHeight,logicalHeight);
+                    InterlockedExchange(&command->originalOuterWidth,
+                        outer.right-outer.left);
+                    InterlockedExchange(&command->originalOuterHeight,
+                        outer.bottom-outer.top);
                     InvalidateRect(hwnd,nullptr,FALSE);
                     InterlockedExchange(&command->status,1);
                 }
@@ -300,6 +348,10 @@ LRESULT CALLBACK NativeMouseHook(int code,WPARAM wp,LPARAM lp) {
         if(message && message->hwnd==target &&
            (message->message==WM_LBUTTONDOWN ||
             message->message==WM_LBUTTONUP ||
+            message->message==WM_RBUTTONDOWN ||
+            message->message==WM_RBUTTONUP ||
+            message->message==WM_MBUTTONDOWN ||
+            message->message==WM_MBUTTONUP ||
             message->message==WM_MOUSEMOVE)) {
             // Modify only the native target's queued client mouse coordinates.
             // Leave real mouse capture/focus/window ownership untouched.

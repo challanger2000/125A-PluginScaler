@@ -30,4 +30,7 @@ struct NativeAttachCommand {
     volatile LONG detach;
     volatile LONG dibImported;
     volatile LONG beginImported;
+    volatile LONG targetKind; // 0=controlled mock, 1=original Pro-53.dll only
+    volatile LONG originalOuterWidth;
+    volatile LONG originalOuterHeight;
 };
