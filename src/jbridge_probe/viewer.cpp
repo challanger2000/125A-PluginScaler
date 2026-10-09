@@ -77,6 +77,30 @@ HWND locateSource() {
     return candidate.hwnd;
 }
 
+// The magnification control fills the whole viewer. It is the actual mouse
+// hit target, so route its input to our owning window in this process.
+WNDPROC originalMagnifierProc = nullptr;
+
+LRESULT CALLBACK magnifierInputProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_MOUSEMOVE:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP: {
+        POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        MapWindowPoints(hwnd, viewer, &point, 1);
+        return SendMessageW(viewer, msg, wp, MAKELPARAM(point.x, point.y));
+    }
+    default:
+        break;
+    }
+    return CallWindowProcW(originalMagnifierProc, hwnd, msg, wp, lp);
+}
+
 void refresh() {
     if (!IsWindow(source)) {
         KillTimer(viewer, refreshTimer);
@@ -98,6 +122,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                   0, 0, 100, 100, hwnd, nullptr,
                                   GetModuleHandleW(nullptr), nullptr);
         if (!magnifier) return -1;
+        SetLastError(0);
+        originalMagnifierProc = reinterpret_cast<WNDPROC>(
+            SetWindowLongPtrW(magnifier, GWLP_WNDPROC,
+                              reinterpret_cast<LONG_PTR>(&magnifierInputProc)));
+        if (!originalMagnifierProc && GetLastError() != 0)
+            return -1;
         MAGTRANSFORM transform{};
         transform.v[0][0] = transform.v[1][1] = percent / 100.0f;
         transform.v[2][2] = 1.0f;
