@@ -252,7 +252,16 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_RBUTTONDOWN:
     case WM_RBUTTONUP: {
         if (!IsWindow(source)) return 0;
-        const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        POINT origin{0,0};
+        if (!magnifier || !IsWindow(magnifier) ||
+            !ClientToScreen(magnifier, &origin) ||
+            !ScreenToClient(hwnd, &origin)) return 0;
+        const int x = GET_X_LPARAM(lp)-origin.x;
+        const int y = GET_Y_LPARAM(lp)-origin.y;
+        RECT surface{};
+        GetClientRect(magnifier,&surface);
+        if (!dragging && (x < 0 || y < 0 ||
+             x >= surface.right || y >= surface.bottom)) return 0;
         POINT screen{sourceRect.left + MulDiv(x,100,percent),
                      sourceRect.top + MulDiv(y,100,percent)};
         if (msg == WM_LBUTTONDOWN) {
