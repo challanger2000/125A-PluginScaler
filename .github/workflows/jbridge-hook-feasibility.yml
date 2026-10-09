@@ -21,9 +21,14 @@ jobs:
       - name: Build only hook and cross-process mock
         shell: pwsh
         run: |
-          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke
+          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke
       - name: Test two independent native 32-bit editor threads
         shell: pwsh
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerJBridgeHookSmoke.exe"
           if ($LASTEXITCODE -ne 0) { throw "Cross-process HWND hook injection FAILED" }
+      - name: Measure native GDI pixels and actual mouse drags at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeGdiScaleSmoke.exe"
+          if ($LASTEXITCODE -ne 0) { throw "150/200 percent GDI rendering or native mouse gate FAILED" }

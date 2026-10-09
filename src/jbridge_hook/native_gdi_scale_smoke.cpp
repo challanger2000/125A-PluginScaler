@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 
 namespace {

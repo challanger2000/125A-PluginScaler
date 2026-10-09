@@ -9,3 +9,7 @@ set_target_properties(PluginScalerJBridgeCbtHook PROPERTIES
 add_executable(PluginScalerJBridgeHookSmoke hook_smoke.cpp)
 target_compile_features(PluginScalerJBridgeHookSmoke PRIVATE cxx_std_20)
 target_link_libraries(PluginScalerJBridgeHookSmoke PRIVATE user32)
+
+add_executable(PluginScalerNativeGdiScaleSmoke native_gdi_scale_smoke.cpp)
+target_compile_features(PluginScalerNativeGdiScaleSmoke PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerNativeGdiScaleSmoke PRIVATE user32 gdi32)
