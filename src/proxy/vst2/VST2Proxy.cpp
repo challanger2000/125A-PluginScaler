@@ -1773,7 +1773,12 @@ VstIntPtr __cdecl dispatcher(AEffect* effect, VstInt32 opcode, VstInt32 index,
         if (!inst->bridgeStarted || inst->controlPipe == INVALID_HANDLE_VALUE)
             return 1;
 
-        if ((inst->settings.directEditor || inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
+        // Direct mode deliberately keeps the real legacy editor parented to
+        // the helper-owned container for its entire lifetime. The x64 proxy
+        // must never touch that foreign x86 HWND during close; doing so can
+        // synchronously block across the process boundary. The helper closes
+        // the plugin editor and destroys its container on its own GUI thread.
+        if ((inst->settings.magEditor || inst->settings.graphicsEditor || inst->settings.gdiEditor) &&
             inst->editorWindow && IsWindow(inst->editorWindow) &&
             inst->editorSurrogate && IsWindow(inst->editorSurrogate)) {
             ShowWindow(inst->editorWindow, SW_HIDE);
