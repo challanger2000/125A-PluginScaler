@@ -254,6 +254,7 @@ int wmain(int argc, wchar_t** argv) {
 
         std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << std::endl;
         std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-stage=open-complete" << std::endl;
 
         if (ok && surface) {
             DWORD_PTR mouseResult = 0;
@@ -261,8 +262,11 @@ int wmain(int argc, wchar_t** argv) {
                                 SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
             SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40),
                                 SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
-            RedrawWindow(surface, nullptr, nullptr,
-                         RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            InvalidateRect(surface, nullptr, FALSE);
+            DWORD_PTR paintResult = 0;
+            SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                &paintResult);
 
             HDC dc = GetDC(surface);
             const COLORREF mappedPixel = GetPixel(dc, 50, 40);
@@ -274,6 +278,7 @@ int wmain(int argc, wchar_t** argv) {
                 GetGValue(mappedPixel) > 170 &&
                 GetBValue(mappedPixel) < 120;
             std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << std::endl;
+            std::cout << "editor-stage=mouse-complete" << std::endl;
             ok = ok && mappingOk;
 
             if (ok) {
@@ -284,8 +289,11 @@ int wmain(int argc, wchar_t** argv) {
                                     SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
                 SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20),
                                     SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
-                RedrawWindow(surface, nullptr, nullptr,
-                             RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+                InvalidateRect(surface, nullptr, FALSE);
+                DWORD_PTR dragPaintResult = 0;
+                SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                    &dragPaintResult);
 
                 HDC dragDc = GetDC(surface);
                 const COLORREF dragPixel = GetPixel(dragDc, 140, 100);
@@ -297,6 +305,7 @@ int wmain(int argc, wchar_t** argv) {
                     GetGValue(dragPixel) > 170 &&
                     GetBValue(dragPixel) < 100;
                 std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << std::endl;
+                std::cout << "editor-stage=drag-complete" << std::endl;
                 ok = ok && dragOk;
             }
         }
@@ -307,6 +316,7 @@ int wmain(int argc, wchar_t** argv) {
         Sleep(50);
         ok = ok && childCount(editorHost) == 0;
         std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-stage=close-complete" << std::endl;
     }
     if (editorHost)
         DestroyWindow(editorHost);
