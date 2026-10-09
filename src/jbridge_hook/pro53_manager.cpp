@@ -221,7 +221,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,LPWSTR args,int){
     WNDCLASSW klass{};
     klass.lpfnWndProc=wndProc;klass.hInstance=h;
     klass.lpszClassName=L"125A.Pro53.Manager";
-    klass.hCursor=LoadCursorA(nullptr,IDC_ARROW);
+    klass.hCursor=LoadCursorW(nullptr,IDC_ARROW);
     if(!RegisterClassW(&klass)){cleanupDll();return 3;}
     view=CreateWindowW(klass.lpszClassName,L"125A PluginScaler - Pro-53",
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
