@@ -19,6 +19,8 @@
 namespace {
 constexpr wchar_t kClass[] = L"125A.JBridgeScaler.Viewer";
 HWND viewer{}, magnifier{}, source{};
+DWORD sourcePid{};
+DWORD sourceThread{};
 RECT sourceRect{};
 int percent = 150;
 bool dragging = false;
@@ -102,9 +104,9 @@ HWND locateSource() {
     // Standard USER32 dialog: compatible with Windows systems that do not
     // export TaskDialogIndirect from ComCtl32 (ordinal 345).
     for (std::size_t i = 0; i < labels.size(); ++i) {
-        std::wstring question = L"Dieses Plugin skalieren?\\n\\n";
+        std::wstring question = L"Dieses Plugin skalieren?\n\n";
         question += labels[i];
-        question += L"\\n\\nJa = auswaehlen, Nein = naechstes, Abbrechen = beenden.";
+        question += L"\n\nJa = auswaehlen, Nein = naechstes, Abbrechen = beenden.";
         const int answer = MessageBoxW(nullptr, question.c_str(),
             L"125A PluginScaler - Pluginauswahl",
             MB_YESNOCANCEL | MB_ICONQUESTION | MB_TOPMOST);
@@ -139,7 +141,11 @@ LRESULT CALLBACK magnifierInputProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 void refresh() {
-    if (!IsWindow(source)) {
+    DWORD currentPid{};
+    const DWORD currentThread = IsWindow(source) ?
+        GetWindowThreadProcessId(source, &currentPid) : 0;
+    if (!currentThread || currentPid != sourcePid ||
+        currentThread != sourceThread) {
         KillTimer(viewer, refreshTimer);
         MessageBoxW(viewer, L"Das jBridge-Plugin-Fenster wurde geschlossen.",
                     L"125A PluginScaler", MB_OK | MB_ICONINFORMATION);
@@ -271,7 +277,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         source = locateSource();
     }
     if (argv) LocalFree(argv);
-    if (!source) {
+    if (source)
+        sourceThread = GetWindowThreadProcessId(source, &sourcePid);
+    if (!source || !sourceThread) {
         MessageBoxW(nullptr, L"Kein sichtbares jBridge-Plugin gefunden. "
                     L"Plugin in Studio One oeffnen und erneut starten.",
                     L"125A PluginScaler", MB_OK | MB_ICONINFORMATION);
