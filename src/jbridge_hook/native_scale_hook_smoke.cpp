@@ -257,6 +257,10 @@ int wmain(int argc,wchar_t** argv) {
                 Sleep(90);
                 const bool restored=t.attach->status==2&&checkPixels(hwnd,100);
                 InterlockedExchange(&t.state->scale,100);
+                // Ignore input already queued under the preceding 150/200% mode.
+                // Assert native coordinates only after the original mode settles.
+                Sleep(200);
+                InterlockedExchange(&t.state->mismatch,0);
                 const bool clicked=restored&&injectInput(hwnd);
                 Sleep(60);
                 const bool inputBack=clicked&&t.state->mouseDown==2 &&
