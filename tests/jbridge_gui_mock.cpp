@@ -118,8 +118,10 @@ int main() {
                 L"Unrelated overlay", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 110, 115, 300, 230, nullptr, nullptr, instance, &second);
             if (occluder) {
-                SetWindowPos(occluder, HWND_TOPMOST, 110,115,300,230,
+                SetWindowPos(occluder, HWND_TOP, 110,115,300,230,
                              SWP_SHOWWINDOW);
+                SetWindowPos(scaled, HWND_TOP, 0,0,0,0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                 for (int n=0;n<30;++n) {
                     MSG pending{};
                     while (PeekMessageW(&pending,nullptr,0,0,PM_REMOVE)) {
