@@ -24,3 +24,20 @@ The standalone jBridge viewer can launch and its Windows mock tests pass, but th
 ### Engineering decision
 
 **Current Magnification + synthetic posted mouse messages is a prototype, not a proven universal solution.** Do not keep patching it toward a universal compatibility claim without demonstrating an alternative native input/capture path on representative legacy GUI behaviors. Build/test jobs should be run against meaningful acceptance gates, not for trivial refactors. Pro-53 and FM7 acceptance ultimately requires their original binaries and user-side validation.
+
+## Alternative architecture candidate: per-window Windows Graphics Capture
+
+Microsoft-supported `IGraphicsCaptureItemInterop::CreateForWindow(HWND,...)` captures a particular window (Windows 10 1903+), unlike Magnification's desktop rectangle. Evaluate as the primary rendered-frame source, not as an automatic mouse fix. GPU D3D11/WinRT frame pool required; child HWND capture must be validated rather than assumed. Cropping, source resize, occlusion, DPI and secure/protected content require tests.
+
+**Input acceptance remains independent:** test against a mock editor using `GetCursorPos`, `SetCapture`, keyboard focus and native hit testing. Passing posted `WM_MOUSE*` messages is explicitly insufficient. MagSetInputTransform is not a general substitute: Microsoft documents UIAccess privileges and screen-wide transformation semantics.
+
+**Native DPI alternative:** test only when we control the 32-bit editor process *before window creation*; do not promise retroactive change to jBridge's already-running auxhost, and do not modify or redistribute jBridge binaries.
+
+### Decision gates before building a new product path
+
+1. Minimal WGC HWND frame acquisition test (single legacy-mock editor), including real occlusion by contrasting overlay and content changing after resize.
+2. Separate mouse drag/capture test with a mock that explicitly compares real cursor coordinates against dispatched messages. Failure is expected with current PostMessage-only forwarding.
+3. If window capture is successful, prototype a native-input strategy with measured behavior (not a mock that only accepts posted clicks). Maintain independent instance contexts.
+4. If no reliable input strategy emerges under the single-EXE, already-open-jBridge constraint, mark that deployment mode unsupported rather than repeatedly declaring CI success.
+
+Sources: https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow and https://learn.microsoft.com/en-us/windows/win32/api/magnification/nf-magnification-magsetinputtransform
