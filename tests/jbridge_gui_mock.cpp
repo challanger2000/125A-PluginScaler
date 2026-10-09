@@ -36,7 +36,8 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     return DefWindowProcW(hwnd,msg,w,l);
 }
-int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
+int main() {
+    HINSTANCE instance=GetModuleHandleW(nullptr);
     WNDCLASSW wc{};wc.hInstance=instance;wc.lpfnWndProc=editorProc;
     wc.lpszClassName=L"125A.MockLegacyEditor";RegisterClassW(&wc);
     Editor first{},second{};
