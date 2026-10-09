@@ -112,6 +112,31 @@ int main() {
             const COLORREF pixel=GetPixel(desktop,sample.x,sample.y);
             ReleaseDC(nullptr,desktop);
             imagePassed = (pixel==RGB(33,39,46));
+            // Regression: unrelated windows overlapping the original editor
+            // must never replace the editor's pixels in the scaled viewer.
+            HWND occluder = CreateWindowW(wc.lpszClassName,
+                L"Unrelated overlay", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                110, 115, 300, 230, nullptr, nullptr, instance, &second);
+            if (occluder) {
+                SetWindowPos(occluder, HWND_TOPMOST, 110,115,300,230,
+                             SWP_SHOWWINDOW);
+                for (int n=0;n<30;++n) {
+                    MSG pending{};
+                    while (PeekMessageW(&pending,nullptr,0,0,PM_REMOVE)) {
+                        TranslateMessage(&pending);DispatchMessageW(&pending);
+                    }
+                    Sleep(20);
+                }
+                HDC current=GetDC(nullptr);
+                COLORREF pixelOccluded=GetPixel(current,sample.x,sample.y);
+                ReleaseDC(nullptr,current);
+                const bool occlusionPassed=(pixelOccluded==RGB(33,39,46));
+                std::printf("viewer-window-occlusion=%s\\n",
+                            occlusionPassed?"PASS":"FAIL");
+                imagePassed = imagePassed && occlusionPassed;
+                DestroyWindow(occluder);
+                SetForegroundWindow(scaled);
+            } else imagePassed=false;
             std::printf("viewer-150pct-image=%s (pixel=%lu)\\n",
                         imagePassed?"PASS":"FAIL",static_cast<unsigned long>(pixel));
             RECT client{};GetClientRect(scaled,&client);
