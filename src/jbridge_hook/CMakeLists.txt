@@ -31,7 +31,7 @@ target_link_libraries(PluginScalerMockLegacyRenderer PRIVATE user32 gdi32)
 set_target_properties(PluginScalerMockLegacyRenderer PROPERTIES OUTPUT_NAME "PluginScalerMockLegacyRenderer-x86")
 
 # Portable one-EXE delivery: native x86 hook is a binary Win32 resource.
-set(_native_rc "${CMAKE_CURRENT_BINARY_DIR}/pro53_embedded_hook.rc")
+set(_native_rc "${CMAKE_CURRENT_BINARY_DIR}/pro53_embedded_hook_$<CONFIG>.rc")
 file(GENERATE OUTPUT "${_native_rc}"
      CONTENT "101 RCDATA \"$<TARGET_FILE:PluginScalerNativeScaleHook>\"\n")
 add_executable(PluginScalerPro53 WIN32 pro53_manager.cpp "${_native_rc}")
