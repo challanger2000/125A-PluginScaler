@@ -223,6 +223,20 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (!MagSetWindowTransform(magnifier, &transform)) return -1;
         HWND exclude[] = { hwnd };
         MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE, 1, exclude);
+        // WM_SIZE can arrive before this child exists. Explicitly size the
+        // magnifier after creation so the first frame covers the full editor.
+        RECT clientBounds{};
+        GetClientRect(hwnd, &clientBounds);
+        const int naturalW = sourceRect.right-sourceRect.left;
+        const int naturalH = sourceRect.bottom-sourceRect.top;
+        const int scaledW = MulDiv(naturalW, percent, 100);
+        const int scaledH = MulDiv(naturalH, percent, 100);
+        if (naturalW <= 0 || naturalH <= 0 || scaledW <= 0 || scaledH <= 0)
+            return -1;
+        MoveWindow(magnifier,
+                   (clientBounds.right-scaledW)/2,
+                   (clientBounds.bottom-scaledH)/2,
+                   scaledW, scaledH, TRUE);
         SetTimer(hwnd, refreshTimer, 30, nullptr);
         return 0;
     }
