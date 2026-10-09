@@ -2,6 +2,7 @@
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 #include <tlhelp32.h>
 #include <magnification.h>
 #include <algorithm>
