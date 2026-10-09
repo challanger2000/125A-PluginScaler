@@ -77,7 +77,9 @@ std::vector<ProcessInfo> findJBridgeProcesses() {
             const std::wstring image = entry.szExeFile;
             const auto normalized = lower(image);
             if (normalized == L"auxhost.exe" ||
-                normalized == L"auxhost64.exe") {
+                normalized == L"auxhost64.exe" ||
+                normalized == L"gauxhost.exe" ||
+                normalized == L"gauxhost64.exe") {
                 result.push_back({entry.th32ProcessID, image});
             }
         } while (Process32NextW(snapshot, &entry));
