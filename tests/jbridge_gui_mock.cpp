@@ -177,6 +177,8 @@ int main() {
             move.mi.dx=12;move.mi.dy=15;
             INPUT up{};up.type=INPUT_MOUSE;up.mi.dwFlags=MOUSEEVENTF_LEFTUP;
             const int before=first.down;
+            const int beforeUp=first.up;
+            const int beforeMove=first.move;
             for(const INPUT input:{down,move,up}) {
                 INPUT copy=input;
                 SendInput(1,&copy,sizeof(copy));
@@ -188,8 +190,9 @@ int main() {
                     Sleep(10);
                 }
             }
-            viewerPassed=imagePassed && first.down>before && first.up>0 &&
-                !first.drag && second.down==0;
+            viewerPassed=imagePassed && first.down>before &&
+                first.up>beforeUp && first.move>beforeMove &&
+                !first.drag && second.down==0 && second.up==0;
         }
         TerminateProcess(proc.hProcess,0);
         WaitForSingleObject(proc.hProcess,1000);
