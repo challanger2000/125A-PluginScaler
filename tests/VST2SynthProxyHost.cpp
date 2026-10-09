@@ -317,6 +317,30 @@ int wmain(int argc, wchar_t** argv) {
         ok = ok && childCount(editorHost) == 0;
         std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << std::endl;
         std::cout << "editor-stage=close-complete" << std::endl;
+
+        // A fresh editor must reopen after the helper-owned container was
+        // detached and destroyed. Catch stale HWND/container ownership.
+        if (ok) {
+            std::cout << "editor-stage=reopen-start" << std::endl;
+            const auto reopened = effect->dispatcher(
+                effect, EffEditOpen, 0, 0, editorHost, 0.0f);
+            HWND reopenedSurface = findDescendantByClass(
+                editorHost, L"125A_MockVST2SynthEditor");
+            const bool reopenOk = reopened != 0 &&
+                                  reopenedSurface != nullptr &&
+                                  childCount(editorHost) >= 1;
+            std::cout << "editor-reopen=" << (reopenOk ? "PASS" : "FAIL") << std::endl;
+            ok = ok && reopenOk;
+            if (reopened) {
+                const bool closedAgain = effect->dispatcher(
+                    effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
+                Sleep(50);
+                const bool clean = closedAgain && childCount(editorHost) == 0;
+                std::cout << "editor-reclose=" << (clean ? "PASS" : "FAIL") << std::endl;
+                ok = ok && clean;
+            }
+            std::cout << "editor-stage=reopen-complete" << std::endl;
+        }
     }
     if (editorHost)
         DestroyWindow(editorHost);
