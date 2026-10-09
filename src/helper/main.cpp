@@ -969,12 +969,12 @@ LRESULT CALLBACK gdiScaledEditorProc(
     const WNDPROC original = state->original;
     const LRESULT result = CallWindowProcA(original, hwnd, msg, wp, lp);
 
-    // Pro-53 frequently repaints only tiny dirty rectangles after mouse input.
-    // The legacy SetDIBitsToDevice source-rectangle semantics do not map
-    // cleanly to our scaled StretchDIBits path, which can leave keys/knobs
-    // visually frozen even when the control itself reacted. Request a full
-    // editor repaint after real mouse interaction so the already-proven
-    // 762x358 -> 1143x537 full-frame path refreshes the visible state.
+    // The legacy SetDIBitsToDevice partial-redraw semantics do not map
+    // cleanly onto the scaled full-frame rendering path. Invalidate after
+    // interaction, but NEVER call UpdateWindow synchronously from inside the
+    // plugin's mouse WndProc: that re-enters its WM_PAINT/GDI hooks during a
+    // drag and can stall the editor or host. Windows will coalesce pending
+    // invalidations and dispatch WM_PAINT after mouse handling returns.
     switch (msg) {
     case WM_LBUTTONDOWN:
     case WM_LBUTTONUP:
@@ -983,10 +983,8 @@ LRESULT CALLBACK gdiScaledEditorProc(
     case WM_MBUTTONDOWN:
     case WM_MBUTTONUP:
     case WM_MOUSEMOVE:
-        if (state->leftDrag || msg != WM_MOUSEMOVE) {
+        if (state->leftDrag || msg != WM_MOUSEMOVE)
             InvalidateRect(hwnd, nullptr, FALSE);
-            UpdateWindow(hwnd);
-        }
         break;
     default:
         break;
