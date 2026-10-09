@@ -24,6 +24,7 @@ DWORD sourceThread{};
 RECT sourceRect{};
 int percent = 150;
 bool dragging = false;
+HWND mouseTarget{};
 UINT_PTR refreshTimer = 1;
 
 bool jbridgePid(DWORD pid) {
@@ -189,6 +190,20 @@ void refresh() {
     MagSetWindowSource(magnifier, sourceRect);
 }
 
+// Route to the deepest enabled editor child that really occupies the point.
+// Keep the same recipient throughout a drag even when the pointer moves.
+HWND hitTestEditor(POINT screen) {
+    HWND current = source;
+    for (int depth = 0; depth < 32; ++depth) {
+        POINT local = screen;
+        if (!ScreenToClient(current, &local)) break;
+        HWND child = RealChildWindowFromPoint(current, local);
+        if (!child || child == current || !IsWindow(child)) break;
+        current = child;
+    }
+    return current;
+}
+
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -222,30 +237,36 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE:
     case WM_RBUTTONDOWN:
     case WM_RBUTTONUP: {
+        if (!IsWindow(source)) return 0;
+        const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        POINT screen{sourceRect.left + MulDiv(x,100,percent),
+                     sourceRect.top + MulDiv(y,100,percent)};
         if (msg == WM_LBUTTONDOWN) {
+            mouseTarget = hitTestEditor(screen);
             SetCapture(hwnd);
             dragging = true;
         }
-        if (!IsWindow(source)) return 0;
-        const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-        POINT mapped{sourceRect.left + MulDiv(x,100,percent),
-                     sourceRect.top + MulDiv(y,100,percent)};
-        ScreenToClient(source, &mapped);
+        HWND target = dragging && IsWindow(mouseTarget) ? mouseTarget
+                        : hitTestEditor(screen);
+        if (!IsWindow(target)) return 0;
+        POINT mapped = screen;
+        if (!ScreenToClient(target, &mapped)) return 0;
         const LPARAM coordinates = MAKELPARAM(static_cast<short>(mapped.x),
                                                static_cast<short>(mapped.y));
         WPARAM buttons = wp;
         if (dragging && msg == WM_MOUSEMOVE) buttons |= MK_LBUTTON;
-        // Post rather than Send: an unresponsive legacy window must never
-        // block this viewer's own UI thread.
-        PostMessageW(source, msg, buttons, coordinates);
+        // Avoid blocking the GUI if an old plugin stops responding.
+        PostMessageW(target, msg, buttons, coordinates);
         if (msg == WM_LBUTTONUP) {
             dragging = false;
+            mouseTarget = nullptr;
             if (GetCapture() == hwnd) ReleaseCapture();
         }
         return 0;
     }
     case WM_CAPTURECHANGED:
         dragging = false;
+        mouseTarget = nullptr;
         return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
