@@ -47,10 +47,19 @@ int main() {
         setThread(previous);
         ++index;
     }
-    std::printf("native-dpi-precreation=%s\n",ok==3?"PASS":"FAIL");
+    std::printf("native-dpi-precreation=%s\\n",ok==3?"PASS":"FAIL");
     const bool changed=observedDpi[0]!=observedDpi[1] || observedDpi[1]!=observedDpi[2];
     std::printf("different-dpi-from-context-alone=%s values=%u,%u,%u\\n",
                 changed?"YES":"NO",observedDpi[0],observedDpi[1],observedDpi[2]);
-    std::puts("note=An awareness context is not a way to assign an arbitrary 144/192 DPI to a window.");
-    return ok==3?0:4;
+    // An actual 150% gate requires a display whose DPI is 144 (or above).
+    // Do not report success on a 96-DPI hosted CI desktop.
+    const bool usableMonitor = observedDpi[2] >= 144;
+    std::printf("native-150-percent-display-gate=%s (monitor=%u DPI)\\n",
+                usableMonitor ? "AVAILABLE" : "BLOCKED", observedDpi[2]);
+    if (!usableMonitor) {
+        std::puts("RESULT=INCONCLUSIVE: no 150 percent DPI display in test environment");
+        return 42;
+    }
+    std::puts("RESULT=DISPLAY_DPI_AVAILABLE: rendered legacy editor scaling still unverified");
+    return ok==3 ? 0 : 4;
 }
