@@ -1,5 +1,6 @@
 #include "smoke_shared.h"
 #include <cstdint>
+#include <iterator>
 
 extern "C" __declspec(dllexport)
 LRESULT CALLBACK HookProc(int code, WPARAM wp, LPARAM lp) {

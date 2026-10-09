@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -86,7 +87,7 @@ void cleanup(Instance& x) {
     if (x.state) UnmapViewOfFile(x.state);
     if (x.mapping) CloseHandle(x.mapping);
 }
-int main() {
+int controllerProcess() {
     wchar_t file[MAX_PATH]{};
     if (!GetModuleFileNameW(nullptr, file, MAX_PATH)) return 2;
     std::wstring dir = file;
@@ -179,5 +180,5 @@ int main() {
 }
 int wmain(int argc, wchar_t**) {
     if (argc==2) return childProcess();
-    return main();
+    return controllerProcess();
 }
