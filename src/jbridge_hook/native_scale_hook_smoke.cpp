@@ -20,7 +20,7 @@ void pump(int duration) {
         Sleep(5);
     }
 }
-int child(bool alreadyOpen) {
+int child(bool alreadyOpen,int slot) {
     wchar_t name[192]{};
     if(!GetEnvironmentVariableW(kNativeScaleMapName,name,192))return 11;
     HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name);
@@ -59,7 +59,7 @@ int child(bool alreadyOpen) {
     if(!RegisterClassW(&wc))return 15;
     // The original renderer is completely unaware of any scaling.
     HWND hwnd=CreateWindowExW(0,kNativeScaleEditorClass,L"Unscaled original",
-       WS_POPUP|WS_VISIBLE,GetCurrentProcessId()%2 ? 70:530,100,
+       WS_POPUP|WS_VISIBLE,slot==0 ? 70:530,100,
        kLogicalWidth,kLogicalHeight,nullptr,nullptr,wc.hInstance,nullptr);
     if(!hwnd)return 16;
     ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
@@ -134,8 +134,8 @@ bool checkPixels(HWND hwnd,int zoom) {
 }
 }
 int wmain(int argc,wchar_t** argv) {
-    if(argc>1 && wcscmp(argv[1],L"--child")==0)return child(false);
-    if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)return child(true);
+    if(argc>1 && wcscmp(argv[1],L"--child")==0)return child(false,argc>2?_wtoi(argv[2]):0);
+    if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)return child(true,argc>2?_wtoi(argv[2]):0);
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr,exe,MAX_PATH);
@@ -162,7 +162,7 @@ int wmain(int argc,wchar_t** argv) {
         t.state->scale=(i==0 ? 150 : 200);
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
         std::wstring command=L"\""+std::wstring(exe)+
-            (alreadyOpen ? L"\" --child-existing" : L"\" --child");
+            (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+std::to_wstring(i);
         std::vector<wchar_t> cmd(command.begin(),command.end());
         cmd.push_back(0);
         STARTUPINFOW si{};si.cb=sizeof(si);
@@ -261,9 +261,9 @@ int wmain(int argc,wchar_t** argv) {
                 Sleep(60);
                 const bool inputBack=clicked&&t.state->mouseDown==2 &&
                       t.state->mouseUp==2&&t.state->mismatch==0;
-                std::printf("already-open-detach-restore-%ld=%s status=%ld originalPixels=%d originalMouse=%d\n",
+                std::printf("already-open-detach-restore-%ld=%s status=%ld originalPixels=%d originalMouse=%d down=%ld up=%ld mismatch=%ld\n",
                    t.attach->scale,(restored&&inputBack)?"PASS":"FAIL",
-                   t.attach->status,int(restored),int(inputBack));
+                   t.attach->status,int(restored),int(inputBack),t.state->mouseDown,t.state->mouseUp,t.state->mismatch);
                 ok &= restored&&inputBack;
             }
         }
