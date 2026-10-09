@@ -37,9 +37,10 @@ LRESULT CALLBACK originalEditor(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     if(msg==WM_LBUTTONDOWN||msg==WM_MOUSEMOVE||msg==WM_LBUTTONUP) {
         const int logicalX=GET_X_LPARAM(lp),logicalY=GET_Y_LPARAM(lp);
-        POINT physical{};
-        if(GetCursorPos(&physical)) {
-            ScreenToClient(hwnd,&physical);
+        const DWORD messagePosition=GetMessagePos();
+        POINT physical{GET_X_LPARAM(static_cast<LPARAM>(messagePosition)),
+                       GET_Y_LPARAM(static_cast<LPARAM>(messagePosition))};
+        if(ScreenToClient(hwnd,&physical)) {
             const LONG scale=InterlockedCompareExchange(&state->scale,0,0);
             const int expectedX=MulDiv(physical.x,100,scale);
             const int expectedY=MulDiv(physical.y,100,scale);

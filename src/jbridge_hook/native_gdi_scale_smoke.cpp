@@ -48,9 +48,10 @@ LRESULT CALLBACK editorWnd(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         return 0;
     }
     if(msg==WM_LBUTTONDOWN||msg==WM_MOUSEMOVE||msg==WM_LBUTTONUP) {
-        POINT screen{};
-        if(GetCursorPos(&screen)) {
-            ScreenToClient(hwnd,&screen);
+        const DWORD messagePosition=GetMessagePos();
+        POINT screen{GET_X_LPARAM(static_cast<LPARAM>(messagePosition)),
+                     GET_Y_LPARAM(static_cast<LPARAM>(messagePosition))};
+        if(ScreenToClient(hwnd,&screen)) {
             const POINT cursorLogical{MulDiv(screen.x,100,e->scale),
                                       MulDiv(screen.y,100,e->scale)};
             const POINT messageLogical{MulDiv(GET_X_LPARAM(lp),100,e->scale),
@@ -151,9 +152,9 @@ int main() {
     std::printf("native-150-200-scaled-pixels=%s\n",drawn?"PASS":"FAIL");
     const bool inputA=dragNative(a);
     const bool inputB=dragNative(b);
-    std::printf("debug-150 down=%d move=%d up=%d drag=%d coord=%d logical=%ld,%ld\\n",
+    std::printf("debug-150 down=%d move=%d up=%d drag=%d coord=%d logical=%ld,%ld\n",
                 a.down,a.moves,a.up,int(a.drag),int(a.coordsAgreed),a.lastLogical.x,a.lastLogical.y);
-    std::printf("debug-200 down=%d move=%d up=%d drag=%d coord=%d logical=%ld,%ld\\n",
+    std::printf("debug-200 down=%d move=%d up=%d drag=%d coord=%d logical=%ld,%ld\n",
                 b.down,b.moves,b.up,int(b.drag),int(b.coordsAgreed),b.lastLogical.x,b.lastLogical.y);
     const bool independent=a.down==1&&b.down==1&&a.up==1&&b.up==1
                             &&ha!=hb&&a.coordsAgreed&&b.coordsAgreed;
