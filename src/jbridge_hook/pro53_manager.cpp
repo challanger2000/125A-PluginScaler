@@ -212,12 +212,14 @@ LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
 } // namespace
 int WINAPI wWinMain(HINSTANCE h,HINSTANCE,LPWSTR args,int){
     instance=h;
+    const bool testing=args && wcsstr(args,L"--self-test");
     if(!unpack()){
-        MessageBoxW(nullptr,L"Eingebettete 32-Bit-Hook-DLL nicht ladbar.",
-                    L"125A PluginScaler",MB_OK|MB_ICONERROR);
+        if(!testing)MessageBoxW(nullptr,
+            L"Eingebettete 32-Bit-Hook-DLL nicht ladbar.",
+            L"125A PluginScaler",MB_OK|MB_ICONERROR);
         cleanupDll();return 2;
     }
-    if(args && wcsstr(args,L"--self-test")){cleanupDll();return 0;}
+    if(testing){cleanupDll();return 0;}
     WNDCLASSW klass{};
     klass.lpfnWndProc=wndProc;klass.hInstance=h;
     klass.lpszClassName=L"125A.Pro53.Manager";
