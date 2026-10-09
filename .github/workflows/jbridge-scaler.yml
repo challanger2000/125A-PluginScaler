@@ -1,0 +1,35 @@
+name: jBridge Scaler EXE
+
+on:
+  push:
+    branches: [ feature/jbridge-gui-scaler ]
+    paths:
+      - 'src/jbridge_probe/**'
+      - '.github/workflows/jbridge-scaler.yml'
+  workflow_dispatch:
+
+jobs:
+  scaler:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure viewer only
+        shell: pwsh
+        run: |
+          cmake -S . -B build-viewer -A x64 -DPLUGINSCALER_FETCH_VST3_SDK=OFF -DPLUGINSCALER_BUILD_TESTS=OFF
+      - name: Build viewer
+        run: cmake --build build-viewer --config Release --target PluginScalerJBridgeViewer
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $exe = "build-viewer/src/jbridge_probe/Release/PluginScalerJBridgeViewer.exe"
+          if (-not (Test-Path $exe)) { throw "Viewer EXE missing" }
+          Write-Host "standalone-viewer-build=PASS"
+      - name: Upload only the EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: PluginScalerJBridgeViewer
+          path: build-viewer/src/jbridge_probe/Release/PluginScalerJBridgeViewer.exe
+          retention-days: 14
+          if-no-files-found: error
