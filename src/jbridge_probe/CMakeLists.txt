@@ -5,3 +5,8 @@ add_executable(PluginScalerJBridgeProbe WIN32
 target_compile_features(PluginScalerJBridgeProbe PRIVATE cxx_std_20)
 target_compile_definitions(PluginScalerJBridgeProbe PRIVATE UNICODE _UNICODE)
 target_link_libraries(PluginScalerJBridgeProbe PRIVATE user32)
+
+add_executable(PluginScalerJBridgeViewer WIN32 viewer.cpp)
+target_compile_features(PluginScalerJBridgeViewer PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeViewer PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeViewer PRIVATE user32 Magnification)
