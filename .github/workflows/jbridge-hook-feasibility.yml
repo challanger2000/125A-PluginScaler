@@ -21,7 +21,7 @@ jobs:
       - name: Build only hook and cross-process mock
         shell: pwsh
         run: |
-          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke
+          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke PluginScalerMockLegacyRenderer
       - name: Test two independent native 32-bit editor threads
         shell: pwsh
         run: |

@@ -20,49 +20,6 @@ void pump(int duration) {
         Sleep(5);
     }
 }
-LRESULT CALLBACK originalEditor(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
-    if(msg==WM_PAINT) {
-        PAINTSTRUCT ps{};
-        HDC dc=BeginPaint(hwnd,&ps);
-        if(dc) {
-            HBRUSH bg=CreateSolidBrush(RGB(10,12,16));
-            HBRUSH bright=CreateSolidBrush(RGB(25,190,100));
-            SelectObject(dc,GetStockObject(NULL_PEN));
-            SelectObject(dc,bg);Rectangle(dc,0,0,kLogicalWidth,kLogicalHeight);
-            SelectObject(dc,bright);Rectangle(dc,48,30,80,66);
-            DeleteObject(bg);DeleteObject(bright);
-            EndPaint(hwnd,&ps);
-        }
-        return 0;
-    }
-    if(msg==WM_LBUTTONDOWN||msg==WM_MOUSEMOVE||msg==WM_LBUTTONUP) {
-        const int logicalX=GET_X_LPARAM(lp),logicalY=GET_Y_LPARAM(lp);
-        const DWORD messagePosition=GetMessagePos();
-        POINT physical{GET_X_LPARAM(static_cast<LPARAM>(messagePosition)),
-                       GET_Y_LPARAM(static_cast<LPARAM>(messagePosition))};
-        if(ScreenToClient(hwnd,&physical)) {
-            const LONG scale=InterlockedCompareExchange(&state->scale,0,0);
-            const int expectedX=MulDiv(physical.x,100,scale);
-            const int expectedY=MulDiv(physical.y,100,scale);
-            if(std::abs(expectedX-logicalX)>1 ||
-               std::abs(expectedY-logicalY)>1)
-                InterlockedIncrement(&state->mismatch);
-        }
-        InterlockedExchange(&state->originalLogicalX,logicalX);
-        InterlockedExchange(&state->originalLogicalY,logicalY);
-        if(msg==WM_LBUTTONDOWN) {
-            InterlockedIncrement(&state->mouseDown);
-            SetCapture(hwnd);
-        } else if(msg==WM_MOUSEMOVE && (wp&MK_LBUTTON)) {
-            InterlockedIncrement(&state->mouseMove);
-        } else if(msg==WM_LBUTTONUP) {
-            InterlockedIncrement(&state->mouseUp);
-            if(GetCapture()==hwnd)ReleaseCapture();
-        }
-        return 0;
-    }
-    return DefWindowProcW(hwnd,msg,wp,lp);
-}
 int child() {
     wchar_t name[192]{};
     if(!GetEnvironmentVariableW(kNativeScaleMapName,name,192))return 11;
@@ -82,9 +39,20 @@ int child() {
         Sleep(10);
     }
     if(!proceed)return 14;
+    wchar_t self[MAX_PATH]{};
+    GetModuleFileNameW(nullptr,self,MAX_PATH);
+    std::wstring folder=self;
+    folder.resize(folder.find_last_of(L"\\/")+1);
+    const std::wstring renderer=folder+L"PluginScalerMockLegacyRenderer-x86.dll";
+    HMODULE plugin=LoadLibraryW(renderer.c_str());
+    if(!plugin)return 17;
+    auto pluginProc=reinterpret_cast<WNDPROC>(GetProcAddress(plugin,"OriginalEditorProc"));
+    if(!pluginProc)pluginProc=reinterpret_cast<WNDPROC>(
+        GetProcAddress(plugin,"_OriginalEditorProc@16"));
+    if(!pluginProc)return 18;
     WNDCLASSW wc{};
     wc.hInstance=GetModuleHandleW(nullptr);
-    wc.lpfnWndProc=originalEditor;
+    wc.lpfnWndProc=pluginProc;
     wc.lpszClassName=kNativeScaleEditorClass;
     if(!RegisterClassW(&wc))return 15;
     // The original renderer is completely unaware of any scaling.

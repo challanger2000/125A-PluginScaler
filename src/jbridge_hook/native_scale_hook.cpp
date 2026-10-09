@@ -23,7 +23,10 @@ HDC WINAPI scaledBeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
 }
 bool patchMockExecutableIAT() {
     if(patched) return true;
-    auto* base=reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
+    // The original renderer resides in a separately loaded VST-like DLL,
+    // not in the auxhost/test EXE. Patch only this opted-in mock module.
+    auto* base=reinterpret_cast<unsigned char*>(
+        GetModuleHandleW(L"PluginScalerMockLegacyRenderer-x86.dll"));
     if(!base) return false;
     auto* dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);
     if(dos->e_magic!=IMAGE_DOS_SIGNATURE) return false;
