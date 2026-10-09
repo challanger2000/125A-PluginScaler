@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/jbridge_probe/**'
       - '.github/workflows/jbridge-scaler.yml'
+      - 'tests/jbridge_gui_mock.cpp'
   workflow_dispatch:
 
 jobs:
@@ -20,6 +21,13 @@ jobs:
           cmake -S . -B build-viewer -A x64 -DPLUGINSCALER_FETCH_VST3_SDK=OFF -DPLUGINSCALER_BUILD_TESTS=OFF
       - name: Build viewer
         run: cmake --build build-viewer --config Release --target PluginScalerJBridgeViewer
+      - name: Build input fixture
+        run: cmake --build build-viewer --config Release --target PluginScalerJBridgeMockGUI
+      - name: Run real input fixture
+        shell: pwsh
+        run: |
+          & "build-viewer/src/jbridge_probe/Release/PluginScalerJBridgeMockGUI.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Win32 mouse fixture failed (desktop input may be unavailable on hosted runner)" }
       - name: Verify executable
         shell: pwsh
         run: |
