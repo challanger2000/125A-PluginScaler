@@ -61,3 +61,25 @@ Code: `src/jbridge_hook/native_scale_hook.cpp`, `native_scale_hook_smoke.cpp`, `
 - Robust unload, multiple editor windows in one process, x64 coordination, jBridge process discovery and real DAW audio/MIDI stability remain untested.
 
 **Decision:** Positive proof for 32-bit GDI bitmap/control renderers via an in-process native hook, **not a universal product release**. Do not modify or redistribute jBridge binaries, and do not call the existing Magnifier clone finished.
+
+
+## Follow-up: attaching to an already-open editor and restoring it (2026-10-09)
+
+**Confirmed by Windows x86 test:** https://github.com/challanger2000/125A-PluginScaler/actions/runs/37986216686
+
+The parent launches **two separate 32-bit GUI processes**, each loading an unmodified standalone renderer DLL. Each child creates and paints its 100% editor HWND **before** the controller installs any hook.
+
+The controller learns the native HWND/TID, creates a per-target command mapping named by target PID and GUI TID, installs a thread-targeted \`WH_GETMESSAGE\` hook, and posts \`WM_NULL\` to the existing window. The hook executes in the target GUI thread, validates the HWND's ownership and class, identifies the renderer image through the window procedure, patches its \`BeginPaint\` import, resizes the **real HWND** and invalidates it. No launch-time environment variable is required for the injected attach path. (The test mock separately uses an environment variable for result reporting.)
+
+**Observed test output:**
+\`\`\`
+in-process-already-open-gdi-150=PASS ... attached=1 ... pixels=1 down=1 move=1 up=1 mismatch=0
+already-open-detach-restore-150=PASS status=2 originalPixels=1 originalMouse=1 down=2 up=2 mismatch=0
+in-process-already-open-gdi-200=PASS ... attached=1 ... pixels=1 down=1 move=1 up=1 mismatch=0
+already-open-detach-restore-200=PASS status=2 originalPixels=1 originalMouse=1 down=2 up=2 mismatch=0
+already-open-injected-gdi-150-200-native-mouse=PASS
+\`\`\`
+
+**Crucial process-safety step:** Before the controller unhooks, a control message restores the original renderer DLL's imported \`BeginPaint\` pointer, resets its window to the original client size, and repaints. Subsequent native 100% mouse clicks were tested **while the original GUI process remained running**. This prevents a known risk of leaving an import pointer into an unloaded hook DLL.
+
+**Strict scope:** This is demonstrated with a deliberately simple x86 GDI renderer DLL and 32-bit mock host processes only. jBridge \`auxhost.exe\` itself, the real Pro-53 and FM7 GUI classes, live editor ownership, \`BitBlt\`/\`GetDC\` drawing modes, scroll wheels, right clicks, popups and other plugin-specific constraints remain untested. Current attach implementation deliberately accepts **only** the mock's editor class; it is not an end-user jBridge executable. A real editor must never be patched based solely on its process name without confirming its rendering path and stable teardown behavior. 
