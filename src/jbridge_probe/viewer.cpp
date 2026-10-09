@@ -11,6 +11,7 @@
 #include <cwctype>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 constexpr wchar_t kClass[] = L"125A.JBridgeScaler.Viewer";
@@ -66,11 +67,16 @@ BOOL CALLBACK chooseWindow(HWND hwnd, LPARAM param) {
 }
 
 HWND locateSource() {
-    HWND foreground = GetForegroundWindow();
-    for (HWND w = foreground; w; w = GetParent(w)) {
-        DWORD pid{};
-        GetWindowThreadProcessId(w, &pid);
-        if (jbridgePid(pid) && IsWindowVisible(w)) return w;
+    // First examine the active plugin tree: an embedded x86 editor can be
+    // a child of a DAW-owned top-level window. Do not pick a random large
+    // auxhost window elsewhere on the desktop.
+    const HWND foreground = GetForegroundWindow();
+    if (foreground) {
+        Candidate active{};
+        inspectCandidate(foreground, active);
+        EnumChildWindows(foreground, inspectChild,
+                         reinterpret_cast<LPARAM>(&active));
+        if (active.hwnd) return active.hwnd;
     }
     Candidate candidate{};
     EnumWindows(chooseWindow, reinterpret_cast<LPARAM>(&candidate));
@@ -110,8 +116,35 @@ void refresh() {
         return;
     }
     if (!GetWindowRect(source, &sourceRect)) return;
-    // Keep the mirror separate from the native editor: do not reparent it,
-    // change its DPI awareness or rewrite third-party code.
+    // Magnification mirrors a screen rectangle, NOT an HWND. If another
+    // top-level window overlaps that rectangle, it is captured instead.
+    // Exclude unrelated top-level windows; preserve the editor's root
+    // (which may be the DAW itself for embedded jBridge editors).
+    const HWND editorRoot = GetAncestor(source, GA_ROOT);
+    struct Filter {
+        HWND editorRoot{};
+        HWND viewerRoot{};
+        RECT sourceBounds{};
+        std::vector<HWND> windows;
+    } filter{editorRoot, GetAncestor(viewer, GA_ROOT), sourceRect, {}};
+    EnumWindows([](HWND hwnd, LPARAM value) -> BOOL {
+        auto& f = *reinterpret_cast<Filter*>(value);
+        if (!IsWindowVisible(hwnd) || hwnd == f.editorRoot)
+            return TRUE;
+        RECT bounds{}, overlap{};
+        if (GetWindowRect(hwnd, &bounds) &&
+            IntersectRect(&overlap, &bounds, &f.sourceBounds))
+            f.windows.push_back(hwnd);
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&filter));
+    // Include our own viewer explicitly even if the window manager reports
+    // it outside the queried source rectangle at initialization.
+    if (std::find(filter.windows.begin(), filter.windows.end(),
+                  filter.viewerRoot) == filter.windows.end())
+        filter.windows.push_back(filter.viewerRoot);
+    MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE,
+                           static_cast<int>(filter.windows.size()),
+                           filter.windows.data());
     MagSetWindowSource(magnifier, sourceRect);
 }
 
