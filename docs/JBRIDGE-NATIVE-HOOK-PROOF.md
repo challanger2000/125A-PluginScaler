@@ -83,3 +83,33 @@ already-open-injected-gdi-150-200-native-mouse=PASS
 **Crucial process-safety step:** Before the controller unhooks, a control message restores the original renderer DLL's imported \`BeginPaint\` pointer, resets its window to the original client size, and repaints. Subsequent native 100% mouse clicks were tested **while the original GUI process remained running**. This prevents a known risk of leaving an import pointer into an unloaded hook DLL.
 
 **Strict scope:** This is demonstrated with a deliberately simple x86 GDI renderer DLL and 32-bit mock host processes only. jBridge \`auxhost.exe\` itself, the real Pro-53 and FM7 GUI classes, live editor ownership, \`BitBlt\`/\`GetDC\` drawing modes, scroll wheels, right clicks, popups and other plugin-specific constraints remain untested. Current attach implementation deliberately accepts **only** the mock's editor class; it is not an end-user jBridge executable. A real editor must never be patched based solely on its process name without confirming its rendering path and stable teardown behavior. 
+
+
+## Pro-53 native renderer fingerprint and DIB proof (2026-10-09)
+
+The **original Pro-53.dll supplied by the user in their Library**, SHA-256
+\`bc86da0cd9528368ed1616e495bff26f71f8dec1cceba7993b390ac6cc49fa10\`,
+was analyzed **offline and locally only** using PE import inspection. Neither
+the proprietary binary nor any of its bytes were added to this repository.
+
+Observed 32-bit PE import entries of direct relevance:
+- \`USER32.dll\`: \`BeginPaint\`, \`EndPaint\`, \`GetDC\`, \`ReleaseDC\`, \`ScreenToClient\`, \`SetCapture\`, \`ReleaseCapture\`, \`CreateWindowExA\`, \`RegisterClassA\`, \`SetWindowsHookExA\`.
+- \`GDI32.dll\`: \`SetDIBitsToDevice\`, \`CreateCompatibleDC\`, \`DeleteDC\`, \`SelectObject\`, \`GetClipBox\`, \`CreatePen\`, \`CreateSolidBrush\`, \`GetStockObject\`. There are no imported \`BitBlt\`/\`StretchBlt\` entrypoints in this specific binary's static IAT.
+
+**Critical Windows semantics:** \`SetDIBitsToDevice\` doesn't stretch DIB data just because the destination DC maps logical coordinates to a larger viewport; actual bitmap scaling needs an adapted \`StretchDIBits\` path (for supported full-frame DIBs). This is separate from scaling ordinary GDI rectangles.
+
+New experimental 32-bit in-process native hook modifies imports in the original editor's renderer module: \`BeginPaint\`, \`GetDC\`, \`SetDIBitsToDevice\`. For a complete uncompressed RGB/bitfields DIB, the \`SetDIBitsToDevice\` hook dispatches to \`StretchDIBits\` on the already transformed DC. Other/banded/compressed DIB modes fall back unchanged rather than guessing. The render and input hooks can be undone while the GUI process is still running.
+
+**Windows CI proof** (two already-open, independent 32-bit GUI hosts using a separate mock renderer DLL): https://github.com/challanger2000/125A-PluginScaler/actions/runs/38001261322
+
+\`\`\`
+in-process-already-open-gdi-150=PASS ... pixels=1 ... mismatch=0
+DIB_IMPORTS zoom=150 begin=1 dib=1
+already-open-detach-restore-150=PASS ... originalPixels=1 originalMouse=1
+in-process-already-open-gdi-200=PASS ... pixels=1 ... mismatch=0
+DIB_IMPORTS zoom=200 begin=1 dib=1
+already-open-detach-restore-200=PASS ... originalPixels=1 originalMouse=1
+already-open-injected-dib-gdi-150-200-native-mouse=PASS
+\`\`\`
+
+**NOT TESTED:** actual Pro-53 plugin execution in real jBridge/Studio One. A matching import table by itself is not proof of runtime call paths or correct editor lifecycle. Before release: real jBridge HWND discovery with precise target validation; per-instance state within shared auxhost; tooltip/popup/right-click/wheel; real renderer image orientation/partial updates; robust failure rollback and unhook; single-EXE packaging; real Pro-53 final acceptance.
