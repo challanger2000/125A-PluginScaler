@@ -63,8 +63,11 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                      GET_Y_LPARAM(static_cast<LPARAM>(timestamped))};
         if(ScreenToClient(hwnd,&screen)) {
             const LONG scale=InterlockedCompareExchange(&state->scale,0,0);
-            if(scale>0 && (std::abs(MulDiv(screen.x,100,scale)-logicalX)>1 ||
-                           std::abs(MulDiv(screen.y,100,scale)-logicalY)>1))
+            const bool tracked=msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP ||
+                               (msg==WM_MOUSEMOVE && (wp&MK_LBUTTON));
+            if(tracked && scale>0 &&
+               (std::abs(MulDiv(screen.x,100,scale)-logicalX)>1 ||
+                std::abs(MulDiv(screen.y,100,scale)-logicalY)>1))
                 InterlockedIncrement(&state->mismatch);
         }
         InterlockedExchange(&state->originalLogicalX,logicalX);
