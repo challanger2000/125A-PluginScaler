@@ -1,0 +1,29 @@
+name: Native 150 DPI validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dpi:
+    # Provision a Windows test machine with an actual 150%-scaled
+    # interactive display before enabling this job. Hosted runners
+    # are only 96 DPI and cannot prove this requirement.
+    runs-on: [self-hosted, Windows, X64, dpi-144]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile DPI probe
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          if (-not $vs) { throw "Visual Studio C++ toolchain missing" }
+          $dev = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          cmd /c "`"$dev`" -arch=x64 && cl /nologo /EHsc /std:c++20 /Fe:NativeDpiProbe.exe tests\jbridge_native_dpi_feasibility.cpp user32.lib"
+          if ($LASTEXITCODE -ne 0) { throw "Native DPI probe compile failed" }
+      - name: Require real 144-DPI display
+        shell: pwsh
+        run: |
+          & .\NativeDpiProbe.exe
+          if ($LASTEXITCODE -eq 42) { throw "NO 150% DISPLAY: Test environment is unsuitable. Not a PASS." }
+          if ($LASTEXITCODE -ne 0) { throw "Native DPI probe failed" }
+          Write-Host "native-dpi-monitor=AVAILABLE; native-plugin-scaling=NOT_YET_PROVEN"
