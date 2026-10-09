@@ -42,17 +42,26 @@ bool jbridgePid(DWORD pid) {
 }
 
 struct Candidate { HWND hwnd{}; long area{}; };
-BOOL CALLBACK chooseWindow(HWND hwnd, LPARAM param) {
-    auto& c = *reinterpret_cast<Candidate*>(param);
-    if (!IsWindowVisible(hwnd) || !IsWindowEnabled(hwnd)) return TRUE;
+void inspectCandidate(HWND hwnd, Candidate& c) {
+    if (!IsWindowVisible(hwnd) || !IsWindowEnabled(hwnd)) return;
     DWORD pid{};
     GetWindowThreadProcessId(hwnd, &pid);
-    if (!jbridgePid(pid)) return TRUE;
+    if (!jbridgePid(pid)) return;
     RECT rc{};
-    if (!GetWindowRect(hwnd, &rc)) return TRUE;
+    if (!GetWindowRect(hwnd, &rc)) return;
     const long w = rc.right - rc.left, h = rc.bottom - rc.top;
-    if (w < 120 || h < 90 || w > 3000 || h > 2000) return TRUE;
+    if (w < 120 || h < 90 || w > 3000 || h > 2000) return;
     if (w * h > c.area) c = {hwnd, w * h};
+}
+
+BOOL CALLBACK inspectChild(HWND hwnd, LPARAM param) {
+    inspectCandidate(hwnd, *reinterpret_cast<Candidate*>(param));
+    return TRUE;
+}
+BOOL CALLBACK chooseWindow(HWND hwnd, LPARAM param) {
+    auto& candidate = *reinterpret_cast<Candidate*>(param);
+    inspectCandidate(hwnd, candidate);
+    EnumChildWindows(hwnd, inspectChild, param);
     return TRUE;
 }
 
