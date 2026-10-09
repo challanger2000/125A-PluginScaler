@@ -21,7 +21,7 @@ jobs:
       - name: Build only hook and cross-process mock
         shell: pwsh
         run: |
-          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke
+          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke
       - name: Test two independent native 32-bit editor threads
         shell: pwsh
         run: |
@@ -32,3 +32,8 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeGdiScaleSmoke.exe"
           if ($LASTEXITCODE -ne 0) { throw "150/200 percent GDI rendering or native mouse gate FAILED" }
+      - name: Test injected original GDI renderer and input (x86 150 and 200 percent)
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Native injected GDI editor scale is NOT PROVEN" }
