@@ -10,14 +10,15 @@ using BeginPaintFn=HDC (WINAPI*)(HWND, LPPAINTSTRUCT);
 BeginPaintFn realBeginPaint{};
 HWND target{};
 int zoom=100;
+int logicalWidth=kLogicalWidth, logicalHeight=kLogicalHeight;
 bool patched=false;
 HDC WINAPI scaledBeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
     const HDC dc=realBeginPaint ? realBeginPaint(hwnd,ps) : nullptr;
     if(dc && hwnd==target && zoom>=100 && zoom<=200) {
         SetMapMode(dc, MM_ANISOTROPIC);
-        SetWindowExtEx(dc,kLogicalWidth,kLogicalHeight,nullptr);
-        SetViewportExtEx(dc,MulDiv(kLogicalWidth,zoom,100),
-                            MulDiv(kLogicalHeight,zoom,100),nullptr);
+        SetWindowExtEx(dc,logicalWidth,logicalHeight,nullptr);
+        SetViewportExtEx(dc,MulDiv(logicalWidth,zoom,100),
+                            MulDiv(logicalHeight,zoom,100),nullptr);
     }
     return dc;
 }
@@ -89,6 +90,60 @@ void closeState(NativeScaleState* state,HANDLE mapping) {
     if(state)UnmapViewOfFile(state);
     if(mapping)CloseHandle(mapping);
 }
+void attachToAlreadyOpenEditor() {
+    // PID/TID-based control block, usable long after auxhost starts.
+    wchar_t name[192]{};
+    swprintf_s(name,L"Local\\125A_NativeAttach_%lu_%lu",
+               GetCurrentProcessId(),GetCurrentThreadId());
+    HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name);
+    if(!mapping)return;
+    auto* command=static_cast<NativeAttachCommand*>(
+        MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(NativeAttachCommand)));
+    if(!command){CloseHandle(mapping);return;}
+    if(command->status==0 && !target) {
+        const HWND hwnd=reinterpret_cast<HWND>(
+             static_cast<std::uintptr_t>(command->hwnd));
+        DWORD pid=0;
+        const DWORD tid=GetWindowThreadProcessId(hwnd,&pid);
+        const LONG factor=InterlockedCompareExchange(&command->scale,0,0);
+        wchar_t klass[192]{};
+        if(!IsWindow(hwnd)||pid!=GetCurrentProcessId()||
+           tid!=GetCurrentThreadId()||(factor!=150&&factor!=200)||
+           !GetClassNameW(hwnd,klass,192)||
+           std::wcscmp(klass,kNativeScaleEditorClass)!=0) {
+            InterlockedExchange(&command->status,-1);
+        } else {
+            RECT client{};
+            if(!GetClientRect(hwnd,&client)||client.right<=0||
+               client.bottom<=0) {
+                InterlockedExchange(&command->status,-2);
+            } else {
+                logicalWidth=client.right;
+                logicalHeight=client.bottom;
+                zoom=factor;
+                target=hwnd;
+                const auto module=reinterpret_cast<HINSTANCE>(
+                    GetWindowLongPtrW(hwnd,GWLP_HINSTANCE));
+                if(!patchEditorModuleIAT(module,klass)) {
+                    target=nullptr;
+                    InterlockedExchange(&command->status,-3);
+                } else if(!SetWindowPos(hwnd,nullptr,0,0,
+                              MulDiv(logicalWidth,zoom,100),
+                              MulDiv(logicalHeight,zoom,100),
+                              SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)) {
+                    InterlockedExchange(&command->status,-4);
+                } else {
+                    InterlockedExchange(&command->originalWidth,logicalWidth);
+                    InterlockedExchange(&command->originalHeight,logicalHeight);
+                    InvalidateRect(hwnd,nullptr,FALSE);
+                    InterlockedExchange(&command->status,1);
+                }
+            }
+        }
+    }
+    UnmapViewOfFile(command);
+    CloseHandle(mapping);
+}
 }
 
 extern "C" __declspec(dllexport)
@@ -121,7 +176,8 @@ LRESULT CALLBACK NativeCBTHook(int code,WPARAM wp,LPARAM lp) {
 }
 extern "C" __declspec(dllexport)
 LRESULT CALLBACK NativeMouseHook(int code,WPARAM wp,LPARAM lp) {
-    if(code==HC_ACTION && wp==PM_REMOVE && target) {
+    if(code==HC_ACTION && wp==PM_REMOVE) {
+        if(!target)attachToAlreadyOpenEditor();
         auto* message=reinterpret_cast<MSG*>(lp);
         if(message && message->hwnd==target &&
            (message->message==WM_LBUTTONDOWN ||

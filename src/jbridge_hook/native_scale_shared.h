@@ -19,3 +19,11 @@ struct NativeScaleState {
 constexpr wchar_t kNativeScaleMapName[] = L"125A_NATIVE_SCALE_SMOKE_MAP";
 constexpr wchar_t kNativeScaleEditorClass[] = L"125A.OriginalUnscaledGdiEditor";
 constexpr int kLogicalWidth=200, kLogicalHeight=140;
+
+struct NativeAttachCommand {
+    volatile LONG hwnd;
+    volatile LONG scale;
+    volatile LONG status; // 0=pending, 1=ready, negative=error
+    volatile LONG originalWidth;
+    volatile LONG originalHeight;
+};

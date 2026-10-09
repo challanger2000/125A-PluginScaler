@@ -20,7 +20,7 @@ void pump(int duration) {
         Sleep(5);
     }
 }
-int child() {
+int child(bool alreadyOpen) {
     wchar_t name[192]{};
     if(!GetEnvironmentVariableW(kNativeScaleMapName,name,192))return 11;
     HANDLE mapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,name);
@@ -30,15 +30,17 @@ int child() {
     if(!state){CloseHandle(mapping);return 13;}
     MSG msg{};
     PeekMessageW(&msg,nullptr,WM_USER,WM_USER,PM_NOREMOVE);
-    InterlockedExchange(&state->ready,1);
-    bool proceed=false;
-    for(int i=0;i<700;++i) {
-        if(InterlockedCompareExchange(&state->proceed,0,0)) {
-            proceed=true;break;
+    if(!alreadyOpen) {
+        InterlockedExchange(&state->ready,1);
+        bool proceed=false;
+        for(int i=0;i<700;++i) {
+            if(InterlockedCompareExchange(&state->proceed,0,0)) {
+                proceed=true;break;
+            }
+            Sleep(10);
         }
-        Sleep(10);
+        if(!proceed)return 14;
     }
-    if(!proceed)return 14;
     wchar_t self[MAX_PATH]{};
     GetModuleFileNameW(nullptr,self,MAX_PATH);
     std::wstring folder=self;
@@ -61,6 +63,12 @@ int child() {
        kLogicalWidth,kLogicalHeight,nullptr,nullptr,wc.hInstance,nullptr);
     if(!hwnd)return 16;
     ShowWindow(hwnd,SW_SHOW);UpdateWindow(hwnd);
+    if(alreadyOpen) {
+        // Editor HWND and pixels already exist before the hook is installed.
+        InterlockedExchange(&state->targetHwnd,
+            static_cast<LONG>(reinterpret_cast<std::uintptr_t>(hwnd)));
+        InterlockedExchange(&state->ready,1);
+    }
     // Separate real GUI/message thread, parent injects input + examines pixels.
     for(int i=0;i<1600;++i) {
         if(InterlockedCompareExchange(&state->finish,0,0))break;
@@ -75,8 +83,12 @@ struct Instance {
     NativeScaleState* state{};
     PROCESS_INFORMATION process{};
     HHOOK cbt{},mouse{};
+    HANDLE attachMapping{};
+    NativeAttachCommand* attach{};
 };
 void dispose(Instance& in) {
+    if(in.attach)UnmapViewOfFile(in.attach);
+    if(in.attachMapping)CloseHandle(in.attachMapping);
     if(in.mouse)UnhookWindowsHookEx(in.mouse);
     if(in.cbt)UnhookWindowsHookEx(in.cbt);
     if(in.process.hProcess) {
@@ -121,8 +133,10 @@ bool checkPixels(HWND hwnd,int zoom) {
     return green==RGB(25,190,100)&&dark==RGB(10,12,16);
 }
 }
-int wmain(int argc,wchar_t**) {
-    if(argc>1)return child();
+int wmain(int argc,wchar_t** argv) {
+    if(argc>1 && wcscmp(argv[1],L"--child")==0)return child(false);
+    if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)return child(true);
+    const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
     wchar_t exe[MAX_PATH]{};
     GetModuleFileNameW(nullptr,exe,MAX_PATH);
     std::wstring directory=exe;
@@ -147,7 +161,8 @@ int wmain(int argc,wchar_t**) {
         ZeroMemory(t.state,sizeof(NativeScaleState));
         t.state->scale=(i==0 ? 150 : 200);
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
-        std::wstring command=L"\""+std::wstring(exe)+L"\" --child";
+        std::wstring command=L"\""+std::wstring(exe)+
+            (alreadyOpen ? L"\" --child-existing" : L"\" --child");
         std::vector<wchar_t> cmd(command.begin(),command.end());
         cmd.push_back(0);
         STARTUPINFOW si{};si.cb=sizeof(si);
@@ -167,15 +182,36 @@ int wmain(int argc,wchar_t**) {
             Sleep(10);
         }
         if(!ready){ok=false;break;}
-        t.cbt=SetWindowsHookExW(WH_CBT,cbt,dll,t.process.dwThreadId);
+        if(alreadyOpen) {
+            const std::wstring attachName=L"Local\\125A_NativeAttach_"+
+                std::to_wstring(t.process.dwProcessId)+L"_"+
+                std::to_wstring(t.process.dwThreadId);
+            t.attachMapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,
+                PAGE_READWRITE,0,sizeof(NativeAttachCommand),attachName.c_str());
+            if(!t.attachMapping){ok=false;break;}
+            t.attach=static_cast<NativeAttachCommand*>(
+                MapViewOfFile(t.attachMapping,FILE_MAP_ALL_ACCESS,0,0,
+                              sizeof(NativeAttachCommand)));
+            if(!t.attach){ok=false;break;}
+            ZeroMemory(t.attach,sizeof(NativeAttachCommand));
+            t.attach->scale=t.state->scale;
+            t.attach->hwnd=t.state->targetHwnd;
+        } else {
+            t.cbt=SetWindowsHookExW(WH_CBT,cbt,dll,t.process.dwThreadId);
+        }
         t.mouse=SetWindowsHookExW(WH_GETMESSAGE,mouse,dll,t.process.dwThreadId);
-        if(!t.cbt||!t.mouse){
+        if((!alreadyOpen&&!t.cbt)||!t.mouse){
             std::printf("native-hook-install=FAIL %lu\n",GetLastError());
             ok=false;break;
         }
     }
     if(ok) {
-        for(auto& t:target)InterlockedExchange(&t.state->proceed,1);
+        if(!alreadyOpen)
+            for(auto& t:target)InterlockedExchange(&t.state->proceed,1);
+        else
+            for(auto& t:target)
+                PostMessageW(reinterpret_cast<HWND>(static_cast<std::uintptr_t>(
+                    t.state->targetHwnd)),WM_NULL,0,0);
         for(auto& t:target) {
             bool appeared=false;
             for(int n=0;n<400;++n) {
@@ -187,6 +223,10 @@ int wmain(int argc,wchar_t**) {
             if(!appeared){ok=false;break;}
             const HWND hwnd=reinterpret_cast<HWND>(static_cast<std::uintptr_t>(
                   InterlockedCompareExchange(&t.state->targetHwnd,0,0)));
+            if(alreadyOpen) {
+                for(int n=0;n<400 && t.attach->status==0;++n)Sleep(10);
+                if(t.attach->status==1)InvalidateRect(hwnd,nullptr,FALSE);
+            }
             Sleep(200);
             const bool painted=checkPixels(hwnd,t.state->scale);
             const bool input=injectInput(hwnd);
@@ -194,10 +234,16 @@ int wmain(int argc,wchar_t**) {
             const bool mouseVerified=input && t.state->mouseDown==1 &&
                 t.state->mouseMove>0 && t.state->mouseUp==1 &&
                 t.state->mismatch==0;
-            const bool pass=t.state->hooked==1&&t.state->patchOK==1&&
-                              painted&&mouseVerified;
-            std::printf("in-process-unmodified-gdi-%ld=%s hwnd=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
-               t.state->scale,pass?"PASS":"FAIL",t.state->targetHwnd,
+            const bool attached=alreadyOpen ?
+                 (t.attach && t.attach->status==1 &&
+                  t.attach->originalWidth==kLogicalWidth &&
+                  t.attach->originalHeight==kLogicalHeight) :
+                 (t.state->hooked==1 && t.state->patchOK==1);
+            const bool pass=attached&&painted&&mouseVerified;
+            std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
+               alreadyOpen?"already-open":"creation",t.state->scale,
+               pass?"PASS":"FAIL",t.state->targetHwnd,
+               alreadyOpen?(t.attach?t.attach->status:-99):0,
                t.state->hooked,t.state->patchOK,int(painted),
                t.state->mouseDown,t.state->mouseMove,t.state->mouseUp,
                t.state->mismatch);
@@ -210,7 +256,8 @@ int wmain(int argc,wchar_t**) {
     }
     for(auto& t:target)dispose(t);
     FreeLibrary(dll);
-    std::printf("injected-gdi-150-200-native-mouse=%s\n",ok?"PASS":"FAIL");
+    std::printf("%s-gdi-150-200-native-mouse=%s\n",
+        alreadyOpen?"already-open-injected":"creation-injected",ok?"PASS":"FAIL");
     std::puts("LIMIT: Controlled Win32 GDI mock; does not establish jBridge or arbitrary VST support.");
     return ok?0:4;
 }

@@ -37,3 +37,8 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe"
           if ($LASTEXITCODE -ne 0) { throw "Native injected GDI editor scale is NOT PROVEN" }
+      - name: Attach to two already-open 32-bit GUI editors
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open
+          if ($LASTEXITCODE -ne 0) { throw "Already-open native editor attach failed" }
