@@ -146,7 +146,11 @@ void refresh() {
         DestroyWindow(viewer);
         return;
     }
-    if (!GetWindowRect(source, &sourceRect)) return;
+    RECT client{};
+    if (!GetClientRect(source, &client)) return;
+    POINT topLeft{client.left,client.top}, bottomRight{client.right,client.bottom};
+    if (!ClientToScreen(source,&topLeft) || !ClientToScreen(source,&bottomRight)) return;
+    sourceRect={topLeft.x,topLeft.y,bottomRight.x,bottomRight.y};
     // Magnification mirrors a screen rectangle, NOT an HWND. If another
     // top-level window overlaps that rectangle, it is captured instead.
     // Exclude unrelated top-level windows; preserve the editor's root
@@ -234,6 +238,9 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_CAPTURECHANGED:
+        dragging = false;
+        return 0;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
@@ -275,7 +282,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                     L"125A PluginScaler", MB_OK | MB_ICONERROR);
         return 3;
     }
-    GetWindowRect(source, &sourceRect);
+    RECT client{};
+    GetClientRect(source, &client);
+    POINT topLeft{client.left,client.top}, bottomRight{client.right,client.bottom};
+    ClientToScreen(source,&topLeft);
+    ClientToScreen(source,&bottomRight);
+    sourceRect={topLeft.x,topLeft.y,bottomRight.x,bottomRight.y};
     WNDCLASSW wc{};
     wc.lpfnWndProc = wndProc;
     wc.hInstance = instance;
@@ -284,9 +296,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     RegisterClassW(&wc);
     const int width = MulDiv(sourceRect.right-sourceRect.left, percent, 100);
     const int height = MulDiv(sourceRect.bottom-sourceRect.top, percent, 100);
+    RECT outside{0,0,width,height};
+    AdjustWindowRectEx(&outside, WS_OVERLAPPEDWINDOW, FALSE, 0);
     viewer = CreateWindowW(kClass, L"125A PluginScaler - jBridge 150%",
                            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                           CW_USEDEFAULT, CW_USEDEFAULT, width+16, height+39,
+                           CW_USEDEFAULT, CW_USEDEFAULT,
+                           outside.right-outside.left, outside.bottom-outside.top,
                            nullptr, nullptr, instance, nullptr);
     if (!viewer) { MagUninitialize(); return 4; }
     refresh();
