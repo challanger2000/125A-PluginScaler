@@ -153,8 +153,8 @@ jobs:
             throw "Synth manifest generation failed with exit code $LASTEXITCODE"
           }
 
-          $output = & $synthHost $proxy $helper $synth $manifest
-          $output | Write-Host
+          $output = & $synthHost $proxy $helper $synth $manifest | Tee-Object -Variable liveOutput
+          $output = $liveOutput
           if ($LASTEXITCODE -ne 0) {
             throw "Zero-input synth bridge failed with exit code $LASTEXITCODE"
           }
