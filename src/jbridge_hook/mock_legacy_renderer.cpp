@@ -36,10 +36,10 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 bitmap.bmiHeader.biBitCount=32;
                 bitmap.bmiHeader.biCompression=BI_RGB;
                 std::vector<std::uint32_t> pixels(kLogicalWidth*kLogicalHeight,
-                                                   0x00100C0A);
+                                                   0x000A0C10);
                 for(int y=30;y<66;++y)
                     for(int x=48;x<80;++x)
-                        pixels[y*kLogicalWidth+x]=0x0064BE19;
+                        pixels[y*kLogicalWidth+x]=0x0019BE64;
                 SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
                     0,0,0,kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
             } else {

@@ -133,7 +133,7 @@ bool checkPixels(HWND hwnd,int zoom) {
         const COLORREF atLogical=GetPixel(dc,68,47);
         const COLORREF atScaledPlus=GetPixel(dc,MulDiv(60,zoom,100),
                                                MulDiv(40,zoom,100));
-        std::printf("PIXEL_DIAG zoom=%d scaled=0x%06lx logical=0x%06lx nearScaled=0x%06lx background=0x%06lx\\n",
+        std::printf("PIXEL_DIAG zoom=%d scaled=0x%06lx logical=0x%06lx nearScaled=0x%06lx background=0x%06lx\n",
            zoom,static_cast<unsigned long>(green),static_cast<unsigned long>(atLogical),
            static_cast<unsigned long>(atScaledPlus),static_cast<unsigned long>(dark));
     }
@@ -258,7 +258,7 @@ int wmain(int argc,wchar_t** argv) {
                t.state->mouseDown,t.state->mouseMove,t.state->mouseUp,
                t.state->mismatch);
             if(alreadyOpen && bitmap)
-                std::printf("DIB_IMPORTS zoom=%ld begin=%ld dib=%ld\\n",t.state->scale,
+                std::printf("DIB_IMPORTS zoom=%ld begin=%ld dib=%ld\n",t.state->scale,
                    t.attach?t.attach->beginImported:-1,t.attach?t.attach->dibImported:-1);
             ok &= pass;
             if(alreadyOpen && pass) {
