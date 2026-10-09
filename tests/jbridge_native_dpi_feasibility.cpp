@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <shellscalingapi.h>
 #include <cstdio>
+#include <vector>
 #pragma comment(lib,"user32.lib")
 
 LRESULT CALLBACK proc(HWND h,UINT m,WPARAM w,LPARAM l) {
@@ -27,6 +28,8 @@ int main() {
                   {DPI_AWARENESS_CONTEXT_SYSTEM_AWARE,"system"},
                   {DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,"per-monitor-v2"}};
     int ok=0;
+    UINT observedDpi[3]{};
+    int index=0;
     for(const auto& mode:modes) {
         auto previous=setThread(mode.context);
         if(!previous) {std::printf("%s=UNAVAILABLE\n",mode.label);continue;}
@@ -38,11 +41,16 @@ int main() {
             BOOL equal=AreDpiAwarenessContextsEqual(actual,mode.context);
             std::printf("%s=PASS dpi=%u context=%d\n",mode.label,dpi,int(equal));
             if(equal)++ok;
+            observedDpi[index]=dpi;
             DestroyWindow(h);
         }
         setThread(previous);
+        ++index;
     }
     std::printf("native-dpi-precreation=%s\n",ok==3?"PASS":"FAIL");
-    std::puts("note=No per-HWND arbitrary DPI value is set by these APIs.");
+    const bool changed=observedDpi[0]!=observedDpi[1] || observedDpi[1]!=observedDpi[2];
+    std::printf("different-dpi-from-context-alone=%s values=%u,%u,%u\\n",
+                changed?"YES":"NO",observedDpi[0],observedDpi[1],observedDpi[2]);
+    std::puts("note=An awareness context is not a way to assign an arbitrary 144/192 DPI to a window.");
     return ok==3?0:4;
 }
