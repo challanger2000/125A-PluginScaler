@@ -21,12 +21,20 @@ HDC WINAPI scaledBeginPaint(HWND hwnd, LPPAINTSTRUCT ps) {
     }
     return dc;
 }
-bool patchMockExecutableIAT() {
+bool patchEditorModuleIAT(HINSTANCE registeredInstance,LPCWSTR className) {
     if(patched) return true;
-    // The original renderer resides in a separately loaded VST-like DLL,
-    // not in the auxhost/test EXE. Patch only this opted-in mock module.
-    auto* base=reinterpret_cast<unsigned char*>(
-        GetModuleHandleW(L"PluginScalerMockLegacyRenderer-x86.dll"));
+    // Resolve the real window procedure's image instead of assuming that
+    // legacy editor painting lives in the host EXE. With jBridge it often
+    // resides in the separately loaded VST2 plug-in DLL.
+    WNDCLASSEXW klass{};
+    klass.cbSize=sizeof(klass);
+    if(!GetClassInfoExW(registeredInstance,className,&klass) ||
+       !klass.lpfnWndProc) return false;
+    MEMORY_BASIC_INFORMATION region{};
+    if(!VirtualQuery(reinterpret_cast<LPCVOID>(klass.lpfnWndProc),
+                     &region,sizeof(region)) || region.Type!=MEM_IMAGE)
+        return false;
+    auto* base=static_cast<unsigned char*>(region.AllocationBase);
     if(!base) return false;
     auto* dos=reinterpret_cast<IMAGE_DOS_HEADER*>(base);
     if(dos->e_magic!=IMAGE_DOS_SIGNATURE) return false;
@@ -99,7 +107,7 @@ LRESULT CALLBACK NativeCBTHook(int code,WPARAM wp,LPARAM lp) {
                     zoom=requested;
                     cs->cx=MulDiv(cs->cx,zoom,100);
                     cs->cy=MulDiv(cs->cy,zoom,100);
-                    const bool success=patchMockExecutableIAT();
+                    const bool success=patchEditorModuleIAT(cs->hInstance,cs->lpszClass);
                     InterlockedExchange(&state->targetHwnd,
                        static_cast<LONG>(reinterpret_cast<std::uintptr_t>(target)));
                     InterlockedExchange(&state->patchOK,success?1:0);
