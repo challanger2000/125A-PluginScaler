@@ -28,4 +28,6 @@ struct NativeAttachCommand {
     volatile LONG originalWidth;
     volatile LONG originalHeight;
     volatile LONG detach;
+    volatile LONG dibImported;
+    volatile LONG beginImported;
 };

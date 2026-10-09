@@ -248,6 +248,8 @@ void attachToAlreadyOpenEditor() {
                               SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)) {
                     InterlockedExchange(&command->status,-4);
                 } else {
+                    InterlockedExchange(&command->dibImported,originalSetDIBits?1:0);
+                    InterlockedExchange(&command->beginImported,originalBeginPaint?1:0);
                     InterlockedExchange(&command->originalWidth,logicalWidth);
                     InterlockedExchange(&command->originalHeight,logicalHeight);
                     InvalidateRect(hwnd,nullptr,FALSE);
