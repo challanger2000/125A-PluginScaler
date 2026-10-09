@@ -3,6 +3,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
+#include <cstdlib>
 #include <tlhelp32.h>
 #include <sstream>
 #include <magnification.h>
@@ -245,7 +247,23 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
-    source = locateSource();
+    // Test-only explicit HWND binding, restricted to the bundled mock class.
+    // Production execution always discovers jBridge editors normally.
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv && argc == 3 && wcscmp(argv[1], L"--mock-hwnd") == 0) {
+        wchar_t* end = nullptr;
+        const unsigned long long number = wcstoull(argv[2], &end, 10);
+        HWND candidate = reinterpret_cast<HWND>(static_cast<UINT_PTR>(number));
+        wchar_t cls[128]{};
+        if (end && !*end && IsWindow(candidate) &&
+            GetClassNameW(candidate, cls, 128) &&
+            wcscmp(cls, L"125A.MockLegacyEditor") == 0)
+            source = candidate;
+    } else {
+        source = locateSource();
+    }
+    if (argv) LocalFree(argv);
     if (!source) {
         MessageBoxW(nullptr, L"Kein sichtbares jBridge-Plugin gefunden. "
                     L"Plugin in Studio One oeffnen und erneut starten.",
