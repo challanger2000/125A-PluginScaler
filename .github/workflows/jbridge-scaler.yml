@@ -37,7 +37,11 @@ jobs:
           cmd /c "`"$dev`" -arch=x64 && cl /nologo /EHsc /std:c++20 /Fe:NativeDpiProbe.exe tests\jbridge_native_dpi_feasibility.cpp user32.lib"
           if ($LASTEXITCODE -ne 0) { throw "DPI feasibility compile failed" }
           & .\NativeDpiProbe.exe
-          if ($LASTEXITCODE -ne 0) { throw "DPI feasibility failed" }
+          if ($LASTEXITCODE -eq 42) {
+            Write-Warning "NATIVE 150% DPI TEST INCONCLUSIVE: CI runner is 96 DPI; this is NOT a scaling PASS."
+          } elseif ($LASTEXITCODE -ne 0) {
+            throw "DPI feasibility failed with exit code $LASTEXITCODE"
+          }
       - name: Verify executable
         shell: pwsh
         run: |
