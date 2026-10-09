@@ -125,7 +125,7 @@ int main() {
     WNDCLASSW klass{};klass.hInstance=instance;
     klass.lpfnWndProc=editorWnd;
     klass.lpszClassName=L"125A.NativeGdiScaleSmoke";
-    klass.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+    klass.hCursor=LoadCursorA(nullptr,IDC_ARROW);
     if(!RegisterClassW(&klass)) return 1;
     Editor a{};a.scale=150;
     Editor b{};b.scale=200;
