@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <tlhelp32.h>
+#include <commctrl.h>
+#include <sstream>
 #include <magnification.h>
 #include <algorithm>
 #include <array>
@@ -42,45 +44,79 @@ bool jbridgePid(DWORD pid) {
     return found;
 }
 
-struct Candidate { HWND hwnd{}; long area{}; };
-void inspectCandidate(HWND hwnd, Candidate& c) {
+struct Candidate { HWND hwnd{}; DWORD pid{}; RECT rect{}; std::wstring title; };
+struct Scan { std::vector<Candidate> candidates; };
+void consider(HWND hwnd, Scan& scan) {
     if (!IsWindowVisible(hwnd) || !IsWindowEnabled(hwnd)) return;
     DWORD pid{};
     GetWindowThreadProcessId(hwnd, &pid);
     if (!jbridgePid(pid)) return;
-    RECT rc{};
-    if (!GetWindowRect(hwnd, &rc)) return;
-    const long w = rc.right - rc.left, h = rc.bottom - rc.top;
-    if (w < 120 || h < 90 || w > 3000 || h > 2000) return;
-    if (w * h > c.area) c = {hwnd, w * h};
+    RECT r{}, client{};
+    if (!GetWindowRect(hwnd, &r) || !GetClientRect(hwnd, &client)) return;
+    const long width = r.right-r.left, height = r.bottom-r.top;
+    if (width < 180 || height < 100 || width > 3000 || height > 2000 ||
+        client.right < 150 || client.bottom < 80) return;
+    if (std::find_if(scan.candidates.begin(), scan.candidates.end(),
+        [hwnd](const Candidate& c) { return c.hwnd == hwnd; }) != scan.candidates.end())
+        return;
+    wchar_t title[256]{};
+    GetWindowTextW(hwnd, title, 256);
+    scan.candidates.push_back({hwnd,pid,r,title});
 }
-
-BOOL CALLBACK inspectChild(HWND hwnd, LPARAM param) {
-    inspectCandidate(hwnd, *reinterpret_cast<Candidate*>(param));
+BOOL CALLBACK enumChild(HWND hwnd, LPARAM p) {
+    consider(hwnd,*reinterpret_cast<Scan*>(p));
     return TRUE;
 }
-BOOL CALLBACK chooseWindow(HWND hwnd, LPARAM param) {
-    auto& candidate = *reinterpret_cast<Candidate*>(param);
-    inspectCandidate(hwnd, candidate);
-    EnumChildWindows(hwnd, inspectChild, param);
+BOOL CALLBACK enumTop(HWND hwnd, LPARAM p) {
+    auto& scan=*reinterpret_cast<Scan*>(p);
+    consider(hwnd,scan);
+    EnumChildWindows(hwnd,enumChild,p);
     return TRUE;
 }
-
 HWND locateSource() {
-    // First examine the active plugin tree: an embedded x86 editor can be
-    // a child of a DAW-owned top-level window. Do not pick a random large
-    // auxhost window elsewhere on the desktop.
-    const HWND foreground = GetForegroundWindow();
+    Scan scan{};
+    EnumWindows(enumTop,reinterpret_cast<LPARAM>(&scan));
+    if (scan.candidates.empty()) return nullptr;
+    const HWND foreground=GetForegroundWindow();
     if (foreground) {
-        Candidate active{};
-        inspectCandidate(foreground, active);
-        EnumChildWindows(foreground, inspectChild,
-                         reinterpret_cast<LPARAM>(&active));
-        if (active.hwnd) return active.hwnd;
+        auto it=std::find_if(scan.candidates.begin(),scan.candidates.end(),
+            [foreground](const Candidate& c) {
+                return c.hwnd==foreground || IsChild(foreground,c.hwnd);
+            });
+        if (it!=scan.candidates.end())
+            std::rotate(scan.candidates.begin(),it,it+1);
     }
-    Candidate candidate{};
-    EnumWindows(chooseWindow, reinterpret_cast<LPARAM>(&candidate));
-    return candidate.hwnd;
+    if (scan.candidates.size()==1) return scan.candidates.front().hwnd;
+
+    // Do not guess which editor is meant when several jBridge windows exist.
+    std::vector<std::wstring> labels;
+    for (auto& c:scan.candidates) {
+        std::wstringstream ss;
+        ss << (c.title.empty()?L"(ohne Titel)":c.title)
+           << L" (PID " << c.pid << L", "
+           << c.rect.right-c.rect.left << L"x"
+           << c.rect.bottom-c.rect.top << L")";
+        labels.push_back(ss.str());
+    }
+    std::vector<TASKDIALOG_BUTTON> options;
+    for (std::size_t i=0;i<labels.size();++i)
+        options.push_back({static_cast<int>(1000+i),labels[i].c_str()});
+    TASKDIALOGCONFIG config{};
+    config.cbSize=sizeof(config);
+    config.dwFlags=TDF_ALLOW_DIALOG_CANCELLATION;
+    config.dwCommonButtons=TDCBF_OK_BUTTON|TDCBF_CANCEL_BUTTON;
+    config.pszWindowTitle=L"125A PluginScaler";
+    config.pszMainInstruction=L"Welches Plugin skalieren?";
+    config.pszContent=L"Eine Scaler-Instanz bleibt an genau dieses Fenster gebunden.";
+    config.cRadioButtons=static_cast<UINT>(options.size());
+    config.pRadioButtons=options.data();
+    config.nDefaultRadioButton=1000;
+    int pressed=0,selected=0;
+    if (FAILED(TaskDialogIndirect(&config,&pressed,&selected,nullptr)) ||
+        pressed!=IDOK) return nullptr;
+    const int index=selected-1000;
+    if (index<0 || static_cast<std::size_t>(index)>=scan.candidates.size()) return nullptr;
+    return scan.candidates[index].hwnd;
 }
 
 // The magnification control fills the whole viewer. It is the actual mouse
