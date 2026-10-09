@@ -1116,13 +1116,13 @@ LRESULT CALLBACK editorSurrogateProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
                 const int scaledHeight = MulDiv(
                     nativeHeight, ctx->gdiScalePercent, 100);
                 if (scaledWidth > 0 && scaledHeight > 0) {
-                    SetWindowPos(hwnd, HWND_BOTTOM, 0, 0,
+                    SetWindowPos(editorParent, HWND_BOTTOM, 0, 0,
                                  scaledWidth, scaledHeight,
                                  SWP_NOACTIVATE | SWP_NOZORDER);
                 }
             }
 
-            g_gdiCreateParent = hwnd;
+            g_gdiCreateParent = editorParent;
             g_gdiCreateScalePercent = ctx->gdiScalePercent;
             createHook = SetWindowsHookExW(
                 WH_CBT, gdiCreateCbtProc, nullptr, GetCurrentThreadId());
