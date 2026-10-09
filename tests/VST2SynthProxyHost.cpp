@@ -1,0 +1,380 @@
+#include "pluginscaler/formats/vst2/VST2LegacyABI.h"
+
+#include <windows.h>
+
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <iostream>
+#include <string_view>
+#include <vector>
+
+using namespace pluginscaler::formats::vst2abi;
+
+namespace {
+
+LRESULT CALLBACK hostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+HWND createHostWindow() {
+    static const wchar_t* kClassName = L"125A_PluginScaler_TestHost";
+    static ATOM atom = 0;
+    if (!atom) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = hostWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kClassName;
+        atom = RegisterClassW(&wc);
+        if (!atom && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+            return nullptr;
+    }
+    return CreateWindowExW(0, kClassName, L"PluginScaler Test Host",
+                           WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
+                           nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+}
+
+BOOL CALLBACK countChildProc(HWND, LPARAM param) {
+    auto* count = reinterpret_cast<int*>(param);
+    ++(*count);
+    return TRUE;
+}
+
+int childCount(HWND parent) {
+    int count = 0;
+    EnumChildWindows(parent, countChildProc, reinterpret_cast<LPARAM>(&count));
+    return count;
+}
+
+struct FindClassContext {
+    const wchar_t* className{nullptr};
+    HWND found{nullptr};
+};
+
+BOOL CALLBACK findClassProc(HWND hwnd, LPARAM param) {
+    auto* ctx = reinterpret_cast<FindClassContext*>(param);
+    if (!ctx || !ctx->className)
+        return FALSE;
+
+    wchar_t className[128]{};
+    if (GetClassNameW(hwnd, className, static_cast<int>(std::size(className))) > 0 &&
+        std::wstring_view(className) == ctx->className) {
+        ctx->found = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+HWND findDescendantByClass(HWND parent, const wchar_t* className) {
+    FindClassContext ctx{className, nullptr};
+    EnumChildWindows(parent, findClassProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.found;
+}
+
+VstIntPtr __cdecl hostCallback(AEffect*, VstInt32 opcode, VstInt32,
+                               VstIntPtr, void*, float) {
+    switch (opcode) {
+    case AudioMasterVersion: return 2400;
+    case AudioMasterGetSampleRate: return 48000;
+    case AudioMasterGetBlockSize: return 64;
+    case AudioMasterGetVendorVersion: return 1000;
+    default: return 0;
+    }
+}
+
+bool sendMidi(AEffect* effect, std::uint8_t status, std::uint8_t note,
+              std::uint8_t velocity, VstInt32 deltaFrames) {
+    VstMidiEvent midi{};
+    midi.type = kVstMidiType;
+    midi.byteSize = sizeof(VstMidiEvent);
+    midi.deltaFrames = deltaFrames;
+    midi.midiData[0] = static_cast<char>(status);
+    midi.midiData[1] = static_cast<char>(note);
+    midi.midiData[2] = static_cast<char>(velocity);
+
+    struct OneEventList {
+        VstInt32 numEvents;
+        VstIntPtr reserved;
+        VstEvent* events[2];
+    } list{};
+    list.numEvents = 1;
+    list.events[0] = reinterpret_cast<VstEvent*>(&midi);
+    return effect->dispatcher(effect, EffProcessEvents, 0, 0, &list, 0.0f) != 0;
+}
+
+bool processSilence(AEffect* effect, VstInt32 frames) {
+    std::vector<float> left(static_cast<std::size_t>(frames), -1.0f);
+    std::vector<float> right(static_cast<std::size_t>(frames), -1.0f);
+    float* outputs[2]{left.data(), right.data()};
+    effect->processReplacing(effect, nullptr, outputs, frames);
+    for (VstInt32 i = 0; i < frames; ++i) {
+        if (std::fabs(left[static_cast<std::size_t>(i)]) > 0.00001f ||
+            std::fabs(right[static_cast<std::size_t>(i)]) > 0.00001f)
+            return false;
+    }
+    return true;
+}
+
+bool processNoteOnBlock(AEffect* effect, VstInt32 frames,
+                        VstInt32 deltaFrames, float expectedAmplitude) {
+    std::vector<float> left(static_cast<std::size_t>(frames), -1.0f);
+    std::vector<float> right(static_cast<std::size_t>(frames), -1.0f);
+    float* outputs[2]{left.data(), right.data()};
+    effect->processReplacing(effect, nullptr, outputs, frames);
+
+    for (VstInt32 i = 0; i < frames; ++i) {
+        const float expected = i < deltaFrames ? 0.0f : expectedAmplitude;
+        if (std::fabs(left[static_cast<std::size_t>(i)] - expected) > 0.00001f ||
+            std::fabs(right[static_cast<std::size_t>(i)] - expected) > 0.00001f)
+            return false;
+    }
+    return true;
+}
+
+bool processNoteOffBlock(AEffect* effect, VstInt32 frames,
+                         VstInt32 deltaFrames, float expectedAmplitude) {
+    std::vector<float> left(static_cast<std::size_t>(frames), -1.0f);
+    std::vector<float> right(static_cast<std::size_t>(frames), -1.0f);
+    float* outputs[2]{left.data(), right.data()};
+    effect->processReplacing(effect, nullptr, outputs, frames);
+
+    for (VstInt32 i = 0; i < frames; ++i) {
+        const float expected = i < deltaFrames ? expectedAmplitude : 0.0f;
+        if (std::fabs(left[static_cast<std::size_t>(i)] - expected) > 0.00001f ||
+            std::fabs(right[static_cast<std::size_t>(i)] - expected) > 0.00001f)
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+int wmain(int argc, wchar_t** argv) {
+    if (argc != 5 && argc != 6) return 1;
+
+    const bool sidecarMode = argc == 6 && std::wstring_view(argv[5]) == L"--sidecar";
+    if (!sidecarMode) {
+        SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", argv[2]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", argv[3]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", argv[4]);
+        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", L"100");
+        SetEnvironmentVariableW(L"PLUGINSCALER_EDITOR_MODE", L"Direct");
+    } else {
+        SetEnvironmentVariableW(L"PLUGINSCALER_HELPER_X86", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_VST2", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_TARGET_MANIFEST", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_SCALE_PERCENT", nullptr);
+        SetEnvironmentVariableW(L"PLUGINSCALER_EDITOR_MODE", nullptr);
+    }
+
+    HMODULE proxy = LoadLibraryW(argv[1]);
+    if (!proxy) return 2;
+    auto entry = reinterpret_cast<EntryProc>(GetProcAddress(proxy, "VSTPluginMain"));
+    if (!entry) {
+        FreeLibrary(proxy);
+        return 3;
+    }
+
+    AEffect* effect = entry(hostCallback);
+    if (!effect || effect->magic != kEffectMagic || !effect->dispatcher ||
+        !effect->processReplacing) {
+        FreeLibrary(proxy);
+        return 4;
+    }
+
+    bool ok =
+        effect->numInputs == 0 &&
+        effect->numOutputs == 2 &&
+        effect->numParams == 1 &&
+        effect->numPrograms == 4 &&
+        effect->uniqueId == 0x53594E31 &&
+        (effect->flags & (1 << 8)) != 0;
+    std::cout << "synth-metadata=" << (ok ? "PASS" : "FAIL") << std::endl;
+
+    HWND editorHost = nullptr;
+    if (ok) {
+        editorHost = createHostWindow();
+        VstRect* rect = nullptr;
+        const auto rectResult = editorHost
+            ? effect->dispatcher(effect, EffEditGetRect, 0, 0, &rect, 0.0f)
+            : 0;
+        const int rectWidth = rect ? (rect->right - rect->left) : 0;
+        const int rectHeight = rect ? (rect->bottom - rect->top) : 0;
+        const auto openResult =
+            (editorHost && rectResult && rectWidth == 320 && rectHeight == 180)
+                ? effect->dispatcher(effect, EffEditOpen, 0, 0, editorHost, 0.0f)
+                : 0;
+
+        ShowWindow(editorHost, SW_SHOW);
+        UpdateWindow(editorHost);
+        Sleep(100);
+
+        const int children = childCount(editorHost);
+        HWND surface = findDescendantByClass(
+            editorHost, L"125A_MockVST2SynthEditor");
+
+        COLORREF pixel = CLR_INVALID;
+        if (surface) {
+            InvalidateRect(surface, nullptr, FALSE);
+            DWORD_PTR redrawResult = 0;
+            SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                &redrawResult);
+            HDC dc = GetDC(surface);
+            pixel = GetPixel(dc, 50, 40);
+            ReleaseDC(surface, dc);
+        }
+
+        std::cout << "editor-rect=" << rectWidth << "x" << rectHeight << std::endl;
+        std::cout << "editor-open-result=" << openResult << std::endl;
+        std::cout << "editor-children=" << children << std::endl;
+        std::cout << "editor-surface=" << (surface ? 1 : 0) << std::endl;
+        std::cout << "editor-pixel=";
+        if (pixel == CLR_INVALID) {
+            std::cout << "INVALID\n";
+        } else {
+            std::cout << static_cast<unsigned>(GetRValue(pixel)) << ","
+                      << static_cast<unsigned>(GetGValue(pixel)) << ","
+                      << static_cast<unsigned>(GetBValue(pixel)) << std::endl;
+        }
+
+        ok = editorHost != nullptr &&
+             rectResult != 0 &&
+             rect != nullptr &&
+             rectWidth == 320 &&
+             rectHeight == 180 &&
+             openResult != 0 &&
+             children >= 1 &&
+             surface != nullptr &&
+             pixel != CLR_INVALID &&
+             GetRValue(pixel) > 180 &&
+             GetGValue(pixel) < 120 &&
+             GetBValue(pixel) < 100;
+
+        std::cout << "editor-direct=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-open=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-stage=open-complete" << std::endl;
+
+        if (ok && surface) {
+            DWORD_PTR mouseResult = 0;
+            SendMessageTimeoutW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
+            SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(50, 40),
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &mouseResult);
+            InvalidateRect(surface, nullptr, FALSE);
+            DWORD_PTR paintResult = 0;
+            SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                &paintResult);
+
+            HDC dc = GetDC(surface);
+            const COLORREF mappedPixel = GetPixel(dc, 50, 40);
+            ReleaseDC(surface, dc);
+
+            const bool mappingOk =
+                mappedPixel != CLR_INVALID &&
+                GetRValue(mappedPixel) < 100 &&
+                GetGValue(mappedPixel) > 170 &&
+                GetBValue(mappedPixel) < 120;
+            std::cout << "editor-native-mouse=" << (mappingOk ? "PASS" : "FAIL") << std::endl;
+            std::cout << "editor-stage=mouse-complete" << std::endl;
+            ok = ok && mappingOk;
+
+            if (ok) {
+                DWORD_PTR dragResult = 0;
+                SendMessageTimeoutW(surface, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(50, 40),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
+                SendMessageTimeoutW(surface, WM_MOUSEMOVE, MK_LBUTTON, MAKELPARAM(70, 20),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
+                SendMessageTimeoutW(surface, WM_LBUTTONUP, 0, MAKELPARAM(70, 20),
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &dragResult);
+                InvalidateRect(surface, nullptr, FALSE);
+                DWORD_PTR dragPaintResult = 0;
+                SendMessageTimeoutW(surface, WM_PAINT, 0, 0,
+                                    SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000,
+                                    &dragPaintResult);
+
+                HDC dragDc = GetDC(surface);
+                const COLORREF dragPixel = GetPixel(dragDc, 140, 100);
+                ReleaseDC(surface, dragDc);
+
+                const bool dragOk =
+                    dragPixel != CLR_INVALID &&
+                    GetRValue(dragPixel) > 180 &&
+                    GetGValue(dragPixel) > 170 &&
+                    GetBValue(dragPixel) < 100;
+                std::cout << "editor-native-drag=" << (dragOk ? "PASS" : "FAIL") << std::endl;
+                std::cout << "editor-stage=drag-complete" << std::endl;
+                ok = ok && dragOk;
+            }
+        }
+    }
+
+    if (ok) {
+        ok = effect->dispatcher(effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
+        Sleep(50);
+        ok = ok && childCount(editorHost) == 0;
+        std::cout << "editor-close=" << (ok ? "PASS" : "FAIL") << std::endl;
+        std::cout << "editor-stage=close-complete" << std::endl;
+
+        // A fresh editor must reopen after the helper-owned container was
+        // detached and destroyed. Catch stale HWND/container ownership.
+        if (ok) {
+            std::cout << "editor-stage=reopen-start" << std::endl;
+            const auto reopened = effect->dispatcher(
+                effect, EffEditOpen, 0, 0, editorHost, 0.0f);
+            HWND reopenedSurface = findDescendantByClass(
+                editorHost, L"125A_MockVST2SynthEditor");
+            const bool reopenOk = reopened != 0 &&
+                                  reopenedSurface != nullptr &&
+                                  childCount(editorHost) >= 1;
+            std::cout << "editor-reopen=" << (reopenOk ? "PASS" : "FAIL") << std::endl;
+            ok = ok && reopenOk;
+            if (reopened) {
+                const bool closedAgain = effect->dispatcher(
+                    effect, EffEditClose, 0, 0, nullptr, 0.0f) != 0;
+                Sleep(50);
+                const bool clean = closedAgain && childCount(editorHost) == 0;
+                std::cout << "editor-reclose=" << (clean ? "PASS" : "FAIL") << std::endl;
+                ok = ok && clean;
+            }
+            std::cout << "editor-stage=reopen-complete" << std::endl;
+        }
+    }
+    if (editorHost)
+        DestroyWindow(editorHost);
+
+    if (ok)
+        ok = effect->dispatcher(effect, EffOpen, 0, 0, nullptr, 0.0f) != 0 &&
+             effect->dispatcher(effect, EffSetSampleRate, 0, 0, nullptr, 48000.0f) != 0 &&
+             effect->dispatcher(effect, EffSetBlockSize, 0, 64, nullptr, 0.0f) != 0 &&
+             effect->dispatcher(effect, EffMainsChanged, 0, 1, nullptr, 0.0f) != 0;
+
+    if (ok)
+        ok = processSilence(effect, 64);
+
+    const float gain = effect ? effect->getParameter(effect, 0) : 0.0f;
+    const float expectedAmplitude =
+        (60.0f / 127.0f) * (100.0f / 127.0f) * gain;
+
+    if (ok)
+        ok = std::fabs(gain - 0.5f) < 0.00001f &&
+             sendMidi(effect, 0x90, 60, 100, 7) &&
+             processNoteOnBlock(effect, 64, 7, expectedAmplitude);
+    std::cout << "synth-note-on=" << (ok ? "PASS" : "FAIL") << std::endl;
+
+    if (ok)
+        ok = sendMidi(effect, 0x80, 60, 0, 11) &&
+             processNoteOffBlock(effect, 64, 11, expectedAmplitude);
+    std::cout << "synth-note-off=" << (ok ? "PASS" : "FAIL") << std::endl;
+
+    if (effect) {
+        effect->dispatcher(effect, EffMainsChanged, 0, 0, nullptr, 0.0f);
+        effect->dispatcher(effect, EffClose, 0, 0, nullptr, 0.0f);
+    }
+    FreeLibrary(proxy);
+
+    std::cout << "synth=PASS" << (ok ? "" : "-FAIL") << std::endl;
+    return ok ? 0 : 5;
+}

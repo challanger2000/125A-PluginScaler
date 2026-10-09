@@ -1,0 +1,375 @@
+name: Windows Bootstrap
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, Win32]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        shell: pwsh
+        run: |
+          cmake --version
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationVersion
+          Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Directory | Select-Object -ExpandProperty Name
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -A ${{ matrix.arch }}
+          -DPLUGINSCALER_FETCH_VST3_SDK=ON
+          -DPLUGINSCALER_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  cross-bitness-vst2:
+    name: x64 proxy -> x86 VST2 helper
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Win32
+        run: >
+          cmake -S . -B build-x86
+          -A Win32
+          -DPLUGINSCALER_FETCH_VST3_SDK=OFF
+          -DPLUGINSCALER_BUILD_TESTS=ON
+
+      - name: Build Win32 helper and mock VST2
+        run: cmake --build build-x86 --config Release --parallel
+
+      - name: Configure x64
+        run: >
+          cmake -S . -B build-x64
+          -A x64
+          -DPLUGINSCALER_FETCH_VST3_SDK=OFF
+          -DPLUGINSCALER_BUILD_TESTS=ON
+
+      - name: Build x64 proxy and host harness
+        run: >
+          cmake --build build-x64 --config Release
+          --target PluginScalerSetup PluginScalerVST2Proxy PluginScalerVST2ProxyHost PluginScalerVST2SynthProxyHost PluginScalerVST2GdiProxyHost PluginScalerBridgeClient
+          --parallel
+
+      - name: Verify PE architectures
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe not found" }
+
+          $proxyHost = "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = "build-x86\tests\Release\MockVST2.dll"
+
+          foreach ($f in @($proxyHost, $proxy, $helper, $plugin)) {
+            & $dumpbin.FullName /headers $f | Select-String "machine"
+          }
+
+          $hostHeader = (& $dumpbin.FullName /headers $proxyHost | Out-String)
+          $proxyHeader = (& $dumpbin.FullName /headers $proxy | Out-String)
+          $helperHeader = (& $dumpbin.FullName /headers $helper | Out-String)
+          $pluginHeader = (& $dumpbin.FullName /headers $plugin | Out-String)
+
+          if ($hostHeader -notmatch "8664 machine") { throw "Proxy host is not x64" }
+          if ($proxyHeader -notmatch "8664 machine") { throw "VST2 proxy is not x64" }
+          if ($helperHeader -notmatch "14C machine") { throw "Helper is not x86" }
+          if ($pluginHeader -notmatch "14C machine") { throw "Mock VST2 is not x86" }
+
+      - name: Run direct x64-to-x86 shared-memory bridge
+        shell: pwsh
+        run: |
+          $client = Resolve-Path "build-x64\tests\Release\PluginScalerBridgeClient.exe"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
+
+          & $client $helper $plugin
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cross-bitness shared-memory bridge failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Run x64 VST2 proxy through x86 helper
+        shell: pwsh
+        run: |
+          $proxyHostExe = Resolve-Path "build-x64\tests\Release\PluginScalerVST2ProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $plugin = Resolve-Path "build-x86\tests\Release\MockVST2.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $plugin $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "VST2 manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $output = & $proxyHostExe $proxy $helper $plugin $manifest
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "End-to-end x64 VST2 proxy bridge failed with exit code $LASTEXITCODE"
+          }
+          $joined = ($output | Out-String)
+          if ($joined -notmatch "metadata=PASS") {
+            throw "Proxy metadata marker missing"
+          }
+          if ($joined -notmatch "parameter=PASS") {
+            throw "Proxy parameter bridge marker missing"
+          }
+          if ($joined -notmatch "state=PASS") {
+            throw "Proxy state/control bridge marker missing"
+          }
+          if ($joined -notmatch "torture=PASS") {
+            throw "Proxy lifecycle torture marker missing"
+          }
+
+      - name: Run x64 proxy with x86 zero-input synth
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $synth = Resolve-Path "build-x86\tests\Release\MockVST2Synth.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2Synth.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $synth $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Synth manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          & $synthHost $proxy $helper $synth $manifest | Tee-Object -Variable output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Zero-input synth bridge failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          if ($joined -notmatch "synth-metadata=PASS") {
+            throw "Synth metadata marker missing"
+          }
+          if ($joined -notmatch "editor-direct=PASS") {
+            throw "Native direct editor marker missing"
+          }
+          if ($joined -notmatch "editor-open=PASS") {
+            throw "Cross-process editor open marker missing"
+          }
+          if ($joined -notmatch "editor-native-mouse=PASS") {
+            throw "Native editor mouse marker missing"
+          }
+          if ($joined -notmatch "editor-native-drag=PASS") {
+            throw "Native editor drag marker missing"
+          }
+          if ($joined -notmatch "editor-close=PASS") {
+            throw "Cross-process editor close marker missing"
+          }
+          if ($joined -notmatch "synth-note-on=PASS") {
+            throw "Synth note-on marker missing"
+          }
+          if ($joined -notmatch "synth-note-off=PASS") {
+            throw "Synth note-off marker missing"
+          }
+          if ($joined -notmatch "synth=PASS") {
+            throw "Synth bridge marker missing"
+          }
+
+      - name: Run Pro-53-style GDI scaler harness (experimental, non-gating)
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $gdiHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2GdiProxyHost.exe"
+          $proxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $helper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $gdi = Resolve-Path "build-x86\tests\Release\MockVST2LegacyGdi.dll"
+          $manifest = Join-Path $PWD "build-x86\MockVST2LegacyGdi.pluginscaler.txt"
+
+          & $helper --write-vst2-manifest $gdi $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Legacy GDI manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          $output = & $gdiHost $proxy $helper $gdi $manifest
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Legacy GDI harness failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          foreach ($marker in @(
+            "gdi-scale-125=PASS",
+            "gdi-scale-150=PASS",
+            "gdi-scale-200=PASS",
+            "gdi-cycle-125-3=PASS",
+            "gdi-cycle-150-3=PASS",
+            "gdi-cycle-200-3=PASS",
+            "gdi-scaled-visual=PASS",
+            "gdi-click-map=PASS",
+            "gdi-drag-redraw=PASS",
+            "gdi-close=PASS",
+            "gdi-harness=PASS"
+          )) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "Legacy GDI marker missing: $marker"
+            }
+          }
+
+      - name: Run x64 proxy from sidecar configuration
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
+          $sourceProxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $sourceHelper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $synth = Resolve-Path "build-x86\tests\Release\MockVST2Synth.dll"
+
+          $testDir = Join-Path $PWD "sidecar-test"
+          New-Item -ItemType Directory -Force $testDir | Out-Null
+
+          $proxy = Join-Path $testDir "MockSynth-125A.dll"
+          $helper = Join-Path $testDir "PluginScalerHelper-x86.exe"
+          $manifest = Join-Path $testDir "MockSynth.pluginscaler.txt"
+          $config = Join-Path $testDir "MockSynth-125A.pluginscaler.ini"
+
+          Copy-Item $sourceProxy $proxy -Force
+          Copy-Item $sourceHelper $helper -Force
+          & $helper --write-vst2-manifest $synth $manifest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Sidecar manifest generation failed with exit code $LASTEXITCODE"
+          }
+
+          @"
+          [PluginScaler]
+          helper=PluginScalerHelper-x86.exe
+          target=$synth
+          manifest=MockSynth.pluginscaler.txt
+          scale=100
+          editor=Direct
+          "@ | Set-Content -Path $config -Encoding Unicode
+
+          $output = & $synthHost $proxy $helper $synth $manifest --sidecar
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Sidecar-configured proxy failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          foreach ($marker in @(
+            "synth-metadata=PASS",
+            "editor-direct=PASS",
+            "editor-native-mouse=PASS",
+            "editor-native-drag=PASS",
+            "editor-close=PASS",
+            "synth-note-on=PASS",
+            "synth-note-off=PASS",
+            "synth=PASS"
+          )) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "Sidecar marker missing: $marker"
+            }
+          }
+
+      - name: Verify wrapper setup script
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $synthHost = Resolve-Path "build-x64\tests\Release\PluginScalerVST2SynthProxyHost.exe"
+          $sourceProxy = Resolve-Path "build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll"
+          $sourceHelper = Resolve-Path "build-x86\src\helper\Release\PluginScalerHelper-x86.exe"
+          $synth = Resolve-Path "build-x86\tests\Release\MockVST2Synth.dll"
+          $outDir = Join-Path $PWD "wrapper-script-test"
+
+          & ".\tools\Create-VST2Wrapper.ps1" `
+            -TargetDll $synth `
+            -ProxyDll $sourceProxy `
+            -HelperExe $sourceHelper `
+            -OutputDir $outDir `
+            -Scale 100 `
+            -EditorMode Direct `
+            -WrapperName "MockSynth-125A"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Wrapper setup script failed with exit code $LASTEXITCODE"
+          }
+
+          $proxy = Join-Path $outDir "MockSynth-125A.dll"
+          $helper = Join-Path $outDir "PluginScalerHelper-x86.exe"
+          $manifest = Join-Path $outDir "MockSynth-125A.pluginscaler.txt"
+
+          $output = & $synthHost $proxy $helper $synth $manifest --sidecar
+          $output | Write-Host
+          if ($LASTEXITCODE -ne 0) {
+            throw "Generated wrapper failed with exit code $LASTEXITCODE"
+          }
+
+          $joined = ($output | Out-String)
+          foreach ($marker in @(
+            "synth-metadata=PASS",
+            "editor-direct=PASS",
+            "editor-native-mouse=PASS",
+            "editor-native-drag=PASS",
+            "editor-close=PASS",
+            "synth-note-on=PASS",
+            "synth-note-off=PASS",
+            "synth=PASS"
+          )) {
+            if ($joined -notmatch [regex]::Escape($marker)) {
+              throw "Generated wrapper marker missing: $marker"
+            }
+          }
+
+      - name: Embed bridge binaries into standalone setup
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          from struct import pack
+          setup = Path(r"build-x64\src\setup\Release\PluginScalerSetup.exe")
+          proxy = Path(r"build-x64\src\proxy\vst2\Release\PluginScalerVST2Proxy.dll").read_bytes()
+          helper = Path(r"build-x86\src\helper\Release\PluginScalerHelper-x86.exe").read_bytes()
+          with setup.open("ab") as f:
+              f.write(proxy)
+              f.write(helper)
+              f.write(pack("<QQ", len(proxy), len(helper)))
+              f.write(b"125A_SCALER_PKG1")
+          print(f"Standalone setup bytes: {setup.stat().st_size}")
+          '@ | python -
+
+      - name: Package standalone Windows setup
+        shell: pwsh
+        run: |
+          $kit = Join-Path $PWD "PluginScaler-TestKit"
+          New-Item -ItemType Directory -Force -Path $kit | Out-Null
+
+          Copy-Item "build-x64\src\setup\Release\PluginScalerSetup.exe" (Join-Path $kit "PluginScalerSetup.exe") -Force
+
+          @"
+          125A PluginScaler - 150% Pro-53 GUI test
+          Start PluginScalerSetup.exe (no PowerShell).
+          Select the original 32-bit VST2 DLL and 64-bit VST2 target folder.
+          Rescan plugins in Studio One and open the new -125A-150 plugin.
+          Original DLL remains unchanged.
+          This GDI mode is experimental and not universally compatible.
+          "@ | Set-Content (Join-Path $kit "START.txt") -Encoding UTF8
+
+      - name: Upload real VST2 test kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-PluginScaler-Standalone-Setup
+          path: PluginScaler-TestKit/PluginScalerSetup.exe
+          if-no-files-found: error
+          retention-days: 14
