@@ -273,28 +273,43 @@ bool restore() {
 void start(int percentage){
     if(!restore()){output(L"Rueckbau fehlgeschlagen. 125A bleibt aktiv.");
         return;}
-    auto pids=processes();
+    // jBridge can briefly hide/recreate the editor during native
+    // geometry restoration. A single immediate enumeration is not reliable.
+    // Retry discovery only when no eligible editor was seen. Never repeat
+    // connection attempts after a real attach failure.
+    std::vector<DWORD> pids;
+    std::vector<std::pair<DWORD,Choice>> candidates;
+    for(int attempt=0;attempt<16;++attempt) {
+        pids=processes();
+        candidates.clear();
+        for(DWORD pid:pids) {
+            for(const auto& w:windows(pid))
+                candidates.emplace_back(pid,w);
+        }
+        if(!candidates.empty())break;
+        if(attempt<15)Sleep(100);
+    }
     if(pids.empty()){output(L"Kein 32-Bit-jBridge mit Pro-53.dll gefunden.\n"
               L"Pro-53 in Studio One separat oeffnen.");return;}
     int connected=0,inspected=0;
     LONG lastFailure=0;
-    for(DWORD pid:pids){
-        for(const auto& w:windows(pid)){
-            Session session{};
-            LONG failure{};
-            ++inspected;
-            if(connect(w.hwnd,pid,w.tid,percentage,session,failure)){
-                active.push_back(session);++connected;break;
-            }
-            if(failure!=0)lastFailure=failure;
+    for(const auto& item:candidates) {
+        const DWORD pid=item.first;
+        const auto& w=item.second;
+        Session session{};
+        LONG failure{};
+        ++inspected;
+        if(connect(w.hwnd,pid,w.tid,percentage,session,failure)){
+            active.push_back(session);++connected;break;
         }
+        if(failure!=0)lastFailure=failure;
     }
     if(connected)syncInputMode();
     if(connected)output(std::to_wstring(connected)+
        L" Pro-53-Fenster auf "+std::to_wstring(percentage)+
        L" % skaliert.\n100 % / Beenden stellt die Originalgroesse wieder her.");
     else output(L"Pro-53 geladen, aber Editor-Zuordnung abgelehnt.\n"
-                L"Fenster geprueft: "+std::to_wstring(inspected)+
+                L"Fenster geprueft (nach bis zu 1,5 s Suche): "+std::to_wstring(inspected)+
                 L" | Diagnose: "+std::to_wstring(lastFailure)+
                 L"\nEs wurde nichts vergroessert.");
 }
