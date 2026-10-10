@@ -40,8 +40,24 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 for(int y=30;y<66;++y)
                     for(int x=48;x<80;++x)
                         pixels[y*kLogicalWidth+x]=0x0019BE64;
-                SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
-                    0,0,0,kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
+                if(state->rendererMode==2) {
+                    // First fill with background only; then paint the
+                    // green rectangle as a CLIPPED source-DIB region.
+                    // This test was impossible to pass with the former
+                    // full-frame-only SetDIBits hooking condition.
+                    std::vector<std::uint32_t> background(
+                        kLogicalWidth*kLogicalHeight,0x000A0C10);
+                    SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
+                        0,0,0,kLogicalHeight,background.data(),&bitmap,
+                        DIB_RGB_COLORS);
+                    // Nonzero source coordinates and a source rectangle
+                    // smaller than the BITMAPINFO header dimensions.
+                    SetDIBitsToDevice(dc,48,30,32,36,48,30,0,
+                        kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
+                } else {
+                    SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
+                        0,0,0,kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
+                }
             } else {
                 HBRUSH bg=CreateSolidBrush(RGB(10,12,16));
                 HBRUSH bright=CreateSolidBrush(RGB(25,190,100));

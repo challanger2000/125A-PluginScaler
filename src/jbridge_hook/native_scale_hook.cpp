@@ -102,26 +102,34 @@ HDC WINAPI scaledGetDC(HWND hwnd) {
 int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
                            int sx,int sy,UINT start,UINT lines,
                            const void* bits,const BITMAPINFO* info,UINT usage) {
-    // SetDIBitsToDevice only maps the destination ORIGIN. It does not zoom
-    // pixels. For a complete RGB DIB, use the GDI stretch operation instead
-    // so destination width/height observe our anisotropic map.
+    // Pro-53's actual binary (call site 0x100A99B3) uses CLIPPED
+    // SetDIBitsToDevice transfers. Requiring source==full image dimensions
+    // incorrectly leaves its whole GUI at 100%, although HWND grows.
+    //
+    // A complete in-memory DIB may draw ANY in-bounds source RECT:
+    // dest dx/dy and width/height refer to the selected source region;
+    // the DC's viewport makes the logical destination 150%/200%.
     if(dc&&bits&&info&&target&&zoom>100&&WindowFromDC(dc)==target &&
        info->bmiHeader.biSize>=sizeof(BITMAPINFOHEADER) &&
        (info->bmiHeader.biCompression==BI_RGB ||
         info->bmiHeader.biCompression==BI_BITFIELDS) &&
        info->bmiHeader.biWidth>0 &&
-       (info->bmiHeader.biHeight>0||info->bmiHeader.biHeight<0) &&
        info->bmiHeader.biHeight!=LONG_MIN &&
-       width<=INT_MAX&&height<=INT_MAX &&
-       static_cast<DWORD>(info->bmiHeader.biWidth)==width &&
-       static_cast<DWORD>(std::abs(info->bmiHeader.biHeight))==height &&
-       start==0&&lines==height&&sx==0&&sy==0) {
+       width>0&&height>0&&width<=INT_MAX&&height<=INT_MAX &&
+       sx>=0&&sy>=0 &&
+       static_cast<std::uint64_t>(sx)+width<=
+           static_cast<DWORD>(info->bmiHeader.biWidth) &&
+       static_cast<std::uint64_t>(sy)+height<=
+           static_cast<DWORD>(std::abs(info->bmiHeader.biHeight)) &&
+       start==0&&lines==static_cast<DWORD>(std::abs(info->bmiHeader.biHeight))) {
+        // Some legacy renderers set MM_TEXT/reset DC mapping per redraw.
+        // Restore the target's mapped logical space immediately before blit.
+        transformDC(dc);
         return StretchDIBits(dc,dx,dy,static_cast<int>(width),
-              static_cast<int>(height),0,0,static_cast<int>(width),
+              static_cast<int>(height),sx,sy,static_cast<int>(width),
               static_cast<int>(height),bits,info,usage,SRCCOPY);
     }
-    // Partial/banded DIB writes and unknown source formats are unchanged
-    // rather than silently guessing their image bounds or orientation.
+    // Source bands or unknown/compressed bitmaps are not guessed.
     return originalSetDIBits ?
            originalSetDIBits(dc,dx,dy,width,height,sx,sy,start,lines,
                              bits,info,usage):0;

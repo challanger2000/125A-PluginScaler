@@ -67,3 +67,9 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib --nested
           if ($LASTEXITCODE -ne 0) { throw "Nested jBridge frame + original editor zoom failed" }
+
+      - name: Assert Pro-53-style clipped source DIBs at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --clipped
+          if ($LASTEXITCODE -ne 0) { throw "Clipped DIB renderer scale FAILED" }
