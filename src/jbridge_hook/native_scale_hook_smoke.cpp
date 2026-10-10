@@ -161,8 +161,9 @@ int wmain(int argc,wchar_t** argv) {
         return child(true,argc>2?_wtoi(argv[2]):0,argc>3&&wcscmp(argv[3],L"--nested")==0);
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
     const bool clipped=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--clipped")==0;
+    const bool oversized=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--oversized")==0;
     const bool bitmap=alreadyOpen&&argc>2&&
-                       (wcscmp(argv[2],L"--dib")==0||clipped);
+        (wcscmp(argv[2],L"--dib")==0||clipped||oversized);
     const bool nested=alreadyOpen && (argc>2&&wcscmp(argv[2],L"--nested")==0 ||
                                      argc>3&&wcscmp(argv[3],L"--nested")==0);
     wchar_t exe[MAX_PATH]{};
@@ -188,7 +189,7 @@ int wmain(int argc,wchar_t** argv) {
         if(!t.state){ok=false;break;}
         ZeroMemory(t.state,sizeof(NativeScaleState));
         t.state->scale=(i==0 ? 150 : 200);
-        t.state->rendererMode=clipped?2:(bitmap?1:0);
+        t.state->rendererMode=oversized?3:(clipped?2:(bitmap?1:0));
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
         std::wstring command=L"\""+std::wstring(exe)+
             (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+
@@ -286,11 +287,14 @@ int wmain(int argc,wchar_t** argv) {
             }
             const bool trueClippedDib=!clipped ||
                     (t.state->rendererMode==2 && t.state->clippedDibCalls>0);
+            const bool oversizedHandled=!oversized ||
+                    (t.state->rendererMode==3 && t.attach &&
+                     t.attach->diagOversizedConverted>0);
             const bool hookedPainting=!bitmap ||
                 (t.attach && t.attach->diagDibCalls>0 &&
                  t.attach->diagDibConverted>0);
             const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&
-                            trueClippedDib&&hookedPainting;
+                            trueClippedDib&&hookedPainting&&oversizedHandled;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -347,7 +351,7 @@ int wmain(int argc,wchar_t** argv) {
     FreeLibrary(dll);
     std::printf("%s-%s-gdi-150-200-native-mouse=%s\n",
         alreadyOpen?"already-open-injected":"creation-injected",
-        clipped?"clipped-dib":(bitmap?"dib":"vector"),
+        oversized?"oversized-dib":(clipped?"clipped-dib":(bitmap?"dib":"vector")),
         ok?"PASS":"FAIL");
     std::puts("LIMIT: Controlled Win32 GDI mock; does not establish jBridge or arbitrary VST support.");
     return ok?0:4;

@@ -73,3 +73,9 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --clipped
           if ($LASTEXITCODE -ne 0) { throw "Clipped DIB renderer scale FAILED" }
+
+      - name: Reject black-frame regression from actual Pro-53 oversized destination DIB
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --oversized
+          if ($LASTEXITCODE -ne 0) { throw "Original Pro-53 1143x537 destination / 762x358 source handling FAILED" }

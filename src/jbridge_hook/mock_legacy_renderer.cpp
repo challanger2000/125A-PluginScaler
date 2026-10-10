@@ -40,7 +40,18 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 for(int y=30;y<66;++y)
                     for(int x=48;x<80;++x)
                         pixels[y*kLogicalWidth+x]=0x0019BE64;
-                if(state->rendererMode==2) {
+                if(state->rendererMode==3) {
+                    // Reproduce actual Pro-53 input after the plugin HWND
+                    // grows: SetDIBitsToDevice asks for physical client
+                    // size but its backing pixels remain at 100%.
+                    RECT client{};
+                    GetClientRect(hwnd,&client);
+                    const int w=client.right-client.left;
+                    const int h=client.bottom-client.top;
+                    SetDIBitsToDevice(dc,0,0,w,h,0,
+                        kLogicalHeight-h,0,kLogicalHeight,
+                        pixels.data(),&bitmap,DIB_RGB_COLORS);
+                } else if(state->rendererMode==2) {
                     // First fill with background only; then paint the
                     // green rectangle as a CLIPPED source-DIB region.
                     // This test was impossible to pass with the former

@@ -15,7 +15,7 @@ struct NativeScaleState {
     volatile LONG mismatch;
     volatile LONG originalLogicalX;
     volatile LONG originalLogicalY;
-    volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB, 2=clipped DIB
+    volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB, 2=clipped DIB, 3=oversized DIB
     volatile LONG clippedDibCalls;
 };
 constexpr wchar_t kNativeScaleMapName[] = L"125A_NATIVE_SCALE_SMOKE_MAP";
@@ -68,4 +68,5 @@ struct NativeAttachCommand {
     volatile LONG diagRejectedLines;
     volatile LONG diagRejectedStart;
     volatile LONG diagRejectedBits;
+    volatile LONG diagOversizedConverted;
 };

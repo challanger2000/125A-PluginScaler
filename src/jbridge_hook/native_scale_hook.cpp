@@ -137,6 +137,56 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
     // A complete in-memory DIB may draw ANY in-bounds source RECT:
     // dest dx/dy and width/height refer to the selected source region;
     // the DC's viewport makes the logical destination 150%/200%.
+    // ORIGINAL PRO-53 2026-10-10 OBSERVED: The native editor asks
+    // SetDIBitsToDevice for an already enlarged destination (e.g.
+    // 1143x537) while BITMAPINFO is the unchanged original (762x358),
+    // with a negative YSrc equal to -(destHeight-sourceHeight).
+    // This represents the entire ORIGINAL backing bitmap stretched
+    // into the NEW viewport; treating it as an out-of-bounds source
+    // rectangle makes the entire GUI appear at 100% on black.
+    //
+    // Require the exact full-image geometry, standard raw DIB formats,
+    // same original HWND and all scanlines. No arbitrary negative-source
+    // coordinates are accepted, and no source buffer is read beyond bounds.
+    if(dc && bits && info && owner==target && zoom>100 &&
+       info->bmiHeader.biSize>=sizeof(BITMAPINFOHEADER) &&
+       (info->bmiHeader.biCompression==BI_RGB ||
+        info->bmiHeader.biCompression==BI_BITFIELDS) &&
+       info->bmiHeader.biWidth>0 &&
+       info->bmiHeader.biHeight!=0 &&
+       info->bmiHeader.biHeight!=LONG_MIN &&
+       width>0 && height>0 &&
+       width<=INT_MAX && height<=INT_MAX &&
+       sx==0 && start==0) {
+        const int bw=info->bmiHeader.biWidth;
+        const int bh=std::abs(info->bmiHeader.biHeight);
+        if(lines==static_cast<UINT>(bh) &&
+           width==static_cast<DWORD>(MulDiv(bw,zoom,100)) &&
+           height==static_cast<DWORD>(MulDiv(bh,zoom,100)) &&
+           sy==bh-static_cast<int>(height)) {
+            // Map logical bw x bh to exactly the expanded client region.
+            // The original full bitmap is passed to StretchDIBits intact.
+            transformDC(dc);
+            const int saved=SaveDC(dc);
+            if(saved) {
+                // On this input pattern the old SetDIBitsToDevice dx/dy
+                // refer to the origin. Render all original pixels instead
+                // of extrapolating invalid source coordinates.
+                const int result=StretchDIBits(
+                    dc,dx,dy,bw,bh,0,0,bw,bh,bits,info,usage,SRCCOPY);
+                RestoreDC(dc,saved);
+                if(debugState) {
+                    InterlockedIncrement(&debugState->diagDibConverted);
+                    InterlockedIncrement(&debugState->diagOversizedConverted);
+                    InterlockedExchange(&debugState->diagLastStretchReturn,result);
+                    InterlockedIncrement(result!=GDI_ERROR && result!=0 ?
+                        &debugState->diagStretchSuccess:
+                        &debugState->diagStretchFailure);
+                }
+                return result==GDI_ERROR?0:result;
+            }
+        }
+    }
     // Keep the conditions explicit: one unsupported base-image blit
     // must not hide behind the more numerous knob redraws.
     LONG reason=0;
