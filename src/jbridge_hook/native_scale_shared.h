@@ -37,4 +37,18 @@ struct NativeAttachCommand {
     volatile LONG rootHwnd;
     volatile LONG rootOuterWidth;
     volatile LONG rootOuterHeight;
+    // Live evidence from calls INTO the original renderer, not from GUI size.
+    volatile LONG diagPaint;
+    volatile LONG diagGetDC;
+    volatile LONG diagDibCalls;
+    volatile LONG diagDibConverted;
+    volatile LONG diagDibOtherDC;
+    volatile LONG diagDibSkipped;
+    volatile LONG diagLastWidth;
+    volatile LONG diagLastHeight;
+    volatile LONG diagLastStart;
+    volatile LONG diagLastLines;
+    volatile LONG diagLastXSrc;
+    volatile LONG diagLastYSrc;
+    volatile LONG diagLastOwner;
 };

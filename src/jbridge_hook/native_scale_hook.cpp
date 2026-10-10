@@ -27,7 +27,13 @@ struct Patch {
 Patch patches[3]{};
 unsigned patchCount{};
 bool patched=false;
+NativeAttachCommand* debugState{};
+HANDLE debugMapping{};
 bool restoreOriginalImports();
+void releaseDebugState() {
+    if(debugState){UnmapViewOfFile(debugState);debugState=nullptr;}
+    if(debugMapping){CloseHandle(debugMapping);debugMapping=nullptr;}
+}
 
 HMODULE imageAtProcedure(const void* proc) {
     if(!proc)return nullptr;
@@ -91,17 +97,35 @@ void transformDC(HDC dc) {
 }
 HDC WINAPI scaledBeginPaint(HWND hwnd,LPPAINTSTRUCT ps) {
     HDC dc=originalBeginPaint ? originalBeginPaint(hwnd,ps):nullptr;
-    if(hwnd==target)transformDC(dc);
+    if(hwnd==target) {
+        if(debugState)InterlockedIncrement(&debugState->diagPaint);
+        transformDC(dc);
+    }
     return dc;
 }
 HDC WINAPI scaledGetDC(HWND hwnd) {
     HDC dc=originalGetDC ? originalGetDC(hwnd):nullptr;
-    if(hwnd==target)transformDC(dc);
+    if(hwnd==target) {
+        if(debugState)InterlockedIncrement(&debugState->diagGetDC);
+        transformDC(dc);
+    }
     return dc;
 }
 int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
                            int sx,int sy,UINT start,UINT lines,
                            const void* bits,const BITMAPINFO* info,UINT usage) {
+    const HWND owner=dc?WindowFromDC(dc):nullptr;
+    if(debugState&&target) {
+        InterlockedIncrement(&debugState->diagDibCalls);
+        InterlockedExchange(&debugState->diagLastWidth,static_cast<LONG>(width));
+        InterlockedExchange(&debugState->diagLastHeight,static_cast<LONG>(height));
+        InterlockedExchange(&debugState->diagLastStart,static_cast<LONG>(start));
+        InterlockedExchange(&debugState->diagLastLines,static_cast<LONG>(lines));
+        InterlockedExchange(&debugState->diagLastXSrc,sx);
+        InterlockedExchange(&debugState->diagLastYSrc,sy);
+        InterlockedExchange(&debugState->diagLastOwner,
+                           static_cast<LONG>(reinterpret_cast<std::uintptr_t>(owner)));
+    }
     // Pro-53's actual binary (call site 0x100A99B3) uses CLIPPED
     // SetDIBitsToDevice transfers. Requiring source==full image dimensions
     // incorrectly leaves its whole GUI at 100%, although HWND grows.
@@ -109,7 +133,7 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
     // A complete in-memory DIB may draw ANY in-bounds source RECT:
     // dest dx/dy and width/height refer to the selected source region;
     // the DC's viewport makes the logical destination 150%/200%.
-    if(dc&&bits&&info&&target&&zoom>100&&WindowFromDC(dc)==target &&
+    if(dc&&bits&&info&&target&&zoom>100&&owner==target &&
        info->bmiHeader.biSize>=sizeof(BITMAPINFOHEADER) &&
        (info->bmiHeader.biCompression==BI_RGB ||
         info->bmiHeader.biCompression==BI_BITFIELDS) &&
@@ -127,6 +151,7 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
         // DIBs. Preserve source image orientation by scaling the WHOLE
         // bitmap as in our full-frame test; clip its destination to the
         // original update rectangle. This also handles knob/LED repaints.
+        if(debugState)InterlockedIncrement(&debugState->diagDibConverted);
         transformDC(dc);
         const int saved=SaveDC(dc);
         if(saved) {
@@ -155,6 +180,10 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
                               bits,info,usage) : 0;
     }
     // Source bands or unknown/compressed bitmaps are not guessed.
+    if(debugState&&target) {
+        InterlockedIncrement(owner==target?
+          &debugState->diagDibSkipped:&debugState->diagDibOtherDC);
+    }
     return originalSetDIBits ?
            originalSetDIBits(dc,dx,dy,width,height,sx,sy,start,lines,
                              bits,info,usage):0;
@@ -317,6 +346,7 @@ void attachToAlreadyOpenEditor() {
             target=nullptr;
             zoom=100;
             InterlockedExchange(&command->status,sized&&rootSized?2:-6);
+            releaseDebugState();
         }
     }
     if(command->status==0 && !target) {
@@ -427,6 +457,16 @@ void attachToAlreadyOpenEditor() {
                             outer.right-outer.left);
                         InterlockedExchange(&command->originalOuterHeight,
                             outer.bottom-outer.top);
+                        // Keep this mapping alive for renderer-call counters
+                        // until the original import table is restored.
+                        debugMapping=OpenFileMappingW(FILE_MAP_ALL_ACCESS,
+                                                       FALSE,name);
+                        if(debugMapping) {
+                            debugState=static_cast<NativeAttachCommand*>(
+                                MapViewOfFile(debugMapping,FILE_MAP_ALL_ACCESS,
+                                    0,0,sizeof(NativeAttachCommand)));
+                            if(!debugState){CloseHandle(debugMapping);debugMapping=nullptr;}
+                        }
                         InvalidateRect(hwnd,nullptr,FALSE);
                         InterlockedExchange(&command->status,1);
                     }
