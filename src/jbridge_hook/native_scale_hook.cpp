@@ -154,7 +154,7 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
     if(sx<0||sy<0)reason|=256;
     if(info && info->bmiHeader.biHeight!=LONG_MIN) {
         if(static_cast<std::uint64_t>(std::max(sx,0))+width>
-               static_cast<std::uint64_t>(std::max(info->bmiHeader.biWidth,0)) ||
+               static_cast<std::uint64_t>(std::max<LONG>(info->bmiHeader.biWidth,0L)) ||
            static_cast<std::uint64_t>(std::max(sy,0))+height>
                static_cast<std::uint64_t>(std::abs(info->bmiHeader.biHeight)))
            reason|=512;
