@@ -18,6 +18,7 @@ using BeginPaintFn=HDC (WINAPI*)(HWND,LPPAINTSTRUCT);
 using SetCaptureFn=HWND (WINAPI*)(HWND);
 using ReleaseCaptureFn=BOOL (WINAPI*)();
 using InvalidateRectFn=BOOL (WINAPI*)(HWND,const RECT*,BOOL);
+using GetUpdateRectFn=BOOL (WINAPI*)(HWND,LPRECT,BOOL);
 using GetDCFn=HDC (WINAPI*)(HWND);
 using SetDIBitsFn=int (WINAPI*)(HDC,int,int,DWORD,DWORD,int,int,UINT,UINT,
                                  const void*,const BITMAPINFO*,UINT);
@@ -27,6 +28,7 @@ SetDIBitsFn originalSetDIBits{};
 SetCaptureFn originalSetCapture{};
 ReleaseCaptureFn originalReleaseCapture{};
 InvalidateRectFn originalInvalidateRect{};
+GetUpdateRectFn originalGetUpdateRect{};
 HWND target{};
 int zoom=100;
 int logicalWidth=kLogicalWidth,logicalHeight=kLogicalHeight;
@@ -37,7 +39,7 @@ struct Patch {
     LONG previous{};
     LONG inserted{};
 };
-Patch patches[6]{};
+Patch patches[7]{};
 unsigned patchCount{};
 bool patched=false;
 NativeAttachCommand* debugState{};
@@ -177,11 +179,41 @@ BOOL WINAPI diagnosticReleaseCapture() {
         InterlockedIncrement(&debugState->diagReleaseCaptureCalls);
     return originalReleaseCapture?originalReleaseCapture():FALSE;
 }
+// Three WIN32 APIs must agree about the coordinate system. Windows
+// maintains an invalidated update region in PHYSICAL client pixels;
+// the original unscaled renderer expects original LOGICAL pixels.
+// Windows' actual clip region stays physical; the mapped HDC maps the
+// plugin's logical drawing commands onto that region.
+RECT scaledRect(const RECT& src,int numerator,int denominator) {
+    RECT out{
+        MulDiv(src.left,numerator,denominator),
+        MulDiv(src.top,numerator,denominator),
+        MulDiv(src.right,numerator,denominator),
+        MulDiv(src.bottom,numerator,denominator)};
+    return out;
+}
 BOOL WINAPI diagnosticInvalidateRect(HWND hwnd,const RECT* rect,BOOL erase) {
     if(hwnd==target && debugState)
         InterlockedIncrement(&debugState->diagInvalidateCalls);
+    if(hwnd==target && zoom>100 && rect) {
+        RECT physical=scaledRect(*rect,zoom,100);
+        if(debugState)InterlockedIncrement(&debugState->diagInvalidatePartial);
+        return originalInvalidateRect ?
+            originalInvalidateRect(hwnd,&physical,erase):FALSE;
+    }
     return originalInvalidateRect?
         originalInvalidateRect(hwnd,rect,erase):FALSE;
+}
+BOOL WINAPI scaledGetUpdateRect(HWND hwnd,LPRECT rect,BOOL erase) {
+    BOOL valid=originalGetUpdateRect ?
+        originalGetUpdateRect(hwnd,rect,erase):FALSE;
+    if(hwnd==target && debugState) {
+        InterlockedIncrement(&debugState->diagUpdateCalls);
+        if(valid)InterlockedIncrement(&debugState->diagUpdateSuccess);
+    }
+    if(hwnd==target && zoom>100 && valid && rect)
+        *rect=scaledRect(*rect,100,zoom);
+    return valid;
 }
 void transformDC(HDC dc) {
     if(!dc||zoom<100||zoom>200)return;
@@ -194,6 +226,14 @@ HDC WINAPI scaledBeginPaint(HWND hwnd,LPPAINTSTRUCT ps) {
     HDC dc=originalBeginPaint ? originalBeginPaint(hwnd,ps):nullptr;
     if(hwnd==target) {
         if(debugState)InterlockedIncrement(&debugState->diagPaint);
+        // BeginPaint returns rcPaint in physical client coordinates,
+        // even after selecting MM_ANISOTROPIC. The renderer's
+        // SetDIBitsToDevice source offsets require logical coordinates.
+        if(ps && zoom>100) {
+            ps->rcPaint=scaledRect(ps->rcPaint,100,zoom);
+            if(debugState)
+                InterlockedIncrement(&debugState->diagPaintRectsConverted);
+        }
         transformDC(dc);
     }
     return dc;
@@ -420,6 +460,7 @@ bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className,HMODULE knownModu
     originalSetCapture=nullptr;
     originalReleaseCapture=nullptr;
     originalInvalidateRect=nullptr;
+    originalGetUpdateRect=nullptr;
     patchCount=0;
     const auto* desc=reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(
                          base+imports.VirtualAddress);
@@ -467,6 +508,11 @@ bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className,HMODULE knownModu
                     reinterpret_cast<std::uintptr_t>(&diagnosticInvalidateRect)),
                     original)){failed=true;break;}
                 originalInvalidateRect=reinterpret_cast<InvalidateRectFn>(original);
+            } else if(user&&std::strcmp(symbol,"GetUpdateRect")==0) {
+                if(!applyPatch(slot,static_cast<LONG>(
+                    reinterpret_cast<std::uintptr_t>(&scaledGetUpdateRect)),
+                    original)){failed=true;break;}
+                originalGetUpdateRect=reinterpret_cast<GetUpdateRectFn>(original);
             } else if(gdi&&std::strcmp(symbol,"SetDIBitsToDevice")==0) {
                 if(!applyPatch(slot,static_cast<LONG>(
                     reinterpret_cast<std::uintptr_t>(&scaledSetDIBits)),
@@ -533,6 +579,7 @@ bool restoreOriginalImports() {
     originalSetCapture=nullptr;
     originalReleaseCapture=nullptr;
     originalInvalidateRect=nullptr;
+    originalGetUpdateRect=nullptr;
     patched=false;
     return true;
 }

@@ -91,3 +91,9 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --sent-mouse
           if ($LASTEXITCODE -ne 0) { throw "Mouse coordinate correction for direct SendMessage FAILED" }
+
+      - name: Pixel proof of a real moving knob after a partial InvalidateRect at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --partial-redraw
+          if ($LASTEXITCODE -ne 0) { throw "Dynamic control redraw or clipping coordinates FAILED" }

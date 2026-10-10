@@ -17,6 +17,11 @@ struct NativeScaleState {
     volatile LONG originalLogicalY;
     volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB, 2=clipped DIB, 3=oversized DIB
     volatile LONG clippedDibCalls;
+    volatile LONG partialToggle;
+    volatile LONG partialUpdateLeft;
+    volatile LONG partialUpdateRight;
+    volatile LONG partialPaintLeft;
+    volatile LONG partialPaintRight;
     volatile LONG directSentMouse;
     volatile LONG directSentX;
     volatile LONG directSentY;
@@ -83,6 +88,10 @@ struct NativeAttachCommand {
     volatile LONG diagCaptureSuccessful;
     volatile LONG diagReleaseCaptureCalls;
     volatile LONG diagInvalidateCalls;
+    volatile LONG diagInvalidatePartial;
+    volatile LONG diagUpdateCalls;
+    volatile LONG diagUpdateSuccess;
+    volatile LONG diagPaintRectsConverted;
     volatile LONG nativePassthrough; // 0=logical input, 1=original native input
     volatile LONG nativeLastPhysicalX;
     volatile LONG nativeLastPhysicalY;

@@ -37,7 +37,10 @@ void updateView() {
            L" (aktiv "+std::to_wstring(v->diagCaptureSuccessful)+
            L", Release "+std::to_wstring(v->diagReleaseCaptureCalls)+
            L", Import "+std::to_wstring(v->diagCaptureImported)+L")";
-        s+=L"\nPlugin-Neuzeichnung: "+std::to_wstring(v->diagInvalidateCalls);
+        s+=L"\nPlugin-Neuzeichnung: "+std::to_wstring(v->diagInvalidateCalls)+
+           L" (Teilbereiche "+std::to_wstring(v->diagInvalidatePartial)+
+           L", Update "+std::to_wstring(v->diagUpdateSuccess)+
+           L", PaintRect "+std::to_wstring(v->diagPaintRectsConverted)+L")";
         s+=L"\nPosition physisch: "+std::to_wstring(v->nativeLastPhysicalX)+
            L","+std::to_wstring(v->nativeLastPhysicalY)+
            L" -> logisch: "+std::to_wstring(v->nativeLastLogicalX)+

@@ -166,8 +166,9 @@ int wmain(int argc,wchar_t** argv) {
         wcscmp(argv[2],L"--sent-mouse")==0;
     const bool clipped=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--clipped")==0;
     const bool oversized=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--oversized")==0;
+    const bool partial=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--partial-redraw")==0;
     const bool bitmap=alreadyOpen&&argc>2&&
-        (wcscmp(argv[2],L"--dib")==0||clipped||oversized);
+        (wcscmp(argv[2],L"--dib")==0||clipped||oversized||partial);
     const bool nested=alreadyOpen && (argc>2&&wcscmp(argv[2],L"--nested")==0 ||
                                      argc>3&&wcscmp(argv[3],L"--nested")==0);
     wchar_t exe[MAX_PATH]{};
@@ -193,7 +194,7 @@ int wmain(int argc,wchar_t** argv) {
         if(!t.state){ok=false;break;}
         ZeroMemory(t.state,sizeof(NativeScaleState));
         t.state->scale=(i==0 ? 150 : 200);
-        t.state->rendererMode=oversized?3:(clipped?2:(bitmap?1:0));
+        t.state->rendererMode=partial?4:(oversized?3:(clipped?2:(bitmap?1:0)));
         SetEnvironmentVariableW(kNativeScaleMapName,name.c_str());
         std::wstring command=L"\""+std::wstring(exe)+
             (alreadyOpen ? L"\" --child-existing " : L"\" --child ")+
@@ -269,6 +270,30 @@ int wmain(int argc,wchar_t** argv) {
             const bool mouseVerified=input && t.state->mouseDown==1 &&
                 t.state->mouseMove>0 && t.state->mouseUp==1 &&
                 t.state->mismatch==0;
+            bool dynamicRedraw=true;
+            if(partial) {
+                // Real updated pixels are mandatory. Incremented paint
+                // counters alone do NOT prove that a knob redraw is visible.
+                HDC dc=GetDC(hwnd);
+                const COLORREF changed=dc?GetPixel(dc,MulDiv(68,t.state->scale,100),
+                                    MulDiv(47,t.state->scale,100)):CLR_INVALID;
+                if(dc)ReleaseDC(hwnd,dc);
+                dynamicRedraw=changed==RGB(208,48,176) &&
+                    t.state->partialUpdateLeft==48 &&
+                    t.state->partialUpdateRight==80 &&
+                    t.state->partialPaintLeft==48 &&
+                    t.state->partialPaintRight==80 &&
+                    t.attach && t.attach->diagInvalidatePartial>0 &&
+                    t.attach->diagUpdateSuccess>0 &&
+                    t.attach->diagPaintRectsConverted>0;
+                std::printf("real-scaled-control-redraw-%ld=%s pixel=%08lx invalid=%ld update=%ld,%ld paint=%ld,%ld\n",
+                    t.state->scale,dynamicRedraw?"PASS":"FAIL",
+                    static_cast<unsigned long>(changed),
+                    t.attach?t.attach->diagInvalidatePartial:-1,
+                    t.state->partialUpdateLeft,t.state->partialUpdateRight,
+                    t.state->partialPaintLeft,t.state->partialPaintRight);
+            }
+
             const bool attached=alreadyOpen ?
                  (t.attach && t.attach->status==1 &&
                   t.attach->originalWidth==kLogicalWidth &&
@@ -341,7 +366,7 @@ int wmain(int argc,wchar_t** argv) {
             }
             const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&
                             trueClippedDib&&hookedPainting&&oversizedHandled&&
-                            directCorrect&&nativeCaptureMonitored&&nativeCoordinatesCorrect;
+                            directCorrect&&nativeCaptureMonitored&&nativeCoordinatesCorrect&&dynamicRedraw;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -419,7 +444,7 @@ int wmain(int argc,wchar_t** argv) {
     FreeLibrary(dll);
     std::printf("%s-%s-gdi-150-200-native-mouse=%s\n",
         alreadyOpen?"already-open-injected":"creation-injected",
-        oversized?"oversized-dib":(clipped?"clipped-dib":(bitmap?"dib":"vector")),
+        partial?"partial-redraw":(oversized?"oversized-dib":(clipped?"clipped-dib":(bitmap?"dib":"vector"))),
         ok?"PASS":"FAIL");
     std::puts("LIMIT: Controlled Win32 GDI mock; does not establish jBridge or arbitrary VST support.");
     return ok?0:4;

@@ -22,8 +22,19 @@ extern "C" __declspec(dllexport)
 LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if(msg==WM_NCCREATE)mapStateOnce();
     if(msg==WM_PAINT) {
+        if(state && state->rendererMode==4 && state->partialToggle) {
+            RECT update{};
+            if(GetUpdateRect(hwnd,&update,FALSE)) {
+                InterlockedExchange(&state->partialUpdateLeft,update.left);
+                InterlockedExchange(&state->partialUpdateRight,update.right);
+            }
+        }
         PAINTSTRUCT ps{};
         HDC dc=BeginPaint(hwnd,&ps);
+        if(state && state->rendererMode==4 && state->partialToggle) {
+            InterlockedExchange(&state->partialPaintLeft,ps.rcPaint.left);
+            InterlockedExchange(&state->partialPaintRight,ps.rcPaint.right);
+        }
         if(dc) {
             if(state && state->rendererMode>=1) {
                 // A realistic unscaled VST-style bitmap renderer.
@@ -37,9 +48,11 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 bitmap.bmiHeader.biCompression=BI_RGB;
                 std::vector<std::uint32_t> pixels(kLogicalWidth*kLogicalHeight,
                                                    0x000A0C10);
+                const std::uint32_t fill=(state->rendererMode==4 &&
+                    state->partialToggle)?0x00B030D0:0x0019BE64;
                 for(int y=30;y<66;++y)
                     for(int x=48;x<80;++x)
-                        pixels[y*kLogicalWidth+x]=0x0019BE64;
+                        pixels[y*kLogicalWidth+x]=fill;
                 if(state->rendererMode==3) {
                     // Reproduce actual Pro-53 input after the plugin HWND
                     // grows: SetDIBitsToDevice asks for physical client
@@ -114,6 +127,13 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         } else if(msg==WM_LBUTTONUP) {
             InterlockedIncrement(&state->mouseUp);
             if(GetCapture()==hwnd)ReleaseCapture();
+            if(state->rendererMode==4) {
+                // The original renderer invalidates a SMALL logical
+                // control rectangle, not the entire blown-up editor.
+                InterlockedExchange(&state->partialToggle,1);
+                const RECT redraw{48,30,80,66};
+                InvalidateRect(hwnd,&redraw,FALSE);
+            }
         }
         return 0;
     }
