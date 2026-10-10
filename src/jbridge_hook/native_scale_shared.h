@@ -78,6 +78,11 @@ struct NativeAttachCommand {
     volatile LONG nativeMouseMove;
     volatile LONG nativeMouseUp;
     volatile LONG nativeInputInstalled;
+    volatile LONG diagCaptureImported;
+    volatile LONG diagCaptureCalls;
+    volatile LONG diagCaptureSuccessful;
+    volatile LONG diagReleaseCaptureCalls;
+    volatile LONG diagInvalidateCalls;
     volatile LONG nativeLastPhysicalX;
     volatile LONG nativeLastPhysicalY;
     volatile LONG nativeLastLogicalX;

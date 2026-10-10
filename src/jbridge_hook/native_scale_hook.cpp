@@ -15,12 +15,18 @@
 
 namespace {
 using BeginPaintFn=HDC (WINAPI*)(HWND,LPPAINTSTRUCT);
+using SetCaptureFn=HWND (WINAPI*)(HWND);
+using ReleaseCaptureFn=BOOL (WINAPI*)();
+using InvalidateRectFn=BOOL (WINAPI*)(HWND,const RECT*,BOOL);
 using GetDCFn=HDC (WINAPI*)(HWND);
 using SetDIBitsFn=int (WINAPI*)(HDC,int,int,DWORD,DWORD,int,int,UINT,UINT,
                                  const void*,const BITMAPINFO*,UINT);
 BeginPaintFn originalBeginPaint{};
 GetDCFn originalGetDC{};
 SetDIBitsFn originalSetDIBits{};
+SetCaptureFn originalSetCapture{};
+ReleaseCaptureFn originalReleaseCapture{};
+InvalidateRectFn originalInvalidateRect{};
 HWND target{};
 int zoom=100;
 int logicalWidth=kLogicalWidth,logicalHeight=kLogicalHeight;
@@ -31,7 +37,7 @@ struct Patch {
     LONG previous{};
     LONG inserted{};
 };
-Patch patches[3]{};
+Patch patches[6]{};
 unsigned patchCount{};
 bool patched=false;
 NativeAttachCommand* debugState{};
@@ -145,6 +151,31 @@ bool detachNativeInput(HWND hwnd) {
                              kNativeMouseSubclassId))return false;
     nativeInputInstalled=false;
     return true;
+}
+// These wrappers are intentionally PASSTHROUGH: measure whether the
+// original Pro-53 UI recognizes a click and repaints, not just whether
+// our external mouse-subclass sees WM_LBUTTONDOWN/UP. No input or layout
+// behavior is modified by this instrumentation.
+HWND WINAPI diagnosticSetCapture(HWND hwnd) {
+    const HWND prior=originalSetCapture ? originalSetCapture(hwnd):nullptr;
+    if(hwnd==target && debugState) {
+        InterlockedIncrement(&debugState->diagCaptureCalls);
+        if(GetCapture()==target)
+            InterlockedIncrement(&debugState->diagCaptureSuccessful);
+    }
+    return prior;
+}
+BOOL WINAPI diagnosticReleaseCapture() {
+    const bool wasTarget=target && GetCapture()==target;
+    if(wasTarget && debugState)
+        InterlockedIncrement(&debugState->diagReleaseCaptureCalls);
+    return originalReleaseCapture?originalReleaseCapture():FALSE;
+}
+BOOL WINAPI diagnosticInvalidateRect(HWND hwnd,const RECT* rect,BOOL erase) {
+    if(hwnd==target && debugState)
+        InterlockedIncrement(&debugState->diagInvalidateCalls);
+    return originalInvalidateRect?
+        originalInvalidateRect(hwnd,rect,erase):FALSE;
 }
 void transformDC(HDC dc) {
     if(!dc||zoom<100||zoom>200)return;
@@ -380,6 +411,9 @@ bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className,HMODULE knownModu
     originalBeginPaint=nullptr;
     originalGetDC=nullptr;
     originalSetDIBits=nullptr;
+    originalSetCapture=nullptr;
+    originalReleaseCapture=nullptr;
+    originalInvalidateRect=nullptr;
     patchCount=0;
     const auto* desc=reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(
                          base+imports.VirtualAddress);
@@ -412,6 +446,21 @@ bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className,HMODULE knownModu
                     reinterpret_cast<std::uintptr_t>(&scaledGetDC)),
                     original)){failed=true;break;}
                 originalGetDC=reinterpret_cast<GetDCFn>(original);
+            } else if(user&&std::strcmp(symbol,"SetCapture")==0) {
+                if(!applyPatch(slot,static_cast<LONG>(
+                    reinterpret_cast<std::uintptr_t>(&diagnosticSetCapture)),
+                    original)){failed=true;break;}
+                originalSetCapture=reinterpret_cast<SetCaptureFn>(original);
+            } else if(user&&std::strcmp(symbol,"ReleaseCapture")==0) {
+                if(!applyPatch(slot,static_cast<LONG>(
+                    reinterpret_cast<std::uintptr_t>(&diagnosticReleaseCapture)),
+                    original)){failed=true;break;}
+                originalReleaseCapture=reinterpret_cast<ReleaseCaptureFn>(original);
+            } else if(user&&std::strcmp(symbol,"InvalidateRect")==0) {
+                if(!applyPatch(slot,static_cast<LONG>(
+                    reinterpret_cast<std::uintptr_t>(&diagnosticInvalidateRect)),
+                    original)){failed=true;break;}
+                originalInvalidateRect=reinterpret_cast<InvalidateRectFn>(original);
             } else if(gdi&&std::strcmp(symbol,"SetDIBitsToDevice")==0) {
                 if(!applyPatch(slot,static_cast<LONG>(
                     reinterpret_cast<std::uintptr_t>(&scaledSetDIBits)),
@@ -475,6 +524,9 @@ bool restoreOriginalImports() {
     originalBeginPaint=nullptr;
     originalGetDC=nullptr;
     originalSetDIBits=nullptr;
+    originalSetCapture=nullptr;
+    originalReleaseCapture=nullptr;
+    originalInvalidateRect=nullptr;
     patched=false;
     return true;
 }
@@ -628,6 +680,8 @@ void attachToAlreadyOpenEditor() {
                     }else{
                         InterlockedExchange(&command->dibImported,originalSetDIBits?1:0);
                         InterlockedExchange(&command->beginImported,originalBeginPaint?1:0);
+                        InterlockedExchange(&command->diagCaptureImported,
+                            originalSetCapture?1:0);
                         InterlockedExchange(&command->originalWidth,logicalWidth);
                         InterlockedExchange(&command->originalHeight,logicalHeight);
                         InterlockedExchange(&command->originalOuterWidth,

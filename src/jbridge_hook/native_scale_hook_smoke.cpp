@@ -294,6 +294,11 @@ int wmain(int argc,wchar_t** argv) {
             const bool oversizedHandled=!oversized ||
                     (t.state->rendererMode==3 && t.attach &&
                      t.attach->diagOversizedConverted>0);
+            const bool nativeCaptureMonitored=!alreadyOpen ||
+                (t.attach && t.attach->diagCaptureImported==1 &&
+                 t.attach->diagCaptureCalls>=1 &&
+                 t.attach->diagCaptureSuccessful>=1 &&
+                 t.attach->diagReleaseCaptureCalls>=1);
             const bool hookedPainting=!bitmap ||
                 (t.attach && t.attach->diagDibCalls>0 &&
                  t.attach->diagDibConverted>0);
@@ -316,7 +321,7 @@ int wmain(int argc,wchar_t** argv) {
             }
             const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&
                             trueClippedDib&&hookedPainting&&oversizedHandled&&
-                            directCorrect;
+                            directCorrect&&nativeCaptureMonitored;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -324,6 +329,13 @@ int wmain(int argc,wchar_t** argv) {
                t.state->hooked,t.state->patchOK,int(painted),
                t.state->mouseDown,t.state->mouseMove,t.state->mouseUp,
                t.state->mismatch);
+            if(alreadyOpen && t.attach)
+                std::printf("PRO53_NATIVE_INPUT_CAPTURE percent=%ld imported=%ld set=%ld success=%ld release=%ld repaint=%ld\n",
+                    t.state->scale,t.attach->diagCaptureImported,
+                    t.attach->diagCaptureCalls,
+                    t.attach->diagCaptureSuccessful,
+                    t.attach->diagReleaseCaptureCalls,
+                    t.attach->diagInvalidateCalls);
             if(alreadyOpen && bitmap)
                 std::printf("DIB_IMPORTS zoom=%ld begin=%ld dib=%ld clippedCalls=%ld calls=%ld converted=%ld wrongDC=%ld skipped=%ld\n",
                    t.state->scale,t.attach?t.attach->beginImported:-1,
