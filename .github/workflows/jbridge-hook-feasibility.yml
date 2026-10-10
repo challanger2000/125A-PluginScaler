@@ -85,3 +85,9 @@ jobs:
         run: |
           & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --retry-detach
           if ($LASTEXITCODE -ne 0) { throw "Native rollback retry FAILED" }
+
+      - name: Native in-process WndProc subclass must translate SendMessage mouse input at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --sent-mouse
+          if ($LASTEXITCODE -ne 0) { throw "Mouse coordinate correction for direct SendMessage FAILED" }

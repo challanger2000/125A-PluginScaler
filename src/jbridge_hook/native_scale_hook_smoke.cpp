@@ -162,6 +162,8 @@ int wmain(int argc,wchar_t** argv) {
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
     const bool retry=alreadyOpen && argc>2 &&
         wcscmp(argv[2],L"--retry-detach")==0;
+    const bool sentTest=alreadyOpen && argc>2 &&
+        wcscmp(argv[2],L"--sent-mouse")==0;
     const bool clipped=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--clipped")==0;
     const bool oversized=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--oversized")==0;
     const bool bitmap=alreadyOpen&&argc>2&&
@@ -295,8 +297,26 @@ int wmain(int argc,wchar_t** argv) {
             const bool hookedPainting=!bitmap ||
                 (t.attach && t.attach->diagDibCalls>0 &&
                  t.attach->diagDibConverted>0);
+            bool directCorrect=true;
+            if(sentTest && attached && painted && mouseVerified) {
+                const int x=MulDiv(65,t.state->scale,100);
+                const int y=MulDiv(45,t.state->scale,100);
+                DWORD_PTR ignore{};
+                const bool down=SendMessageTimeoutW(hwnd,WM_LBUTTONDOWN,
+                    MK_LBUTTON,MAKELPARAM(x,y),SMTO_ABORTIFHUNG,1500,
+                    &ignore)!=0;
+                const bool up=SendMessageTimeoutW(hwnd,WM_LBUTTONUP,0,
+                    MAKELPARAM(x,y),SMTO_ABORTIFHUNG,1500,&ignore)!=0;
+                directCorrect=down&&up && t.state->directSentMouse>=2 &&
+                    t.state->directSentX==65 && t.state->directSentY==45 &&
+                    t.attach && t.attach->nativeInputInstalled==1;
+                std::printf("direct-SendMessage-physical-to-logical-%ld=%s sent=%ld last=%ld,%ld\\n",
+                    t.state->scale,directCorrect?"PASS":"FAIL",
+                    t.state->directSentMouse,t.state->directSentX,t.state->directSentY);
+            }
             const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&
-                            trueClippedDib&&hookedPainting&&oversizedHandled;
+                            trueClippedDib&&hookedPainting&&oversizedHandled&&
+                            directCorrect;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -345,8 +365,11 @@ int wmain(int argc,wchar_t** argv) {
                 InterlockedExchange(&t.state->mismatch,0);
                 const bool clicked=restored&&injectInput(hwnd);
                 Sleep(60);
-                const bool inputBack=clicked&&t.state->mouseDown==2 &&
-                      t.state->mouseUp==2&&t.state->mismatch==0;
+                const int expectedClicks=sentTest?3:2;
+                const bool inputBack=clicked &&
+                      t.state->mouseDown==expectedClicks &&
+                      t.state->mouseUp==expectedClicks &&
+                      t.state->mismatch==0;
                 std::printf("already-open-detach-restore-%ld=%s status=%ld originalPixels=%d originalMouse=%d down=%ld up=%ld mismatch=%ld\n",
                    t.attach->scale,(restored&&inputBack)?"PASS":"FAIL",
                    t.attach->status,int(restored),int(inputBack),t.state->mouseDown,t.state->mouseUp,t.state->mismatch);

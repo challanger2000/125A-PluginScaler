@@ -86,6 +86,12 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     if(state && (msg==WM_LBUTTONDOWN||msg==WM_MOUSEMOVE||msg==WM_LBUTTONUP)) {
         const int logicalX=GET_X_LPARAM(lp),logicalY=GET_Y_LPARAM(lp);
+        const bool direct=InSendMessage()!=FALSE;
+        if(direct && (msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP)) {
+            InterlockedIncrement(&state->directSentMouse);
+            InterlockedExchange(&state->directSentX,logicalX);
+            InterlockedExchange(&state->directSentY,logicalY);
+        }
         const DWORD timestamped=GetMessagePos();
         POINT screen{GET_X_LPARAM(static_cast<LPARAM>(timestamped)),
                      GET_Y_LPARAM(static_cast<LPARAM>(timestamped))};
@@ -93,7 +99,7 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             const LONG scale=InterlockedCompareExchange(&state->scale,0,0);
             const bool tracked=msg==WM_LBUTTONDOWN || msg==WM_LBUTTONUP ||
                                (msg==WM_MOUSEMOVE && (wp&MK_LBUTTON));
-            if(tracked && scale>0 &&
+            if(tracked && !direct && scale>0 &&
                (std::abs(MulDiv(screen.x,100,scale)-logicalX)>1 ||
                 std::abs(MulDiv(screen.y,100,scale)-logicalY)>1))
                 InterlockedIncrement(&state->mismatch);

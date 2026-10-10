@@ -26,6 +26,14 @@ void updateView() {
     std::wstring s=userStatus;
     if(!active.empty()&&active[0].state&&active[0].state->status==1) {
         const auto* v=active[0].state;
+        s+=L"\n\nMAUS: "+std::to_wstring(v->nativeMouseEvents)+
+           L" (Down "+std::to_wstring(v->nativeMouseDown)+
+           L", Move "+std::to_wstring(v->nativeMouseMove)+
+           L", Up "+std::to_wstring(v->nativeMouseUp)+L")";
+        s+=L"\nPosition physisch: "+std::to_wstring(v->nativeLastPhysicalX)+
+           L","+std::to_wstring(v->nativeLastPhysicalY)+
+           L" -> logisch: "+std::to_wstring(v->nativeLastLogicalX)+
+           L","+std::to_wstring(v->nativeLastLogicalY);
         s+=L"\n\nGRAFIK-DIAGNOSE (echter Pro-53-Prozess):";
         s+=L"\nBeginPaint: "+std::to_wstring(v->diagPaint)+
            L"  GetDC: "+std::to_wstring(v->diagGetDC)+
@@ -263,14 +271,14 @@ bool unpack(){
 LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
     if(m==WM_CREATE){
         message=CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE|SS_LEFT,
-                         20,16,575,244,w,nullptr,instance,nullptr);
+                         20,16,575,289,w,nullptr,instance,nullptr);
         SetTimer(w,1,1000,nullptr);
         CreateWindowW(L"BUTTON",L"150 %",WS_CHILD|WS_VISIBLE,
-            20,266,110,34,w,reinterpret_cast<HMENU>(150),instance,nullptr);
+            20,311,110,34,w,reinterpret_cast<HMENU>(150),instance,nullptr);
         CreateWindowW(L"BUTTON",L"200 %",WS_CHILD|WS_VISIBLE,
-            145,266,110,34,w,reinterpret_cast<HMENU>(200),instance,nullptr);
+            145,311,110,34,w,reinterpret_cast<HMENU>(200),instance,nullptr);
         CreateWindowW(L"BUTTON",L"100 % / Beenden",WS_CHILD|WS_VISIBLE,
-            270,266,205,34,w,reinterpret_cast<HMENU>(300),instance,nullptr);
+            270,311,205,34,w,reinterpret_cast<HMENU>(300),instance,nullptr);
         output(L"125A Pro-53 Scaler\n"
                L"Pro-53 mit jBridge oeffnen, dann 150 oder 200 % anklicken.");
         return 0;
@@ -313,7 +321,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,LPWSTR args,int){
     if(!RegisterClassW(&klass)){cleanupDll();return 3;}
     view=CreateWindowW(klass.lpszClassName,L"125A PluginScaler - Pro-53",
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
-        CW_USEDEFAULT,CW_USEDEFAULT,612,355,nullptr,nullptr,h,nullptr);
+        CW_USEDEFAULT,CW_USEDEFAULT,612,400,nullptr,nullptr,h,nullptr);
     if(!view){cleanupDll();return 4;}
     MSG msg{};
     while(GetMessageW(&msg,nullptr,0,0)>0){

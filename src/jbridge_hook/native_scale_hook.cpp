@@ -3,6 +3,7 @@
 #endif
 #include "native_scale_shared.h"
 #include <windowsx.h>
+#include <commctrl.h>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
@@ -23,6 +24,8 @@ SetDIBitsFn originalSetDIBits{};
 HWND target{};
 int zoom=100;
 int logicalWidth=kLogicalWidth,logicalHeight=kLogicalHeight;
+bool nativeInputInstalled=false;
+constexpr UINT_PTR kNativeMouseSubclassId=0x125A;
 struct Patch {
     volatile LONG* slot{};
     LONG previous{};
@@ -92,6 +95,57 @@ HMODULE imageOfNativeEditor(HWND hwnd,HINSTANCE registered,
     return nullptr;
 }
 
+bool realClientMouseMessage(UINT msg) {
+    switch(msg) {
+        case WM_LBUTTONDOWN:case WM_LBUTTONUP:case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN:case WM_RBUTTONUP:case WM_RBUTTONDBLCLK:
+        case WM_MBUTTONDOWN:case WM_MBUTTONUP:case WM_MBUTTONDBLCLK:
+        case WM_MOUSEMOVE: return true;
+        default:return false;
+    }
+}
+LRESULT CALLBACK nativeInputSubclass(HWND hwnd,UINT msg,WPARAM wp,
+                                      LPARAM lp,UINT_PTR,DWORD_PTR) {
+    // Executes on the ORIGINAL GUI thread and handles both posted
+    // WM_MOUSE messages and direct SendMessage() calls. WH_GETMESSAGE
+    // alone misses the latter, which jBridge can use when forwarding
+    // input. Never transform wheel lParam (it contains screen coords).
+    if(hwnd==target && zoom>100 && realClientMouseMessage(msg)) {
+        const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
+        const int logicalX=MulDiv(x,100,zoom);
+        const int logicalY=MulDiv(y,100,zoom);
+        if(debugState) {
+            InterlockedIncrement(&debugState->nativeMouseEvents);
+            if(msg==WM_LBUTTONDOWN)InterlockedIncrement(&debugState->nativeMouseDown);
+            if(msg==WM_LBUTTONUP)InterlockedIncrement(&debugState->nativeMouseUp);
+            if(msg==WM_MOUSEMOVE)InterlockedIncrement(&debugState->nativeMouseMove);
+            InterlockedExchange(&debugState->nativeLastPhysicalX,x);
+            InterlockedExchange(&debugState->nativeLastPhysicalY,y);
+            InterlockedExchange(&debugState->nativeLastLogicalX,logicalX);
+            InterlockedExchange(&debugState->nativeLastLogicalY,logicalY);
+        }
+        lp=MAKELPARAM(logicalX,logicalY);
+    }
+    return DefSubclassProc(hwnd,msg,wp,lp);
+}
+bool attachNativeInput(HWND hwnd) {
+    if(nativeInputInstalled)return false;
+    if(!SetWindowSubclass(hwnd,nativeInputSubclass,
+                          kNativeMouseSubclassId,0))return false;
+    nativeInputInstalled=true;
+    return true;
+}
+bool detachNativeInput(HWND hwnd) {
+    if(!nativeInputInstalled)return true;
+    if(!IsWindow(hwnd)) {
+        nativeInputInstalled=false;
+        return true; // destroyed HWND no longer invokes our subclass
+    }
+    if(!RemoveWindowSubclass(hwnd,nativeInputSubclass,
+                             kNativeMouseSubclassId))return false;
+    nativeInputInstalled=false;
+    return true;
+}
 void transformDC(HDC dc) {
     if(!dc||zoom<100||zoom>200)return;
     SetMapMode(dc,MM_ANISOTROPIC);
@@ -445,9 +499,10 @@ void attachToAlreadyOpenEditor() {
             CloseHandle(mapping);
             return;
         }
-        // Restore the original DLL import BEFORE releasing the Windows hook.
-        // Otherwise the module would retain a pointer into an unloaded DLL.
-        if(!restoreOriginalImports()) {
+        // Remove our WndProc subclass AND renderer IAT entries before
+        // unloading this hook DLL. The subclass handles SendMessage as well
+        // as queued input, so failing to remove it would be dangerous.
+        if(!detachNativeInput(target) || !restoreOriginalImports()) {
             InterlockedExchange(&command->status,-5);
         } else {
             const BOOL sized=!IsWindow(target) ||
@@ -589,8 +644,29 @@ void attachToAlreadyOpenEditor() {
                                     0,0,sizeof(NativeAttachCommand)));
                             if(!debugState){CloseHandle(debugMapping);debugMapping=nullptr;}
                         }
-                        InvalidateRect(hwnd,nullptr,FALSE);
-                        InterlockedExchange(&command->status,1);
+                        if(!attachNativeInput(hwnd)) {
+                            // Not safe to call a broken/partial mouse path.
+                            // Revert both HWND dimensions and rendering.
+                            const HWND changedRoot=reinterpret_cast<HWND>(
+                                static_cast<std::uintptr_t>(command->rootHwnd));
+                            if(changedRoot && IsWindow(changedRoot))
+                                SetWindowPos(changedRoot,nullptr,0,0,
+                                    command->rootOuterWidth,
+                                    command->rootOuterHeight,
+                                    SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+                            SetWindowPos(hwnd,nullptr,0,0,
+                                outer.right-outer.left,outer.bottom-outer.top,
+                                SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+                            restoreOriginalImports();
+                            target=nullptr;
+                            InterlockedExchange(&command->status,-21);
+                            releaseDebugState();
+                        } else {
+                            if(debugState)
+                                InterlockedExchange(&debugState->nativeInputInstalled,1);
+                            InvalidateRect(hwnd,nullptr,FALSE);
+                            InterlockedExchange(&command->status,1);
+                        }
                     }
                 }
             }
@@ -635,16 +711,11 @@ LRESULT CALLBACK NativeMouseHook(int code,WPARAM wp,LPARAM lp) {
         auto* message=reinterpret_cast<MSG*>(lp);
         if(message && message->message==WM_NULL)
             attachToAlreadyOpenEditor();
-        if(message && message->hwnd==target &&
-           (message->message==WM_LBUTTONDOWN ||
-            message->message==WM_LBUTTONUP ||
-            message->message==WM_RBUTTONDOWN ||
-            message->message==WM_RBUTTONUP ||
-            message->message==WM_MBUTTONDOWN ||
-            message->message==WM_MBUTTONUP ||
-            message->message==WM_MOUSEMOVE)) {
-            // Modify only the native target's queued client mouse coordinates.
-            // Leave real mouse capture/focus/window ownership untouched.
+        if(!nativeInputInstalled && message && message->hwnd==target &&
+           realClientMouseMessage(message->message)) {
+            // Existing 100%-creation mock still uses the lightweight
+            // queue hook. Once the HWND subclass is active, NEVER
+            // transform the same message twice.
             const int physicalX=GET_X_LPARAM(message->lParam);
             const int physicalY=GET_Y_LPARAM(message->lParam);
             message->lParam=MAKELPARAM(MulDiv(physicalX,100,zoom),

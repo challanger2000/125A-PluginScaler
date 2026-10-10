@@ -17,6 +17,9 @@ struct NativeScaleState {
     volatile LONG originalLogicalY;
     volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB, 2=clipped DIB, 3=oversized DIB
     volatile LONG clippedDibCalls;
+    volatile LONG directSentMouse;
+    volatile LONG directSentX;
+    volatile LONG directSentY;
 };
 constexpr wchar_t kNativeScaleMapName[] = L"125A_NATIVE_SCALE_SMOKE_MAP";
 constexpr wchar_t kNativeScaleEditorClass[] = L"125A.OriginalUnscaledGdiEditor";
@@ -70,4 +73,13 @@ struct NativeAttachCommand {
     volatile LONG diagRejectedBits;
     volatile LONG diagOversizedConverted;
     volatile LONG smokeFailFirstDetach; // injected only in mock test
+    volatile LONG nativeMouseEvents;
+    volatile LONG nativeMouseDown;
+    volatile LONG nativeMouseMove;
+    volatile LONG nativeMouseUp;
+    volatile LONG nativeInputInstalled;
+    volatile LONG nativeLastPhysicalX;
+    volatile LONG nativeLastPhysicalY;
+    volatile LONG nativeLastLogicalX;
+    volatile LONG nativeLastLogicalY;
 };
