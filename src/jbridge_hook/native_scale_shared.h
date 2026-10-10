@@ -83,6 +83,7 @@ struct NativeAttachCommand {
     volatile LONG diagCaptureSuccessful;
     volatile LONG diagReleaseCaptureCalls;
     volatile LONG diagInvalidateCalls;
+    volatile LONG nativePassthrough; // 0=logical input, 1=original native input
     volatile LONG nativeLastPhysicalX;
     volatile LONG nativeLastPhysicalY;
     volatile LONG nativeLastLogicalX;

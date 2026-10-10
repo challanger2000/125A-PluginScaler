@@ -118,8 +118,14 @@ LRESULT CALLBACK nativeInputSubclass(HWND hwnd,UINT msg,WPARAM wp,
     // input. Never transform wheel lParam (it contains screen coords).
     if(hwnd==target && zoom>100 && realClientMouseMessage(msg)) {
         const int x=GET_X_LPARAM(lp),y=GET_Y_LPARAM(lp);
-        const int logicalX=MulDiv(x,100,zoom);
-        const int logicalY=MulDiv(y,100,zoom);
+        // Live comparison for the actual original Pro-53: its WM_SIZE
+        // handler has already seen a larger client area, unlike the
+        // 100%-sized fixed-layout CI mock. Preserve unmodified messages
+        // when the user chooses native-coordinate mode.
+        const bool passthrough=debugState &&
+           InterlockedCompareExchange(&debugState->nativePassthrough,0,0)==1;
+        const int logicalX=passthrough?x:MulDiv(x,100,zoom);
+        const int logicalY=passthrough?y:MulDiv(y,100,zoom);
         if(debugState) {
             InterlockedIncrement(&debugState->nativeMouseEvents);
             if(msg==WM_LBUTTONDOWN)InterlockedIncrement(&debugState->nativeMouseDown);

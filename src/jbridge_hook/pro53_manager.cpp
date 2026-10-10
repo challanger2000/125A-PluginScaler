@@ -21,12 +21,15 @@ struct Session {
 };
 std::vector<Session> active;
 std::wstring userStatus;
+bool nativePassthrough=false;
 void updateView() {
     if(!message)return;
     std::wstring s=userStatus;
     if(!active.empty()&&active[0].state&&active[0].state->status==1) {
         const auto* v=active[0].state;
-        s+=L"\n\nMAUS: "+std::to_wstring(v->nativeMouseEvents)+
+        s+=L"\n\nMAUSMODUS: ";
+        s+=v->nativePassthrough?L"ORIGINAL (1:1)":L"UMGERECHNET (100 %)";
+        s+=L"\nMAUS: "+std::to_wstring(v->nativeMouseEvents)+
            L" (Down "+std::to_wstring(v->nativeMouseDown)+
            L", Move "+std::to_wstring(v->nativeMouseMove)+
            L", Up "+std::to_wstring(v->nativeMouseUp)+L")";
@@ -66,6 +69,14 @@ void updateView() {
     SetWindowTextW(message,s.c_str());
 }
 void output(const std::wstring& s){userStatus=s;updateView();}
+void syncInputMode() {
+    for(auto& session:active) {
+        if(session.state && session.state->status==1)
+            InterlockedExchange(&session.state->nativePassthrough,
+                                nativePassthrough?1:0);
+    }
+    updateView();
+}
 void release(Session& s){
     if(s.hook)UnhookWindowsHookEx(s.hook);
     if(s.state)UnmapViewOfFile(s.state);
@@ -234,6 +245,7 @@ void start(int percentage){
             if(failure!=0)lastFailure=failure;
         }
     }
+    if(connected)syncInputMode();
     if(connected)output(std::to_wstring(connected)+
        L" Pro-53-Fenster auf "+std::to_wstring(percentage)+
        L" % skaliert.\n100 % / Beenden stellt die Originalgroesse wieder her.");
@@ -284,6 +296,8 @@ LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
             145,349,110,34,w,reinterpret_cast<HMENU>(200),instance,nullptr);
         CreateWindowW(L"BUTTON",L"100 % / Beenden",WS_CHILD|WS_VISIBLE,
             270,349,205,34,w,reinterpret_cast<HMENU>(300),instance,nullptr);
+        CreateWindowW(L"BUTTON",L"MAUS: UMGERECHNET",WS_CHILD|WS_VISIBLE,
+            20,393,245,34,w,reinterpret_cast<HMENU>(401),instance,nullptr);
         output(L"125A Pro-53 Scaler\n"
                L"Pro-53 mit jBridge oeffnen, dann 150 oder 200 % anklicken.");
         return 0;
@@ -293,6 +307,14 @@ LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
         int id=LOWORD(wp);
         if(id==150||id==200){start(id);return 0;}
         if(id==300){SendMessageW(w,WM_CLOSE,0,0);return 0;}
+        if(id==401) {
+            nativePassthrough=!nativePassthrough;
+            syncInputMode();
+            HWND button=GetDlgItem(w,401);
+            if(button)SetWindowTextW(button,nativePassthrough?
+                L"MAUS: ORIGINAL 1:1":L"MAUS: UMGERECHNET");
+            return 0;
+        }
     }
     if(m==WM_CLOSE){
         if(!restore()){
@@ -326,7 +348,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,LPWSTR args,int){
     if(!RegisterClassW(&klass)){cleanupDll();return 3;}
     view=CreateWindowW(klass.lpszClassName,L"125A PluginScaler - Pro-53",
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
-        CW_USEDEFAULT,CW_USEDEFAULT,612,437,nullptr,nullptr,h,nullptr);
+        CW_USEDEFAULT,CW_USEDEFAULT,612,478,nullptr,nullptr,h,nullptr);
     if(!view){cleanupDll();return 4;}
     MSG msg{};
     while(GetMessageW(&msg,nullptr,0,0)>0){

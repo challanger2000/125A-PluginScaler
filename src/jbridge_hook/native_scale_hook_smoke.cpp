@@ -319,9 +319,29 @@ int wmain(int argc,wchar_t** argv) {
                     t.state->scale,directCorrect?"PASS":"FAIL",
                     t.state->directSentMouse,t.state->directSentX,t.state->directSentY);
             }
+            bool nativeCoordinatesCorrect=true;
+            if(sentTest && t.attach && directCorrect) {
+                // The original client-coordinate mode must forward its
+                // x/y exactly, with no division, and be switchable back.
+                InterlockedExchange(&t.attach->nativePassthrough,1);
+                const int x=MulDiv(55,t.state->scale,100);
+                const int y=MulDiv(35,t.state->scale,100);
+                DWORD_PTR ignore{};
+                const bool down=SendMessageTimeoutW(hwnd,WM_LBUTTONDOWN,
+                    MK_LBUTTON,MAKELPARAM(x,y),SMTO_ABORTIFHUNG,1500,
+                    &ignore)!=0;
+                const bool up=SendMessageTimeoutW(hwnd,WM_LBUTTONUP,0,
+                    MAKELPARAM(x,y),SMTO_ABORTIFHUNG,1500,&ignore)!=0;
+                nativeCoordinatesCorrect=down&&up &&
+                    t.state->directSentX==x && t.state->directSentY==y;
+                InterlockedExchange(&t.attach->nativePassthrough,0);
+                std::printf("pro53-original-mouse-mode-%ld=%s physical=%d,%d delivered=%ld,%ld\n",
+                    t.state->scale,nativeCoordinatesCorrect?"PASS":"FAIL",
+                    x,y,t.state->directSentX,t.state->directSentY);
+            }
             const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&
                             trueClippedDib&&hookedPainting&&oversizedHandled&&
-                            directCorrect&&nativeCaptureMonitored;
+                            directCorrect&&nativeCaptureMonitored&&nativeCoordinatesCorrect;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -377,7 +397,7 @@ int wmain(int argc,wchar_t** argv) {
                 InterlockedExchange(&t.state->mismatch,0);
                 const bool clicked=restored&&injectInput(hwnd);
                 Sleep(60);
-                const int expectedClicks=sentTest?3:2;
+                const int expectedClicks=sentTest?4:2;
                 const bool inputBack=clicked &&
                       t.state->mouseDown==expectedClicks &&
                       t.state->mouseUp==expectedClicks &&
