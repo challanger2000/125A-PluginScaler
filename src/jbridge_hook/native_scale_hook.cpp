@@ -132,7 +132,15 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
         if(saved) {
             IntersectClipRect(dc,dx,dy,dx+static_cast<int>(width),
                                 dy+static_cast<int>(height));
-            const int rendered=StretchDIBits(dc,dx-sx,dy-sy,
+            // SetDIBitsToDevice's YSrc specifies the lower edge of
+            // the selected scanlines, while our full-image stretch
+            // anchors from the top edge. Pro-53's actual x86 assembly
+            // explicitly calculates YSrc=bitmapH-top-clippedH.
+            const int topOfSelectedSource=
+                std::abs(info->bmiHeader.biHeight)-sy-
+                static_cast<int>(height);
+            const int rendered=StretchDIBits(dc,dx-sx,
+                dy-topOfSelectedSource,
                 info->bmiHeader.biWidth,
                 std::abs(info->bmiHeader.biHeight),
                 0,0,info->bmiHeader.biWidth,

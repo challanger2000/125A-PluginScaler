@@ -53,7 +53,7 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                     // Nonzero source coordinates and a source rectangle
                     // smaller than the BITMAPINFO header dimensions.
                     InterlockedIncrement(&state->clippedDibCalls);
-                    SetDIBitsToDevice(dc,48,30,32,36,48,30,0,
+                    SetDIBitsToDevice(dc,48,30,32,36,48,kLogicalHeight-30-36,0,
                         kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
                 } else {
                     SetDIBitsToDevice(dc,0,0,kLogicalWidth,kLogicalHeight,
