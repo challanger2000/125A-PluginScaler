@@ -122,12 +122,29 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
        static_cast<std::uint64_t>(sy)+height<=
            static_cast<DWORD>(std::abs(info->bmiHeader.biHeight)) &&
        start==0&&lines==static_cast<DWORD>(std::abs(info->bmiHeader.biHeight))) {
-        // Some legacy renderers set MM_TEXT/reset DC mapping per redraw.
-        // Restore the target's mapped logical space immediately before blit.
+        // A cropped StretchDIBits source rectangle can use a different
+        // vertical origin than SetDIBitsToDevice, particularly for top-down
+        // DIBs. Preserve source image orientation by scaling the WHOLE
+        // bitmap as in our full-frame test; clip its destination to the
+        // original update rectangle. This also handles knob/LED repaints.
         transformDC(dc);
-        return StretchDIBits(dc,dx,dy,static_cast<int>(width),
-              static_cast<int>(height),sx,sy,static_cast<int>(width),
-              static_cast<int>(height),bits,info,usage,SRCCOPY);
+        const int saved=SaveDC(dc);
+        if(saved) {
+            IntersectClipRect(dc,dx,dy,dx+static_cast<int>(width),
+                                dy+static_cast<int>(height));
+            const int rendered=StretchDIBits(dc,dx-sx,dy-sy,
+                info->bmiHeader.biWidth,
+                std::abs(info->bmiHeader.biHeight),
+                0,0,info->bmiHeader.biWidth,
+                std::abs(info->bmiHeader.biHeight),
+                bits,info,usage,SRCCOPY);
+            RestoreDC(dc,saved);
+            return rendered==GDI_ERROR ? 0 : rendered;
+        }
+        // Fail safe: unchanged output rather than a misaligned bitmap.
+        return originalSetDIBits ?
+            originalSetDIBits(dc,dx,dy,width,height,sx,sy,start,lines,
+                              bits,info,usage) : 0;
     }
     // Source bands or unknown/compressed bitmaps are not guessed.
     return originalSetDIBits ?
