@@ -133,7 +133,7 @@ bool injectInput(HWND hwnd) {
     }
     return true;
 }
-bool checkPixels(HWND hwnd,int zoom) {
+bool checkPixels(HWND hwnd,int zoom,COLORREF expected=RGB(25,190,100)) {
     RECT client{};GetClientRect(hwnd,&client);
     if(client.right!=MulDiv(kLogicalWidth,zoom,100) ||
        client.bottom!=MulDiv(kLogicalHeight,zoom,100))return false;
@@ -142,7 +142,7 @@ bool checkPixels(HWND hwnd,int zoom) {
     const COLORREF green=GetPixel(dc,MulDiv(68,zoom,100),
                                      MulDiv(47,zoom,100));
     const COLORREF dark=GetPixel(dc,10,10);
-    if(green!=RGB(25,190,100) || dark!=RGB(10,12,16)) {
+    if(green!=expected || dark!=RGB(10,12,16)) {
         const COLORREF atLogical=GetPixel(dc,68,47);
         const COLORREF atScaledPlus=GetPixel(dc,MulDiv(60,zoom,100),
                                                MulDiv(40,zoom,100));
@@ -151,7 +151,7 @@ bool checkPixels(HWND hwnd,int zoom) {
            static_cast<unsigned long>(atScaledPlus),static_cast<unsigned long>(dark));
     }
     ReleaseDC(hwnd,dc);
-    return green==RGB(25,190,100)&&dark==RGB(10,12,16);
+    return green==expected&&dark==RGB(10,12,16);
 }
 }
 int wmain(int argc,wchar_t** argv) {
@@ -406,7 +406,8 @@ int wmain(int argc,wchar_t** argv) {
                     for(int n=0;n<400 && t.attach->status==-5;++n)Sleep(10);
                 }
                 Sleep(90);
-                bool restored=t.attach->status==2&&checkPixels(hwnd,100);
+                bool restored=t.attach->status==2&&checkPixels(hwnd,100,
+                    partial?RGB(176,48,208):RGB(25,190,100));
                 if(nested) {
                     const HWND root=reinterpret_cast<HWND>(
                         static_cast<std::uintptr_t>(t.attach->rootHwnd));
