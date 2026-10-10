@@ -133,19 +133,32 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
     // A complete in-memory DIB may draw ANY in-bounds source RECT:
     // dest dx/dy and width/height refer to the selected source region;
     // the DC's viewport makes the logical destination 150%/200%.
-    if(dc&&bits&&info&&target&&zoom>100&&owner==target &&
-       info->bmiHeader.biSize>=sizeof(BITMAPINFOHEADER) &&
-       (info->bmiHeader.biCompression==BI_RGB ||
-        info->bmiHeader.biCompression==BI_BITFIELDS) &&
-       info->bmiHeader.biWidth>0 &&
-       info->bmiHeader.biHeight!=LONG_MIN &&
-       width>0&&height>0&&width<=INT_MAX&&height<=INT_MAX &&
-       sx>=0&&sy>=0 &&
-       static_cast<std::uint64_t>(sx)+width<=
-           static_cast<DWORD>(info->bmiHeader.biWidth) &&
-       static_cast<std::uint64_t>(sy)+height<=
-           static_cast<DWORD>(std::abs(info->bmiHeader.biHeight)) &&
-       start==0&&lines==static_cast<DWORD>(std::abs(info->bmiHeader.biHeight))) {
+    // Keep the conditions explicit: one unsupported base-image blit
+    // must not hide behind the more numerous knob redraws.
+    LONG reason=0;
+    if(!dc)reason|=1;
+    if(!bits||!info)reason|=2;
+    if(!target||zoom<=100)reason|=4;
+    if(owner!=target)reason|=8;
+    if(info && info->bmiHeader.biSize<sizeof(BITMAPINFOHEADER))reason|=16;
+    if(info && info->bmiHeader.biCompression!=BI_RGB &&
+       info->bmiHeader.biCompression!=BI_BITFIELDS)reason|=32;
+    if(info && (info->bmiHeader.biWidth<=0 ||
+       info->bmiHeader.biHeight==LONG_MIN ||
+       info->bmiHeader.biHeight==0))reason|=64;
+    if(!width||!height||width>INT_MAX||height>INT_MAX)reason|=128;
+    if(sx<0||sy<0)reason|=256;
+    if(info && info->bmiHeader.biHeight!=LONG_MIN) {
+        if(static_cast<std::uint64_t>(std::max(sx,0))+width>
+               static_cast<std::uint64_t>(std::max(info->bmiHeader.biWidth,0)) ||
+           static_cast<std::uint64_t>(std::max(sy,0))+height>
+               static_cast<std::uint64_t>(std::abs(info->bmiHeader.biHeight)))
+           reason|=512;
+        if(start!=0||lines!=
+               static_cast<DWORD>(std::abs(info->bmiHeader.biHeight)))
+           reason|=1024;
+    }
+    if(reason==0) {
         // A cropped StretchDIBits source rectangle can use a different
         // vertical origin than SetDIBitsToDevice, particularly for top-down
         // DIBs. Preserve source image orientation by scaling the WHOLE
@@ -153,6 +166,13 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
         // original update rectangle. This also handles knob/LED repaints.
         if(debugState)InterlockedIncrement(&debugState->diagDibConverted);
         transformDC(dc);
+        if(debugState) {
+            POINT point{100,100};
+            if(LPtoDP(dc,&point,1)) {
+                InterlockedExchange(&debugState->diagMappedDx,point.x);
+                InterlockedExchange(&debugState->diagMappedDy,point.y);
+            }
+        }
         const int saved=SaveDC(dc);
         if(saved) {
             IntersectClipRect(dc,dx,dy,dx+static_cast<int>(width),
@@ -172,6 +192,13 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
                 std::abs(info->bmiHeader.biHeight),
                 bits,info,usage,SRCCOPY);
             RestoreDC(dc,saved);
+            if(debugState) {
+                InterlockedExchange(&debugState->diagLastStretchReturn,rendered);
+                if(rendered==GDI_ERROR || rendered==0)
+                    InterlockedIncrement(&debugState->diagStretchFailure);
+                else
+                    InterlockedIncrement(&debugState->diagStretchSuccess);
+            }
             return rendered==GDI_ERROR ? 0 : rendered;
         }
         // Fail safe: unchanged output rather than a misaligned bitmap.
@@ -179,10 +206,29 @@ int WINAPI scaledSetDIBits(HDC dc,int dx,int dy,DWORD width,DWORD height,
             originalSetDIBits(dc,dx,dy,width,height,sx,sy,start,lines,
                               bits,info,usage) : 0;
     }
-    // Source bands or unknown/compressed bitmaps are not guessed.
+    // Capture the one failing call, including its actual source format.
     if(debugState&&target) {
         InterlockedIncrement(owner==target?
           &debugState->diagDibSkipped:&debugState->diagDibOtherDC);
+        InterlockedExchange(&debugState->diagRejectReason,reason);
+        InterlockedExchange(&debugState->diagRejectedWidth,
+                            static_cast<LONG>(width));
+        InterlockedExchange(&debugState->diagRejectedHeight,
+                            static_cast<LONG>(height));
+        InterlockedExchange(&debugState->diagRejectedX,sx);
+        InterlockedExchange(&debugState->diagRejectedY,sy);
+        InterlockedExchange(&debugState->diagRejectedLines,
+                            static_cast<LONG>(lines));
+        InterlockedExchange(&debugState->diagRejectedStart,
+                            static_cast<LONG>(start));
+        InterlockedExchange(&debugState->diagRejectedBits,info?
+                            static_cast<LONG>(info->bmiHeader.biBitCount):-1);
+        InterlockedExchange(&debugState->diagRejectedBitmapWidth,info?
+                            info->bmiHeader.biWidth:0);
+        InterlockedExchange(&debugState->diagRejectedBitmapHeight,info?
+                            info->bmiHeader.biHeight:0);
+        InterlockedExchange(&debugState->diagRejectedCompression,info?
+                            static_cast<LONG>(info->bmiHeader.biCompression):-1);
     }
     return originalSetDIBits ?
            originalSetDIBits(dc,dx,dy,width,height,sx,sy,start,lines,

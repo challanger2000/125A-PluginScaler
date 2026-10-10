@@ -51,4 +51,21 @@ struct NativeAttachCommand {
     volatile LONG diagLastXSrc;
     volatile LONG diagLastYSrc;
     volatile LONG diagLastOwner;
+    // Counters distinguish entering our hook from actual GDI success.
+    volatile LONG diagStretchSuccess;
+    volatile LONG diagStretchFailure;
+    volatile LONG diagLastStretchReturn;
+    volatile LONG diagMappedDx;
+    volatile LONG diagMappedDy;
+    volatile LONG diagRejectReason;
+    volatile LONG diagRejectedWidth;
+    volatile LONG diagRejectedHeight;
+    volatile LONG diagRejectedX;
+    volatile LONG diagRejectedY;
+    volatile LONG diagRejectedBitmapWidth;
+    volatile LONG diagRejectedBitmapHeight;
+    volatile LONG diagRejectedCompression;
+    volatile LONG diagRejectedLines;
+    volatile LONG diagRejectedStart;
+    volatile LONG diagRejectedBits;
 };

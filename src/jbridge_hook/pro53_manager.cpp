@@ -33,12 +33,22 @@ void updateView() {
         s+=L"\nDIB-Skalierung: "+std::to_wstring(v->diagDibConverted)+
            L"  Anderer DC: "+std::to_wstring(v->diagDibOtherDC)+
            L"  Ungeeignet: "+std::to_wstring(v->diagDibSkipped);
-        s+=L"\nLetzter DIB: "+std::to_wstring(v->diagLastWidth)+
-           L"x"+std::to_wstring(v->diagLastHeight)+
-           L", Start "+std::to_wstring(v->diagLastStart)+
-           L", Zeilen "+std::to_wstring(v->diagLastLines)+
-           L", Quelle "+std::to_wstring(v->diagLastXSrc)+
-           L","+std::to_wstring(v->diagLastYSrc);
+        s+=L"\nTatsaechlich gezeichnet: "+std::to_wstring(v->diagStretchSuccess)+
+           L"  GDI-Fehler/0: "+std::to_wstring(v->diagStretchFailure)+
+           L"  Letzter Rueckgabewert: "+std::to_wstring(v->diagLastStretchReturn);
+        s+=L"\n100 logische Pixel -> "+std::to_wstring(v->diagMappedDx)+
+           L" / "+std::to_wstring(v->diagMappedDy)+L" physische Pixel";
+        s+=L"\nABGELEHNTER Aufruf: Grund "+std::to_wstring(v->diagRejectReason)+
+           L"  Rechteck "+std::to_wstring(v->diagRejectedWidth)+
+           L"x"+std::to_wstring(v->diagRejectedHeight);
+        s+=L"\nQuelle "+std::to_wstring(v->diagRejectedX)+L","+
+           std::to_wstring(v->diagRejectedY)+
+           L"  Bitmap "+std::to_wstring(v->diagRejectedBitmapWidth)+L"x"+
+           std::to_wstring(v->diagRejectedBitmapHeight);
+        s+=L"\nScanlines "+std::to_wstring(v->diagRejectedStart)+L","+
+           std::to_wstring(v->diagRejectedLines)+
+           L"  Tiefe "+std::to_wstring(v->diagRejectedBits)+
+           L"  Kompression "+std::to_wstring(v->diagRejectedCompression);
     }
     SetWindowTextW(message,s.c_str());
 }
@@ -220,14 +230,14 @@ bool unpack(){
 LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
     if(m==WM_CREATE){
         message=CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE|SS_LEFT,
-                         20,16,555,185,w,nullptr,instance,nullptr);
+                         20,16,575,244,w,nullptr,instance,nullptr);
         SetTimer(w,1,1000,nullptr);
         CreateWindowW(L"BUTTON",L"150 %",WS_CHILD|WS_VISIBLE,
-            20,216,110,34,w,reinterpret_cast<HMENU>(150),instance,nullptr);
+            20,266,110,34,w,reinterpret_cast<HMENU>(150),instance,nullptr);
         CreateWindowW(L"BUTTON",L"200 %",WS_CHILD|WS_VISIBLE,
-            145,216,110,34,w,reinterpret_cast<HMENU>(200),instance,nullptr);
+            145,266,110,34,w,reinterpret_cast<HMENU>(200),instance,nullptr);
         CreateWindowW(L"BUTTON",L"100 % / Beenden",WS_CHILD|WS_VISIBLE,
-            270,216,205,34,w,reinterpret_cast<HMENU>(300),instance,nullptr);
+            270,266,205,34,w,reinterpret_cast<HMENU>(300),instance,nullptr);
         output(L"125A Pro-53 Scaler\n"
                L"Pro-53 mit jBridge oeffnen, dann 150 oder 200 % anklicken.");
         return 0;
@@ -268,7 +278,7 @@ int WINAPI wWinMain(HINSTANCE h,HINSTANCE,LPWSTR args,int){
     if(!RegisterClassW(&klass)){cleanupDll();return 3;}
     view=CreateWindowW(klass.lpszClassName,L"125A PluginScaler - Pro-53",
         WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VISIBLE,
-        CW_USEDEFAULT,CW_USEDEFAULT,590,295,nullptr,nullptr,h,nullptr);
+        CW_USEDEFAULT,CW_USEDEFAULT,612,355,nullptr,nullptr,h,nullptr);
     if(!view){cleanupDll();return 4;}
     MSG msg{};
     while(GetMessageW(&msg,nullptr,0,0)>0){
