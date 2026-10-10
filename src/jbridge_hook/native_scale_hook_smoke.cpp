@@ -160,6 +160,8 @@ int wmain(int argc,wchar_t** argv) {
     if(argc>1 && wcscmp(argv[1],L"--child-existing")==0)
         return child(true,argc>2?_wtoi(argv[2]):0,argc>3&&wcscmp(argv[3],L"--nested")==0);
     const bool alreadyOpen=argc>1 && wcscmp(argv[1],L"--already-open")==0;
+    const bool retry=alreadyOpen && argc>2 &&
+        wcscmp(argv[2],L"--retry-detach")==0;
     const bool clipped=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--clipped")==0;
     const bool oversized=alreadyOpen&&argc>2&&wcscmp(argv[2],L"--oversized")==0;
     const bool bitmap=alreadyOpen&&argc>2&&
@@ -315,8 +317,17 @@ int wmain(int argc,wchar_t** argv) {
                 // Stop scaling while original editor is STILL running.
                 // A safe detach must restore both the GDI import and HWND.
                 t.attach->detach=1;
+                if(retry)t.attach->smokeFailFirstDetach=1;
                 PostMessageW(hwnd,WM_NULL,0,0);
                 for(int n=0;n<400 && t.attach->status==1;++n)Sleep(10);
+                bool retryRecognized=true;
+                if(retry) {
+                    retryRecognized=t.attach->status==-5 &&
+                        t.attach->smokeFailFirstDetach==0;
+                    // Retrying must NOT require reloading the process.
+                    PostMessageW(hwnd,WM_NULL,0,0);
+                    for(int n=0;n<400 && t.attach->status==-5;++n)Sleep(10);
+                }
                 Sleep(90);
                 bool restored=t.attach->status==2&&checkPixels(hwnd,100);
                 if(nested) {
@@ -339,7 +350,9 @@ int wmain(int argc,wchar_t** argv) {
                 std::printf("already-open-detach-restore-%ld=%s status=%ld originalPixels=%d originalMouse=%d down=%ld up=%ld mismatch=%ld\n",
                    t.attach->scale,(restored&&inputBack)?"PASS":"FAIL",
                    t.attach->status,int(restored),int(inputBack),t.state->mouseDown,t.state->mouseUp,t.state->mismatch);
-                ok &= restored&&inputBack;
+                std::printf("restore-retry-test=%s\n",
+                     retryRecognized?"PASS":"FAIL");
+                ok &= restored&&inputBack&&retryRecognized;
             }
         }
     }

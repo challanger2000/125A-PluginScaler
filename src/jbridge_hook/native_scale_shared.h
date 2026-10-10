@@ -69,4 +69,5 @@ struct NativeAttachCommand {
     volatile LONG diagRejectedStart;
     volatile LONG diagRejectedBits;
     volatile LONG diagOversizedConverted;
+    volatile LONG smokeFailFirstDetach; // injected only in mock test
 };

@@ -436,6 +436,15 @@ void attachToAlreadyOpenEditor() {
     if(!command){CloseHandle(mapping);return;}
     if((command->status==1 || command->status==-5) &&
        command->detach && target) {
+        // Reproduce one transient failure only in the opted-in test editor,
+        // then insist a second WM_NULL can restore all original imports.
+        if(command->targetKind==0 &&
+           InterlockedCompareExchange(&command->smokeFailFirstDetach,0,1)==1) {
+            InterlockedExchange(&command->status,-5);
+            UnmapViewOfFile(command);
+            CloseHandle(mapping);
+            return;
+        }
         // Restore the original DLL import BEFORE releasing the Windows hook.
         // Otherwise the module would retain a pointer into an unloaded DLL.
         if(!restoreOriginalImports()) {
