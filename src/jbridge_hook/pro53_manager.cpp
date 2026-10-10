@@ -191,6 +191,32 @@ bool processExited(DWORD pid) {
     CloseHandle(p);
     return stopped;
 }
+// Fallback for a safely detached hook whose GUI frame could not be resized
+// inside the helper. Keep the manager open if the original geometry is not
+// actually restored; status 3 must never be treated as a clean reset.
+bool restoreOriginalGeometry(const Session& s) {
+    if(!s.state)return false;
+    const auto* state=s.state;
+    const HWND root=reinterpret_cast<HWND>(static_cast<std::uintptr_t>(state->rootHwnd));
+    auto resizeAndCheck=[](HWND hwnd,LONG width,LONG height) {
+        if(!IsWindow(hwnd))return true; // host closed this editor already
+        if(width<=0 || height<=0)return false;
+        if(!SetWindowPos(hwnd,nullptr,0,0,width,height,
+                         SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE))return false;
+        RECT bounds{};
+        return GetWindowRect(hwnd,&bounds) &&
+               bounds.right-bounds.left==width &&
+               bounds.bottom-bounds.top==height;
+    };
+    if(!resizeAndCheck(s.hwnd,state->originalOuterWidth,state->originalOuterHeight))
+        return false;
+    if(root!=s.hwnd &&
+       !resizeAndCheck(root,state->rootOuterWidth,state->rootOuterHeight))
+        return false;
+    if(IsWindow(s.hwnd))InvalidateRect(s.hwnd,nullptr,FALSE);
+    if(root!=s.hwnd && IsWindow(root))InvalidateRect(root,nullptr,FALSE);
+    return true;
+}
 bool restore() {
     // Protect the original renderer from unloading patched code. Retry a
     // failed/undelivered WM_NULL without hanging the manager forever.
@@ -217,7 +243,14 @@ bool restore() {
             if(status==2 || status==3 || processExited(s.pid))break;
         }
         status=InterlockedCompareExchange(&s.state->status,0,0);
-        if(status!=2 && status!=3 && !processExited(s.pid)) {
+        // 3 = imports were safely unhooked, but native window resizing
+        // failed. Retry resizing from the manager and verify both HWNDs.
+        if(status==3 && !processExited(s.pid) &&
+           restoreOriginalGeometry(s)) {
+            InterlockedExchange(&s.state->status,2);
+            status=2;
+        }
+        if(status!=2 && !processExited(s.pid)) {
             pending=true;
             output(L"Rueckbau nicht bestaetigt. Diagnosecode: "+
                    std::to_wstring(status)+L"\\n"
