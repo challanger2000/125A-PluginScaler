@@ -1,0 +1,100 @@
+#pragma once
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+struct NativeScaleState {
+    volatile LONG ready;
+    volatile LONG proceed;
+    volatile LONG finish;
+    volatile LONG scale;
+    volatile LONG targetHwnd;
+    volatile LONG hooked;
+    volatile LONG patchOK;
+    volatile LONG mouseDown;
+    volatile LONG mouseMove;
+    volatile LONG mouseUp;
+    volatile LONG mismatch;
+    volatile LONG originalLogicalX;
+    volatile LONG originalLogicalY;
+    volatile LONG rendererMode; // 0=vector GDI, 1=full-frame DIB, 2=clipped DIB, 3=oversized DIB
+    volatile LONG clippedDibCalls;
+    volatile LONG partialToggle;
+    volatile LONG partialUpdateLeft;
+    volatile LONG partialUpdateRight;
+    volatile LONG partialPaintLeft;
+    volatile LONG partialPaintRight;
+    volatile LONG directSentMouse;
+    volatile LONG directSentX;
+    volatile LONG directSentY;
+};
+constexpr wchar_t kNativeScaleMapName[] = L"125A_NATIVE_SCALE_SMOKE_MAP";
+constexpr wchar_t kNativeScaleEditorClass[] = L"125A.OriginalUnscaledGdiEditor";
+constexpr int kLogicalWidth=200, kLogicalHeight=140;
+
+struct NativeAttachCommand {
+    volatile LONG hwnd;
+    volatile LONG scale;
+    volatile LONG status; // 0=pending, 1=ready, negative=error
+    volatile LONG originalWidth;
+    volatile LONG originalHeight;
+    volatile LONG detach;
+    volatile LONG dibImported;
+    volatile LONG beginImported;
+    volatile LONG targetKind; // 0=controlled mock, 1=original Pro-53.dll only
+    volatile LONG originalOuterWidth;
+    volatile LONG originalOuterHeight;
+    volatile LONG rootHwnd;
+    volatile LONG rootOuterWidth;
+    volatile LONG rootOuterHeight;
+    // Live evidence from calls INTO the original renderer, not from GUI size.
+    volatile LONG diagPaint;
+    volatile LONG diagGetDC;
+    volatile LONG diagDibCalls;
+    volatile LONG diagDibConverted;
+    volatile LONG diagDibOtherDC;
+    volatile LONG diagDibSkipped;
+    volatile LONG diagLastWidth;
+    volatile LONG diagLastHeight;
+    volatile LONG diagLastStart;
+    volatile LONG diagLastLines;
+    volatile LONG diagLastXSrc;
+    volatile LONG diagLastYSrc;
+    volatile LONG diagLastOwner;
+    // Counters distinguish entering our hook from actual GDI success.
+    volatile LONG diagStretchSuccess;
+    volatile LONG diagStretchFailure;
+    volatile LONG diagLastStretchReturn;
+    volatile LONG diagMappedDx;
+    volatile LONG diagMappedDy;
+    volatile LONG diagRejectReason;
+    volatile LONG diagRejectedWidth;
+    volatile LONG diagRejectedHeight;
+    volatile LONG diagRejectedX;
+    volatile LONG diagRejectedY;
+    volatile LONG diagRejectedBitmapWidth;
+    volatile LONG diagRejectedBitmapHeight;
+    volatile LONG diagRejectedCompression;
+    volatile LONG diagRejectedLines;
+    volatile LONG diagRejectedStart;
+    volatile LONG diagRejectedBits;
+    volatile LONG diagOversizedConverted;
+    volatile LONG smokeFailFirstDetach; // injected only in mock test
+    volatile LONG nativeMouseEvents;
+    volatile LONG nativeMouseDown;
+    volatile LONG nativeMouseMove;
+    volatile LONG nativeMouseUp;
+    volatile LONG nativeInputInstalled;
+    volatile LONG diagCaptureImported;
+    volatile LONG diagCaptureCalls;
+    volatile LONG diagCaptureSuccessful;
+    volatile LONG diagReleaseCaptureCalls;
+    volatile LONG diagInvalidateCalls;
+    volatile LONG diagInvalidatePartial;
+    volatile LONG diagUpdateCalls;
+    volatile LONG diagUpdateSuccess;
+    volatile LONG diagPaintRectsConverted;
+    volatile LONG nativePassthrough; // 0=logical input, 1=original native input
+    volatile LONG nativeLastPhysicalX;
+    volatile LONG nativeLastPhysicalY;
+    volatile LONG nativeLastLogicalX;
+    volatile LONG nativeLastLogicalY;
+};
