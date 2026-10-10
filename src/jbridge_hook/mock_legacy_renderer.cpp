@@ -25,7 +25,7 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         PAINTSTRUCT ps{};
         HDC dc=BeginPaint(hwnd,&ps);
         if(dc) {
-            if(state && state->rendererMode==1) {
+            if(state && state->rendererMode>=1) {
                 // A realistic unscaled VST-style bitmap renderer.
                 // No StretchDIBits or zoom code belongs to this DLL.
                 BITMAPINFO bitmap{};
@@ -52,6 +52,7 @@ LRESULT CALLBACK OriginalEditorProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                         DIB_RGB_COLORS);
                     // Nonzero source coordinates and a source rectangle
                     // smaller than the BITMAPINFO header dimensions.
+                    InterlockedIncrement(&state->clippedDibCalls);
                     SetDIBitsToDevice(dc,48,30,32,36,48,30,0,
                         kLogicalHeight,pixels.data(),&bitmap,DIB_RGB_COLORS);
                 } else {

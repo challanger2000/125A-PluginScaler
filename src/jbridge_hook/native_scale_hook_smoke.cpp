@@ -284,7 +284,9 @@ int wmain(int argc,wchar_t** argv) {
                 std::printf("nested-jbridge-container-%ld=%s root=%ld\\n",
                     t.state->scale,rootGrowth?"PASS":"FAIL",t.attach->rootHwnd);
             }
-            const bool pass=attached&&painted&&mouseVerified&&rootGrowth;
+            const bool trueClippedDib=!clipped ||
+                    (t.state->rendererMode==2 && t.state->clippedDibCalls>0);
+            const bool pass=attached&&painted&&mouseVerified&&rootGrowth&&trueClippedDib;
             std::printf("in-process-%s-gdi-%ld=%s hwnd=%ld attached=%ld hook=%ld iat=%ld pixels=%d down=%ld move=%ld up=%ld mismatch=%ld\n",
                alreadyOpen?"already-open":"creation",t.state->scale,
                pass?"PASS":"FAIL",t.state->targetHwnd,
@@ -293,8 +295,9 @@ int wmain(int argc,wchar_t** argv) {
                t.state->mouseDown,t.state->mouseMove,t.state->mouseUp,
                t.state->mismatch);
             if(alreadyOpen && bitmap)
-                std::printf("DIB_IMPORTS zoom=%ld begin=%ld dib=%ld\n",t.state->scale,
-                   t.attach?t.attach->beginImported:-1,t.attach?t.attach->dibImported:-1);
+                std::printf("DIB_IMPORTS zoom=%ld begin=%ld dib=%ld clippedCalls=%ld\n",
+                   t.state->scale,t.attach?t.attach->beginImported:-1,
+                   t.attach?t.attach->dibImported:-1,t.state->clippedDibCalls);
             ok &= pass;
             if(alreadyOpen && pass) {
                 // Stop scaling while original editor is STILL running.
