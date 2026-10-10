@@ -225,7 +225,15 @@ bool restore() {
     for(auto& s:active) {
         if(!s.state || processExited(s.pid))continue;
         LONG status=InterlockedCompareExchange(&s.state->status,0,0);
-        if(status==2 || status==3)continue; // no installed render hooks
+        if(status==2)continue; // fully restored
+        if(status==3) { // hooks removed, geometry may still be scaled
+            if(restoreOriginalGeometry(s)) {
+                InterlockedExchange(&s.state->status,2);
+            } else {
+                pending=true;
+            }
+            continue;
+        }
         if(status!=1 && status!=-5){pending=true;continue;}
         InterlockedExchange(&s.state->detach,1);
         for(int attempt=0;attempt<3;++attempt) {
