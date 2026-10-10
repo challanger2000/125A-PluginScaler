@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cwchar>
 #include <iterator>
+#include <array>
 #include <climits>
 #include <cstdlib>
 
