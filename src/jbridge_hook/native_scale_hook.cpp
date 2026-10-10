@@ -5,6 +5,7 @@
 #include <cwchar>
 #include <iterator>
 #include <array>
+#include <algorithm>
 #include <climits>
 #include <cstdlib>
 
