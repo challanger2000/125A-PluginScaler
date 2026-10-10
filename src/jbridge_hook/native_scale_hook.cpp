@@ -392,22 +392,31 @@ void closeState(NativeScaleState* state,HANDLE mapping) {
 }
 bool restoreOriginalImports() {
     if(!patched||!patchCount)return false;
-    // Multiple imported rendering entry points must all be rolled back.
+    // Recovery is idempotent. A partially restored import table must
+    // never trap the manager indefinitely after one failed attempt.
+    // Do NOT overwrite unknown third-party IAT modifications.
+    bool allRestored=true;
     for(unsigned i=patchCount;i>0;--i) {
         auto& patch=patches[i-1];
-        if(!patch.slot)return false;
+        if(!patch.slot){allRestored=false;continue;}
         DWORD old{};
         if(!VirtualProtect(const_cast<LONG*>(patch.slot),sizeof(LONG),
-                           PAGE_READWRITE,&old))return false;
-        const LONG previous=InterlockedCompareExchange(
+                           PAGE_READWRITE,&old)) {
+            allRestored=false;
+            continue;
+        }
+        const LONG observed=InterlockedCompareExchange(
              patch.slot,patch.previous,patch.inserted);
         DWORD ignored{};
         VirtualProtect(const_cast<LONG*>(patch.slot),sizeof(LONG),
                        old,&ignored);
         FlushInstructionCache(GetCurrentProcess(),
               const_cast<LONG*>(patch.slot),sizeof(LONG));
-        if(previous!=patch.inserted)return false;
+        // "previous" means an earlier rollback step already succeeded.
+        if(observed!=patch.inserted && observed!=patch.previous)
+            allRestored=false;
     }
+    if(!allRestored)return false;
     patchCount=0;
     originalBeginPaint=nullptr;
     originalGetDC=nullptr;
@@ -425,7 +434,8 @@ void attachToAlreadyOpenEditor() {
     auto* command=static_cast<NativeAttachCommand*>(
         MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(NativeAttachCommand)));
     if(!command){CloseHandle(mapping);return;}
-    if(command->status==1 && command->detach && target) {
+    if((command->status==1 || command->status==-5) &&
+       command->detach && target) {
         // Restore the original DLL import BEFORE releasing the Windows hook.
         // Otherwise the module would retain a pointer into an unloaded DLL.
         if(!restoreOriginalImports()) {
@@ -445,7 +455,10 @@ void attachToAlreadyOpenEditor() {
             if(IsWindow(target))InvalidateRect(target,nullptr,FALSE);
             target=nullptr;
             zoom=100;
-            InterlockedExchange(&command->status,sized&&rootSized?2:-6);
+            // Once imports are restored, the in-process DLL may safely
+            // unload even if window-frame geometry couldn't be restored.
+            // 3 = hooks safely removed but the user should reopen the GUI.
+            InterlockedExchange(&command->status,sized&&rootSized?2:3);
             releaseDebugState();
         }
     }

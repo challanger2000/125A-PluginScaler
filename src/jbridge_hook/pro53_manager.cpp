@@ -157,17 +157,50 @@ bool connect(HWND hwnd,DWORD pid,DWORD tid,int scale,Session& result,LONG& failu
     }
     result=s;return true;
 }
-bool restore(){
-    for(auto& s:active){
-        if(!s.state||s.state->status!=1)continue;
-        s.state->detach=1;
-        if(!PostMessageW(s.hwnd,WM_NULL,0,0))
+bool processExited(DWORD pid) {
+    HANDLE p=OpenProcess(SYNCHRONIZE,FALSE,pid);
+    if(!p)return false; // unknown: fail closed, never guess process death
+    const bool stopped=WaitForSingleObject(p,0)==WAIT_OBJECT_0;
+    CloseHandle(p);
+    return stopped;
+}
+bool restore() {
+    // Protect the original renderer from unloading patched code. Retry a
+    // failed/undelivered WM_NULL without hanging the manager forever.
+    // An exited auxhost has released the renderer and is safe to forget.
+    bool pending=false;
+    for(auto& s:active) {
+        if(!s.state || processExited(s.pid))continue;
+        LONG status=InterlockedCompareExchange(&s.state->status,0,0);
+        if(status==2 || status==3)continue; // no installed render hooks
+        if(status!=1 && status!=-5){pending=true;continue;}
+        InterlockedExchange(&s.state->detach,1);
+        for(int attempt=0;attempt<3;++attempt) {
+            // A plugin can change/destroy the editor HWND while its GUI
+            // thread remains alive: use both window and thread messages.
+            if(IsWindow(s.hwnd))PostMessageW(s.hwnd,WM_NULL,0,0);
             PostThreadMessageW(s.tid,WM_NULL,0,0);
-        if(!waitChange(&s.state->status,1,2500)||
-           s.state->status!=2)return false;
+            for(int n=0;n<80;++n) {
+                if(processExited(s.pid))break;
+                status=InterlockedCompareExchange(&s.state->status,0,0);
+                if(status==2 || status==3)break;
+                Sleep(10);
+            }
+            status=InterlockedCompareExchange(&s.state->status,0,0);
+            if(status==2 || status==3 || processExited(s.pid))break;
+        }
+        status=InterlockedCompareExchange(&s.state->status,0,0);
+        if(status!=2 && status!=3 && !processExited(s.pid)) {
+            pending=true;
+            output(L"Rueckbau nicht bestaetigt. Diagnosecode: "+
+                   std::to_wstring(status)+L"\\n"
+                   L"Scaler bleibt zum Schutz von Studio One aktiv.");
+        }
     }
+    if(pending)return false;
     for(auto& s:active)release(s);
-    active.clear();return true;
+    active.clear();
+    return true;
 }
 void start(int percentage){
     if(!restore()){output(L"Rueckbau fehlgeschlagen. 125A bleibt aktiv.");
@@ -251,7 +284,9 @@ LRESULT CALLBACK wndProc(HWND w,UINT m,WPARAM wp,LPARAM lp){
     if(m==WM_CLOSE){
         if(!restore()){
             MessageBoxW(w,L"Der native Rueckbau wurde nicht bestaetigt.\n"
-                L"Bitte Studio One nicht schliessen. Der Scaler bleibt aktiv.",
+                L"Fuer sicheres Beenden: Projekt speichern, erst Studio One\n"
+                L"regulaer beenden, dann Scaler erneut schliessen.\n"
+                L"Nicht den Scaler zuerst im Task-Manager abbrechen.",
                 L"125A PluginScaler",MB_OK|MB_ICONWARNING);
             return 0;
         }
