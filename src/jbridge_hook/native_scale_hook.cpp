@@ -27,20 +27,58 @@ Patch patches[3]{};
 unsigned patchCount{};
 bool patched=false;
 bool restoreOriginalImports();
-bool pro53WindowProc(HINSTANCE instance,LPCWSTR className) {
-    WNDCLASSEXW klass{};
-    klass.cbSize=sizeof(klass);
-    if(!GetClassInfoExW(instance,className,&klass)||!klass.lpfnWndProc)
-        return false;
+
+HMODULE imageAtProcedure(const void* proc) {
+    if(!proc)return nullptr;
     MEMORY_BASIC_INFORMATION mbi{};
-    if(!VirtualQuery(reinterpret_cast<const void*>(klass.lpfnWndProc),&mbi,sizeof(mbi)) ||
-       mbi.Type!=MEM_IMAGE) return false;
-    wchar_t module[MAX_PATH]{};
-    if(!GetModuleFileNameW(reinterpret_cast<HMODULE>(mbi.AllocationBase),
-                           module,MAX_PATH))return false;
-    const wchar_t* name=wcsrchr(module,L'\\');
-    name=name?name+1:module;
-    return _wcsicmp(name,L"Pro-53.dll")==0;
+    if(!VirtualQuery(proc,&mbi,sizeof(mbi))||mbi.Type!=MEM_IMAGE)
+        return nullptr;
+    auto* base=reinterpret_cast<HMODULE>(mbi.AllocationBase);
+    wchar_t file[MAX_PATH]{};
+    if(!GetModuleFileNameW(base,file,MAX_PATH))return nullptr;
+    return base;
+}
+bool imageNameIs(HMODULE module,const wchar_t* requested) {
+    if(!module)return false;
+    wchar_t file[MAX_PATH]{};
+    if(!GetModuleFileNameW(module,file,MAX_PATH))return false;
+    const wchar_t* name=wcsrchr(file,L'\\');
+    return _wcsicmp(name?name+1:file,requested)==0;
+}
+// Legacy VST2 GUIs can register ANSI window classes and/or subclass
+// their HWND after creation. Instance-based class lookups alone miss
+// real editor procedures. All queries run INSIDE the original GUI thread.
+HMODULE imageOfNativeEditor(HWND hwnd,HINSTANCE registered,
+                            LPCWSTR className,bool strictPro53) {
+    std::array<const void*,5> procedures{};
+    procedures[0]=reinterpret_cast<const void*>(
+        GetWindowLongPtrW(hwnd,GWLP_WNDPROC));
+    procedures[1]=reinterpret_cast<const void*>(
+        GetWindowLongPtrA(hwnd,GWLP_WNDPROC));
+    procedures[2]=reinterpret_cast<const void*>(
+        GetClassLongPtrW(hwnd,GCLP_WNDPROC));
+    procedures[3]=reinterpret_cast<const void*>(
+        GetClassLongPtrA(hwnd,GCLP_WNDPROC));
+    WNDCLASSEXW clsW{};clsW.cbSize=sizeof(clsW);
+    if(GetClassInfoExW(registered,className,&clsW))
+        procedures[4]=reinterpret_cast<const void*>(clsW.lpfnWndProc);
+    for(const void* proc:procedures) {
+        const HMODULE module=imageAtProcedure(proc);
+        if(module && (!strictPro53||imageNameIs(module,L"Pro-53.dll")))
+            return module;
+    }
+    // An ANSI-registered class may not be retrievable by GetClassInfoExW.
+    char classA[192]{};
+    if(GetClassNameA(hwnd,classA,sizeof(classA))) {
+        WNDCLASSEXA clsA{};clsA.cbSize=sizeof(clsA);
+        if(GetClassInfoExA(registered,classA,&clsA)) {
+            const HMODULE module=imageAtProcedure(
+                              reinterpret_cast<const void*>(clsA.lpfnWndProc));
+            if(module && (!strictPro53||imageNameIs(module,L"Pro-53.dll")))
+                return module;
+        }
+    }
+    return nullptr;
 }
 
 void transformDC(HDC dc) {
@@ -100,17 +138,18 @@ bool applyPatch(volatile LONG* slot,LONG replacement,LONG& original) {
     patches[patchCount++]={slot,original,replacement};
     return true;
 }
-bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className) {
+bool patchEditorModuleIAT(HINSTANCE instance,LPCWSTR className,HMODULE knownModule=nullptr) {
     if(patched)return true;
-    WNDCLASSEXW klass{};
-    klass.cbSize=sizeof(klass);
-    if(!GetClassInfoExW(instance,className,&klass)||!klass.lpfnWndProc)
-        return false;
-    MEMORY_BASIC_INFORMATION memory{};
-    if(!VirtualQuery(reinterpret_cast<LPCVOID>(klass.lpfnWndProc),
-                     &memory,sizeof(memory))||memory.Type!=MEM_IMAGE)
-        return false;
-    auto* base=static_cast<unsigned char*>(memory.AllocationBase);
+    HMODULE origin=knownModule;
+    if(!origin) {
+        WNDCLASSEXW klass{};
+        klass.cbSize=sizeof(klass);
+        if(!GetClassInfoExW(instance,className,&klass)||
+           !klass.lpfnWndProc)return false;
+        origin=imageAtProcedure(
+               reinterpret_cast<const void*>(klass.lpfnWndProc));
+    }
+    auto* base=reinterpret_cast<unsigned char*>(origin);
     if(!base)return false;
     const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
     if(dos->e_magic!=IMAGE_DOS_SIGNATURE)return false;
@@ -260,15 +299,25 @@ void attachToAlreadyOpenEditor() {
         exeName=exeName?exeName+1:exe;
         const bool realAuxhost=(_wcsicmp(exeName,L"auxhost.exe")==0 ||
                                 _wcsicmp(exeName,L"gauxhost.exe")==0);
-        if(!IsWindow(hwnd)||pid!=GetCurrentProcessId()||
-           tid!=GetCurrentThreadId()||(factor!=150&&factor!=200)||
-           !GetClassNameW(hwnd,klass,192)||
-           !((kind==0 && std::wcscmp(klass,kNativeScaleEditorClass)==0) ||
-             (kind==1 && realAuxhost &&
-              pro53WindowProc(reinterpret_cast<HINSTANCE>(
-                  GetWindowLongPtrW(hwnd,GWLP_HINSTANCE)),klass)))) {
-            InterlockedExchange(&command->status,-1);
-        } else {
+        const bool nativeWindow=IsWindow(hwnd)&&pid==GetCurrentProcessId()&&
+                                tid==GetCurrentThreadId();
+        const bool classFound=nativeWindow&&GetClassNameW(hwnd,klass,192)>0;
+        const auto registered=reinterpret_cast<HINSTANCE>(
+            nativeWindow?GetWindowLongPtrW(hwnd,GWLP_HINSTANCE):0);
+        // Pick the actual 32-bit renderer image, not the auxhost's frame.
+        // For the real plug-in, ownership must be verified via the PE module.
+        const HMODULE editorImage=classFound?
+            imageOfNativeEditor(hwnd,registered,klass,kind==1):nullptr;
+        if(!nativeWindow)InterlockedExchange(&command->status,-11);
+        else if(factor!=150&&factor!=200)
+            InterlockedExchange(&command->status,-12);
+        else if(!classFound)InterlockedExchange(&command->status,-13);
+        else if(kind==1&&!realAuxhost)
+            InterlockedExchange(&command->status,-14);
+        else if(kind==0 && std::wcscmp(klass,kNativeScaleEditorClass)!=0)
+            InterlockedExchange(&command->status,-15);
+        else if(!editorImage)InterlockedExchange(&command->status,-16);
+        else {
             RECT client{},outer{};
             if(!GetClientRect(hwnd,&client)||!GetWindowRect(hwnd,&outer)||
                client.right<=0||client.bottom<=0||
@@ -280,9 +329,8 @@ void attachToAlreadyOpenEditor() {
                 logicalHeight=client.bottom;
                 zoom=factor;
                 target=hwnd;
-                const auto module=reinterpret_cast<HINSTANCE>(
-                    GetWindowLongPtrW(hwnd,GWLP_HINSTANCE));
-                const bool compatible=patchEditorModuleIAT(module,klass);
+                const bool compatible=patchEditorModuleIAT(
+                    registered,klass,editorImage);
                 if(!compatible ||
                    (kind==1 && (!originalBeginPaint||!originalSetDIBits))) {
                     if(patched)restoreOriginalImports();

@@ -89,29 +89,40 @@ std::vector<Choice> windows(DWORD pid) {
          [](const Choice& a,const Choice& b){return a.score>b.score;});
     return s.choices;
 }
-bool connect(HWND hwnd,DWORD pid,DWORD tid,int scale,Session& result){
+bool connect(HWND hwnd,DWORD pid,DWORD tid,int scale,Session& result,LONG& failure){
+    failure=0;
     Session s{};s.hwnd=hwnd;s.pid=pid;s.tid=tid;
     wchar_t name[192]{};
     swprintf_s(name,L"Local\\125A_NativeAttach_%lu_%lu",pid,tid);
     s.mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,
                       0,sizeof(NativeAttachCommand),name);
-    if(!s.mapping)return false;
-    if(GetLastError()==ERROR_ALREADY_EXISTS){release(s);return false;}
+    if(!s.mapping){failure=-30;return false;}
+    if(GetLastError()==ERROR_ALREADY_EXISTS){
+        failure=-31;release(s);return false;
+    }
     s.state=static_cast<NativeAttachCommand*>(MapViewOfFile(
            s.mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(NativeAttachCommand)));
-    if(!s.state){release(s);return false;}
+    if(!s.state){failure=-32;release(s);return false;}
     ZeroMemory(s.state,sizeof(NativeAttachCommand));
     s.state->hwnd=static_cast<LONG>(reinterpret_cast<std::uintptr_t>(hwnd));
     s.state->scale=scale;
     s.state->targetKind=1; // Only native Pro-53.dll window procedures
     s.hook=SetWindowsHookExW(WH_GETMESSAGE,callback,hookDll,tid);
-    if(!s.hook){release(s);return false;}
-    if(!PostMessageW(hwnd,WM_NULL,0,0)){release(s);return false;}
+    if(!s.hook){failure=-33;release(s);return false;}
+    if(!PostMessageW(hwnd,WM_NULL,0,0)){
+        failure=-34;release(s);return false;
+    }
     if(!waitChange(&s.state->status,0,2200)){
-        InterlockedCompareExchange(&s.state->status,-10,0);
+        if(InterlockedCompareExchange(&s.state->status,-10,0)==0) {
+            failure=-10;release(s);return false;
+        }
+        // The hook may have completed while we were trying to cancel.
+        // Never unload an IAT-modifying DLL in an unknown state.
+    }
+    if(s.state->status!=1){
+        failure=s.state->status;
         release(s);return false;
     }
-    if(s.state->status!=1){release(s);return false;}
     result=s;return true;
 }
 bool restore(){
@@ -132,20 +143,26 @@ void start(int percentage){
     auto pids=processes();
     if(pids.empty()){output(L"Kein 32-Bit-jBridge mit Pro-53.dll gefunden.\n"
               L"Pro-53 in Studio One separat oeffnen.");return;}
-    int connected=0;
+    int connected=0,inspected=0;
+    LONG lastFailure=0;
     for(DWORD pid:pids){
         for(const auto& w:windows(pid)){
             Session session{};
-            if(connect(w.hwnd,pid,w.tid,percentage,session)){
+            LONG failure{};
+            ++inspected;
+            if(connect(w.hwnd,pid,w.tid,percentage,session,failure)){
                 active.push_back(session);++connected;break;
             }
+            if(failure!=0)lastFailure=failure;
         }
     }
     if(connected)output(std::to_wstring(connected)+
        L" Pro-53-Fenster auf "+std::to_wstring(percentage)+
        L" % skaliert.\n100 % / Beenden stellt die Originalgroesse wieder her.");
-    else output(L"Pro-53 vorhanden, aber kein passendes natives Editorfenster.\n"
-                L"Es wurde nichts vergroessert.");
+    else output(L"Pro-53 geladen, aber Editor-Zuordnung abgelehnt.\n"
+                L"Fenster geprueft: "+std::to_wstring(inspected)+
+                L" | Diagnose: "+std::to_wstring(lastFailure)+
+                L"\nEs wurde nichts vergroessert.");
 }
 void cleanupDll(){
     if(hookDll){FreeLibrary(hookDll);hookDll=nullptr;}
