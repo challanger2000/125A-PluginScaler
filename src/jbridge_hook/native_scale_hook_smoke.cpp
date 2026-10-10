@@ -278,7 +278,7 @@ int wmain(int argc,wchar_t** argv) {
                 const COLORREF changed=dc?GetPixel(dc,MulDiv(68,t.state->scale,100),
                                     MulDiv(47,t.state->scale,100)):CLR_INVALID;
                 if(dc)ReleaseDC(hwnd,dc);
-                dynamicRedraw=changed==RGB(208,48,176) &&
+                dynamicRedraw=changed==RGB(176,48,208) &&
                     t.state->partialUpdateLeft==48 &&
                     t.state->partialUpdateRight==80 &&
                     t.state->partialPaintLeft==48 &&
