@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "native_scale_shared.h"
 #include <windowsx.h>
 #include <cstdint>
