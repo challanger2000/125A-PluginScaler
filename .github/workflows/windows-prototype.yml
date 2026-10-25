@@ -1,0 +1,51 @@
+name: Windows prototype (manual)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: prototype-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native x64 proxy, helpers and fixtures
+        shell: pwsh
+        run: |
+          cmake -S . -B build64 -A x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build64 --config Release --parallel 4
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake -S . -B build32 -A Win32
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build32 --config Release --parallel 4
+          exit $LASTEXITCODE
+      - name: Run Release tests against real plugin binaries (synthetic fixtures)
+        shell: pwsh
+        run: |
+          ctest --test-dir build64 -C Release -V --output-log "$pwd/build64/Release/ctest-x64-results.txt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build32 -C Release -V --output-log "$pwd/build32/Release/ctest-x86-core-results.txt"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Repeat full host test through the x86 helper, not just a Win32 compile.
+          Copy-Item build32/Release/scaler-helper32.exe build64/Release/
+          Copy-Item build32/Release/scaler-fixture.dll build64/Release/scaler-fixture32.dll
+          Set-Content build64/Release/PluginScaler.ini "[plugin]`npath=scaler-fixture32.dll" -Encoding ascii
+          Push-Location build64/Release
+          try {
+            & ./integration-tests.exe "$pwd/PluginScaler.vst3" *> integration-x86-results.txt
+            $result = $LASTEXITCODE
+          } finally { Pop-Location }
+          Remove-Item build64/Release/PluginScaler.ini
+          exit $result
+      - name: Package full installable bundle and evidence
+        shell: pwsh
+        run: python tools/package.py --x64 build64/Release --x86 build32/Release --out artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PluginScaler-prototype-Windows
+          path: artifacts/*.zip
+          if-no-files-found: error
