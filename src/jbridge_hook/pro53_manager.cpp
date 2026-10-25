@@ -225,7 +225,18 @@ bool restore() {
     for(auto& s:active) {
         if(!s.state || processExited(s.pid))continue;
         LONG status=InterlockedCompareExchange(&s.state->status,0,0);
-        if(status==2)continue; // fully restored
+        if(status==2) {
+            // A hook's 'restored' status does not prove that both the
+            // editor and the recorded jBridge presentation frame actually
+            // returned to their original sizes. Verify before releasing
+            // the shared state; a failed geometry rollback remains pending.
+            if(!restoreOriginalGeometry(s)) {
+                pending=true;
+                output(L"Fenstergroesse nach Rueckbau nicht bestaetigt.\n"
+                       L"Scaler bleibt fuer einen erneuten Versuch aktiv.");
+            }
+            continue;
+        }
         if(status==3) { // hooks removed, geometry may still be scaled
             if(restoreOriginalGeometry(s)) {
                 InterlockedExchange(&s.state->status,2);
@@ -257,6 +268,12 @@ bool restore() {
            restoreOriginalGeometry(s)) {
             InterlockedExchange(&s.state->status,2);
             status=2;
+        }
+        if(status==2 && !processExited(s.pid) &&
+           !restoreOriginalGeometry(s)) {
+            pending=true;
+            output(L"Fenstergroesse nach Rueckbau nicht bestaetigt.\n"
+                   L"Scaler bleibt fuer einen erneuten Versuch aktiv.");
         }
         if(status!=2 && !processExited(s.pid)) {
             pending=true;
