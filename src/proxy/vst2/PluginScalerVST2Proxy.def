@@ -1,0 +1,4 @@
+LIBRARY PluginScalerVST2Proxy
+EXPORTS
+    VSTPluginMain
+    main=VSTPluginMain

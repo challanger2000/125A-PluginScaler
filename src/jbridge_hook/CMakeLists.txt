@@ -1,0 +1,47 @@
+if(NOT WIN32)
+  return()
+endif()
+add_library(PluginScalerJBridgeCbtHook SHARED cbt_hook.cpp)
+target_compile_features(PluginScalerJBridgeCbtHook PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerJBridgeCbtHook PRIVATE user32)
+set_target_properties(PluginScalerJBridgeCbtHook PROPERTIES
+  OUTPUT_NAME "PluginScalerJBridgeHook-x86")
+add_executable(PluginScalerJBridgeHookSmoke hook_smoke.cpp)
+target_compile_features(PluginScalerJBridgeHookSmoke PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerJBridgeHookSmoke PRIVATE user32)
+
+add_executable(PluginScalerNativeGdiScaleSmoke native_gdi_scale_smoke.cpp)
+target_compile_features(PluginScalerNativeGdiScaleSmoke PRIVATE cxx_std_20)
+target_link_libraries(PluginScalerNativeGdiScaleSmoke PRIVATE user32 gdi32)
+
+add_library(PluginScalerNativeScaleHook SHARED native_scale_hook.cpp)
+target_compile_features(PluginScalerNativeScaleHook PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerNativeScaleHook PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerNativeScaleHook PRIVATE user32 gdi32 comctl32)
+set_target_properties(PluginScalerNativeScaleHook PROPERTIES OUTPUT_NAME "PluginScalerNativeScaleHook-x86")
+add_executable(PluginScalerNativeScaleHookSmoke native_scale_hook_smoke.cpp)
+target_compile_features(PluginScalerNativeScaleHookSmoke PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerNativeScaleHookSmoke PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerNativeScaleHookSmoke PRIVATE user32 gdi32)
+
+add_library(PluginScalerMockLegacyRenderer SHARED mock_legacy_renderer.cpp)
+target_compile_features(PluginScalerMockLegacyRenderer PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerMockLegacyRenderer PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerMockLegacyRenderer PRIVATE user32 gdi32)
+set_target_properties(PluginScalerMockLegacyRenderer PROPERTIES OUTPUT_NAME "PluginScalerMockLegacyRenderer-x86")
+
+# The standalone Pro-53 manager and its embedded hook are x86-only.
+# The general Windows x64 build must not compile this target.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+  # Portable one-EXE delivery: native x86 hook is a binary Win32 resource.
+  set(_native_rc "${CMAKE_CURRENT_BINARY_DIR}/pro53_embedded_hook_$<CONFIG>.rc")
+  file(GENERATE OUTPUT "${_native_rc}"
+       CONTENT "101 RCDATA \"$<TARGET_FILE:PluginScalerNativeScaleHook>\"\n")
+  add_executable(PluginScalerPro53 WIN32 pro53_manager.cpp "${_native_rc}")
+  target_compile_features(PluginScalerPro53 PRIVATE cxx_std_20)
+  target_compile_definitions(PluginScalerPro53 PRIVATE UNICODE _UNICODE)
+  target_link_libraries(PluginScalerPro53 PRIVATE user32)
+  add_dependencies(PluginScalerPro53 PluginScalerNativeScaleHook)
+  set_target_properties(PluginScalerPro53 PROPERTIES OUTPUT_NAME "125A-PluginScaler-Pro53")
+
+endif()

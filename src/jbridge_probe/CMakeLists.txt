@@ -1,0 +1,17 @@
+add_executable(PluginScalerJBridgeProbe WIN32
+    main.cpp
+)
+
+target_compile_features(PluginScalerJBridgeProbe PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeProbe PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeProbe PRIVATE user32)
+
+add_executable(PluginScalerJBridgeViewer WIN32 viewer.cpp)
+target_compile_features(PluginScalerJBridgeViewer PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeViewer PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeViewer PRIVATE user32 Magnification shell32)
+
+add_executable(PluginScalerJBridgeMockGUI ../../tests/jbridge_gui_mock.cpp)
+target_compile_features(PluginScalerJBridgeMockGUI PRIVATE cxx_std_20)
+target_compile_definitions(PluginScalerJBridgeMockGUI PRIVATE UNICODE _UNICODE)
+target_link_libraries(PluginScalerJBridgeMockGUI PRIVATE user32)

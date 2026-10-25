@@ -1,0 +1,99 @@
+name: jBridge native HWND hook feasibility
+on:
+  push:
+    branches: [feature/jbridge-gui-scaler]
+    paths:
+      - 'src/jbridge_hook/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/jbridge-hook-feasibility.yml'
+  workflow_dispatch:
+
+jobs:
+  hook:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure 32-bit hook probe
+        shell: pwsh
+        run: |
+          cmake -S . -B build-hook-x86 -A Win32 -DPLUGINSCALER_FETCH_VST3_SDK=OFF -DPLUGINSCALER_BUILD_TESTS=OFF
+      - name: Build only hook and cross-process mock
+        shell: pwsh
+        run: |
+          cmake --build build-hook-x86 --config Release --target PluginScalerJBridgeCbtHook PluginScalerJBridgeHookSmoke PluginScalerNativeGdiScaleSmoke PluginScalerNativeScaleHook PluginScalerNativeScaleHookSmoke PluginScalerMockLegacyRenderer PluginScalerPro53
+      - name: Test two independent native 32-bit editor threads
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerJBridgeHookSmoke.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Cross-process HWND hook injection FAILED" }
+      - name: Measure native GDI pixels and actual mouse drags at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeGdiScaleSmoke.exe"
+          if ($LASTEXITCODE -ne 0) { throw "150/200 percent GDI rendering or native mouse gate FAILED" }
+      - name: Test injected original GDI renderer and input (x86 150 and 200 percent)
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Native injected GDI editor scale is NOT PROVEN" }
+      - name: Attach then safely detach two already-open 32-bit GUI editors
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open
+          if ($LASTEXITCODE -ne 0) { throw "Already-open native editor attach failed" }
+
+      - name: Attach to original DIB-rendering 32-bit editors (Pro-53-style API)
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib
+          if ($LASTEXITCODE -ne 0) { throw "Real DIB rendering at 150/200 percent failed" }
+
+      - name: Single EXE resource packaging smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "build-hook-x86/src/jbridge_hook/Release/125A-PluginScaler-Pro53.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "EXE DLL resource loading failed: exit code $($p.ExitCode)" }
+      - name: Save gated Pro-53 test candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-PluginScaler-Pro53-Experimental-x86
+          path: build-hook-x86/src/jbridge_hook/Release/125A-PluginScaler-Pro53.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Resize and restore mock jBridge frame around existing DIB editor
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --dib --nested
+          if ($LASTEXITCODE -ne 0) { throw "Nested jBridge frame + original editor zoom failed" }
+
+      - name: Assert Pro-53-style clipped source DIBs at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --clipped
+          if ($LASTEXITCODE -ne 0) { throw "Clipped DIB renderer scale FAILED" }
+
+      - name: Reject black-frame regression from actual Pro-53 oversized destination DIB
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --oversized
+          if ($LASTEXITCODE -ne 0) { throw "Original Pro-53 1143x537 destination / 762x358 source handling FAILED" }
+
+      - name: Rollback must recover from first transient failure without unloading
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --retry-detach
+          if ($LASTEXITCODE -ne 0) { throw "Native rollback retry FAILED" }
+
+      - name: Native in-process WndProc subclass must translate SendMessage mouse input at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --sent-mouse
+          if ($LASTEXITCODE -ne 0) { throw "Mouse coordinate correction for direct SendMessage FAILED" }
+
+      - name: Pixel proof of a real moving knob after a partial InvalidateRect at 150 and 200 percent
+        shell: pwsh
+        run: |
+          & "build-hook-x86/src/jbridge_hook/Release/PluginScalerNativeScaleHookSmoke.exe" --already-open --partial-redraw
+          if ($LASTEXITCODE -ne 0) { throw "Dynamic control redraw or clipping coordinates FAILED" }
