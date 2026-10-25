@@ -1,0 +1,1 @@
+be9d2ce16113e0e0624e098e7d79476a4c512903d8a2ca06bccf48889149db52  PluginScaler-0.1.0-prototype-windows.zip
