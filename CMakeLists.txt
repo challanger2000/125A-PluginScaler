@@ -37,3 +37,16 @@ set_property(TARGET PluginScalerCaptureSmoke PROPERTY
 if(MSVC)
   target_compile_options(PluginScalerCaptureSmoke PRIVATE /W4 /WX /permissive- /utf-8)
 endif()
+
+# Real 125A VST3 visual integration smoke with the real viewer/Win32 capture.
+# The 125A product is built independently in a separate GitHub Actions job.
+add_executable(PluginScalerRealVST3Smoke tests/real_vst3_gui_smoke.cpp)
+target_compile_features(PluginScalerRealVST3Smoke PRIVATE cxx_std_20)
+target_include_directories(PluginScalerRealVST3Smoke PRIVATE include)
+target_compile_definitions(PluginScalerRealVST3Smoke PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(PluginScalerRealVST3Smoke PRIVATE user32 gdi32 Magnification)
+set_property(TARGET PluginScalerRealVST3Smoke PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(MSVC)
+  target_compile_options(PluginScalerRealVST3Smoke PRIVATE /W4 /WX /permissive- /utf-8)
+endif()
