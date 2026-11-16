@@ -92,11 +92,12 @@ bool within(POINT p, const RECT& r) {
 }
 
 int main(int argc, char** argv) {
+    const bool captureMode = argc == 2 && std::string(argv[1]) == "--vst2-printwindow-mode";
     const bool printWindowTest = argc == 2 && std::string(argv[1]) == "--vst2-printwindow";
     const bool maskTest = argc == 2 && std::string(argv[1]) == "--vst2-mask";
     const bool targeted = argc == 2 && std::string(argv[1]) == "--vst2-controls";
-    const bool interaction = targeted || (argc == 2 && std::string(argv[1]) == "--vst2-input");
-    const bool vst2 = printWindowTest || maskTest || interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
+    const bool interaction = captureMode || targeted || (argc == 2 && std::string(argv[1]) == "--vst2-input");
+    const bool vst2 = captureMode || printWindowTest || maskTest || interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
     const wchar_t* hostClass = vst2 ?
         L"125A_PluginScaler_VST2_EditorHost" :
         L"125A_Test_Lab_P04_EditorHost";
@@ -168,14 +169,22 @@ int main(int argc, char** argv) {
     wc.lpfnWndProc=viewer_proc;
     wc.lpszClassName=kViewerClass;
     wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
-    if(!RegisterClassW(&wc)) {
-        std::cerr<<"REAL_PLUGIN_FAIL: scaler viewer class registration\n";
+    WNDCLASSW canvas=wc;
+    canvas.lpszClassName=kPrintCanvasClass;
+    canvas.lpfnWndProc=print_canvas_proc;
+    WNDCLASSW cover=wc;
+    cover.lpszClassName=kPrintCoverClass;
+    cover.lpfnWndProc=print_cover_proc;
+    if(!RegisterClassW(&wc) || !RegisterClassW(&canvas) ||
+       !RegisterClassW(&cover)) {
+        std::cerr<<"REAL_PLUGIN_FAIL: scaler viewer/capture class registration\n";
         MagUninitialize();return 6;
     }
     g.source=editor;
     g.sourceThread=GetWindowThreadProcessId(editor,&g.sourcePid);
     g.sourceRect=editorBounds;
     g.percent=150;
+    g.printWindowMode=captureMode;
     g.autoFit=true;
     g.overlay=false;
     create_viewer();
@@ -234,12 +243,12 @@ int main(int argc, char** argv) {
         std::cout<<"REAL_PLUGIN_INCONCLUSIVE: insufficient visible magnified pixels\n";
         return 77;
     }
-    if(agreement<0.65) {
+    if(agreement<(captureMode?0.90:0.65)) {
         std::cerr<<"REAL_PLUGIN_FAIL: real editor diverged from its magnified pixels\n";
         return 8;
     }
     std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
-    const int code = targeted ?
+    const int code = (targeted||captureMode) ?
         scaler_vst2_interaction::run_targeted(host,width,height) :
         interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
     if(IsWindow(g.viewer))DestroyWindow(g.viewer);
