@@ -201,17 +201,17 @@ int main(int argc, char** argv) {
         SetWindowPos(g.viewer,HWND_TOPMOST,0,0,0,0,
                      SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
         for(int i=0;i<18;++i){pump();Sleep(40);}
-        RECT src{},view{},cover{},canvas{};
+        RECT src{},view{},coverBounds{},canvasBounds{};
         GetWindowRect(editor,&src);
         GetWindowRect(g.viewer,&view);
-        if(IsWindow(g.cover))GetWindowRect(g.cover,&cover);
-        if(IsWindow(g.magnifier))GetWindowRect(g.magnifier,&canvas);
+        if(IsWindow(g.cover))GetWindowRect(g.cover,&coverBounds);
+        if(IsWindow(g.magnifier))GetWindowRect(g.magnifier,&canvasBounds);
         std::cout<<"PRINTCANVAS_DIAG: capture_mode="<<g.printWindowMode
                  <<" failures="<<g.printFailureCount
                  <<" source="<<src.left<<","<<src.top<<","<<src.right<<","<<src.bottom
                  <<" viewer="<<view.left<<","<<view.top<<","<<view.right<<","<<view.bottom
-                 <<" canvas="<<canvas.left<<","<<canvas.top<<","<<canvas.right<<","<<canvas.bottom
-                 <<" cover="<<cover.left<<","<<cover.top<<","<<cover.right<<","<<cover.bottom
+                 <<" canvas="<<canvasBounds.left<<","<<canvasBounds.top<<","<<canvasBounds.right<<","<<canvasBounds.bottom
+                 <<" cover="<<coverBounds.left<<","<<coverBounds.top<<","<<coverBounds.right<<","<<coverBounds.bottom
                  <<" coverVisible="<<(IsWindowVisible(g.cover)?1:0)
                  <<" offscreen="<<g.printW<<"x"<<g.printH<<"\\n";
     }
