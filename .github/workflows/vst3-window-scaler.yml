@@ -24,11 +24,10 @@ jobs:
           New-Item -Type Directory -Force -Path package | Out-Null
           Copy-Item build/Release/PluginScalerVST3Window.exe package/
           Copy-Item docs/VST3-MANUAL-TEST-DE.md package/START-HERE.txt
-          Compress-Archive -Path package/* -DestinationPath 125A-VST3-WindowScaler-Prototyp.zip -Force
       - name: Upload test package
         uses: actions/upload-artifact@v4
         with:
           name: 125A-VST3-WindowScaler-Prototyp
-          path: 125A-VST3-WindowScaler-Prototyp.zip
+          path: package/*
           if-no-files-found: error
           retention-days: 14
