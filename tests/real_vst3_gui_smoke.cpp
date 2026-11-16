@@ -16,6 +16,7 @@
 #include "../src/vst3_window_scaler.cpp"
 #include "vst2_input_probe.hpp"
 #include "vst2_layered_mask_probe.hpp"
+#include "vst2_printwindow_probe.hpp"
 
 namespace {
 struct PixelProbe { int x{},y{}; COLORREF color{}; };
@@ -91,10 +92,11 @@ bool within(POINT p, const RECT& r) {
 }
 
 int main(int argc, char** argv) {
+    const bool printWindowTest = argc == 2 && std::string(argv[1]) == "--vst2-printwindow";
     const bool maskTest = argc == 2 && std::string(argv[1]) == "--vst2-mask";
     const bool targeted = argc == 2 && std::string(argv[1]) == "--vst2-controls";
     const bool interaction = targeted || (argc == 2 && std::string(argv[1]) == "--vst2-input");
-    const bool vst2 = maskTest || interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
+    const bool vst2 = printWindowTest || maskTest || interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
     const wchar_t* hostClass = vst2 ?
         L"125A_PluginScaler_VST2_EditorHost" :
         L"125A_Test_Lab_P04_EditorHost";
@@ -192,6 +194,12 @@ int main(int argc, char** argv) {
         if(IsWindow(g.viewer))DestroyWindow(g.viewer);
         MagUninitialize();
         return 77;
+    }
+    if(printWindowTest) {
+        const int code=scaler_printwindow_experiment::run(editor);
+        if(IsWindow(g.viewer))DestroyWindow(g.viewer);
+        MagUninitialize();
+        return code;
     }
     if(maskTest) {
         // The source and enlarged viewer cannot share the same physical
