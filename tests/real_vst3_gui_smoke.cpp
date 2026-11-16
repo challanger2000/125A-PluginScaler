@@ -13,6 +13,7 @@
 #include <set>
 #include <vector>
 #include "../src/vst3_window_scaler.cpp"
+#include "vst2_input_probe.hpp"
 
 namespace {
 struct PixelProbe { int x{},y{}; COLORREF color{}; };
@@ -43,7 +44,8 @@ bool within(POINT p, const RECT& r) {
 }
 
 int main(int argc, char** argv) {
-    const bool vst2 = argc == 2 && std::string(argv[1]) == "--vst2";
+    const bool interaction = argc == 2 && std::string(argv[1]) == "--vst2-input";
+    const bool vst2 = interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
     const wchar_t* hostClass = vst2 ?
         L"125A_PluginScaler_VST2_EditorHost" :
         L"125A_Test_Lab_P04_EditorHost";
@@ -154,8 +156,6 @@ int main(int argc, char** argv) {
              <<" requested=150 actual="<<zoom
              <<" samples="<<samples.size()<<" valid="<<valid
              <<" matched="<<matched<<" agreement="<<agreement<<"\n";
-    if(IsWindow(g.viewer))DestroyWindow(g.viewer);
-    MagUninitialize();
     if(valid<24) {
         std::cout<<"REAL_PLUGIN_INCONCLUSIVE: insufficient visible magnified pixels\n";
         return 77;
@@ -165,5 +165,8 @@ int main(int argc, char** argv) {
         return 8;
     }
     std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
-    return 0;
+    const int code = interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
+    if(IsWindow(g.viewer))DestroyWindow(g.viewer);
+    MagUninitialize();
+    return code;
 }
