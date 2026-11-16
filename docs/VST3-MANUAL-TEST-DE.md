@@ -14,13 +14,13 @@ Kein VST3 wird geladen oder verändert. Kein Installer, keine DLL-Injektion.
    ohne das Plugin oder die DAW zu verändern.
 8) Falls die Overlay-Darstellung schwarz oder fehlerhaft ist, Häkchen
    entfernen: ein separates vergrößertes Fenster wird angezeigt.
-9) Regler, Buttons, Ziehen und Mausrad im vergrößerten Bild testen.
-10) STRG+ALT+F9 blendet den Viewer aus. Die Original-GUI bleibt
+9) Das vergrößerte Fenster an der normalen Windows-Titelleiste frei verschieben.\n   Die Position bleibt nach einem Zoom-Wechsel erhalten.\n10) Regler, Buttons, Ziehen und Mausrad im vergrößerten Bild testen.
+11) STRG+ALT+F9 blendet den Viewer aus. Die Original-GUI bleibt
     normal zugänglich. Bei Problemen Scaler schließen.
 
 FÜR JEDES GETESTETE PLUGIN:
 - DAW-Version, Pluginformat (VST2/VST3), Plugin-Name und Version
-- Overlay oder separates Fenster?
+- Overlay oder separates Fenster? Lässt es sich an der Titelleiste frei ziehen?
 - Zoom-Prozent; Windows-Bildschirmskalierung
 - Bild sichtbar / schwarz / überlagert?
 - Klick, Reglerziehen, Mausrad: ja/nein?
