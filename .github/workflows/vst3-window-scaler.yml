@@ -1,0 +1,34 @@
+name: VST3 Window Scaler prototype
+
+on:
+  push:
+    branches:
+      - feature/vst3-window-scaler-20261116
+  workflow_dispatch:
+
+jobs:
+  windows-exe:
+    runs-on: windows-2022
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -A x64
+      - name: Build x64 release
+        run: cmake --build build --config Release --parallel
+      - name: Run deterministic geometry tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package for manual Windows VST3 testing
+        shell: pwsh
+        run: |
+          New-Item -Type Directory -Force -Path package | Out-Null
+          Copy-Item build/Release/PluginScalerVST3Window.exe package/
+          Copy-Item docs/VST3-MANUAL-TEST-DE.md package/START-HERE.txt
+          Compress-Archive -Path package/* -DestinationPath 125A-VST3-WindowScaler-Prototyp.zip -Force
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-VST3-WindowScaler-Prototyp
+          path: 125A-VST3-WindowScaler-Prototyp.zip
+          if-no-files-found: error
+          retention-days: 14
