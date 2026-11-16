@@ -2,13 +2,36 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <windowsx.h>
+#include <algorithm>
 #include "scaler/vst2_abi.hpp"
 using namespace scaler::vst2;
 namespace {
 AEffect effect{};
 HWND editor{};
 ERect rect{0,0,280,480};
+float parameter=0.3f;
+bool dragging=false;
 LRESULT CALLBACK paint(HWND hwnd,UINT m,WPARAM w,LPARAM l) {
+    if(m==WM_LBUTTONDOWN){
+        dragging=true;
+        SetCapture(hwnd);
+        const int x=GET_X_LPARAM(l);
+        parameter=(std::max)(0.f,(std::min)(1.f,float(x)/480.f));
+        InvalidateRect(hwnd,nullptr,FALSE);
+        return 0;
+    }
+    if(m==WM_MOUSEMOVE && dragging) {
+        const int y=GET_Y_LPARAM(l);
+        parameter=(std::max)(0.f,(std::min)(1.f,1.f-float(y)/280.f));
+        InvalidateRect(hwnd,nullptr,FALSE);
+        return 0;
+    }
+    if(m==WM_LBUTTONUP) {
+        dragging=false;
+        if(GetCapture()==hwnd)ReleaseCapture();
+        return 0;
+    }
     if(m==WM_PAINT){
         PAINTSTRUCT ps{};
         HDC dc=BeginPaint(hwnd,&ps);
@@ -38,8 +61,8 @@ Ptr __cdecl dispatch(AEffect*,Int op,Int,Ptr,void* ptr,float){
     return 1;
 }
 void __cdecl process(AEffect*,float**,float**,Int){}
-void __cdecl setParam(AEffect*,Int,float){}
-float __cdecl getParam(AEffect*,Int){return 0.f;}
+void __cdecl setParam(AEffect*,Int index,float v){if(index==0)parameter=v;}
+float __cdecl getParam(AEffect*,Int index){return index==0 ? parameter : 0.f;}
 }
 extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(Host) {
     effect.magic=kMagic;
@@ -48,7 +71,7 @@ extern "C" __declspec(dllexport) AEffect* __cdecl VSTPluginMain(Host) {
     effect.setParameter=setParam;
     effect.getParameter=getParam;
     effect.flags=kHasEditor;
-    effect.numInputs=2;effect.numOutputs=2;
+    effect.numInputs=2;effect.numOutputs=2;effect.numParams=1;
     effect.version=1;
     return &effect;
 }
