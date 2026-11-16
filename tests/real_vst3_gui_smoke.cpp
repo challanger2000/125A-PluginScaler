@@ -125,6 +125,14 @@ int main() {
     for(int i=0;i<25;++i){pump();Sleep(40);}
     int matched=0,valid=0;
     const int zoom=g.effectivePercent;
+    if (zoom <= 100) {
+        std::cout << "REAL_VST3_INCONCLUSIVE: product was reduced to "
+                  << zoom << "% by Auto-Fit, not enlarged; smaller GUI or "
+                     "larger desktop required\n";
+        if(IsWindow(g.viewer))DestroyWindow(g.viewer);
+        MagUninitialize();
+        return 77;
+    }
     RECT viewerRect{};GetWindowRect(g.magnifier,&viewerRect);
     for(const auto& s:samples) {
         POINT mapped{scaler::scaled_pixels(s.x,zoom),
