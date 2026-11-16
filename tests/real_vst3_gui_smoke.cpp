@@ -193,6 +193,15 @@ int main(int argc, char** argv) {
         MagUninitialize();
         return 77;
     }
+    if(maskTest) {
+        // The source and enlarged viewer cannot share the same physical
+        // pixels during our mask experiment. The isolated experiment
+        // repositions the viewer, then takes its own clean baseline.
+        const int code=scaler_mask_experiment::run(editor);
+        if(IsWindow(g.viewer))DestroyWindow(g.viewer);
+        MagUninitialize();
+        return code;
+    }
     RECT viewerRect{};GetWindowRect(g.magnifier,&viewerRect);
     if(interaction) {
         if(capture_desktop_bitmap("vst2-magnified-before.bmp",viewerRect))
@@ -222,9 +231,7 @@ int main(int argc, char** argv) {
         return 8;
     }
     std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
-    const int code = maskTest ?
-        scaler_mask_experiment::run(editor) :
-        targeted ?
+    const int code = targeted ?
         scaler_vst2_interaction::run_targeted(host,width,height) :
         interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
     if(IsWindow(g.viewer))DestroyWindow(g.viewer);
