@@ -1,10 +1,7 @@
 // Headless-safe visual smoke: exercises the *real* 125A viewer code with
 // a deterministic GDI source window, rather than a synthetic scaling formula.
 // Exit 77 = desktop capture unavailable (INCONCLUSIVE, never a PASS).
-#define UNICODE
-#define _UNICODE
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+#include <cstdlib>
 #include "../src/vst3_window_scaler.cpp"
 #include <iostream>
 
