@@ -50,3 +50,24 @@ set_property(TARGET PluginScalerRealVST3Smoke PROPERTY
 if(MSVC)
   target_compile_options(PluginScalerRealVST3Smoke PRIVATE /W4 /WX /permissive- /utf-8)
 endif()
+
+# VST2 editor-host x64. Load arbitrary user DLLs into a disposable
+# standalone Windows process, without a DAW and without a VST2 SDK.
+add_executable(PluginScalerVST2Host tests/vst2_editor_host.cpp)
+target_compile_features(PluginScalerVST2Host PRIVATE cxx_std_20)
+target_include_directories(PluginScalerVST2Host PRIVATE include)
+set_property(TARGET PluginScalerVST2Host PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(MSVC)
+  target_compile_options(PluginScalerVST2Host PRIVATE /W4 /WX /permissive- /utf-8)
+endif()
+
+# CI-only genuine VST2-DLL fixture. Do not ship as a user plugin.
+add_library(PluginScalerVST2Fixture SHARED tests/vst2_fixture.cpp)
+target_compile_features(PluginScalerVST2Fixture PRIVATE cxx_std_20)
+target_include_directories(PluginScalerVST2Fixture PRIVATE include)
+set_property(TARGET PluginScalerVST2Fixture PROPERTY
+  MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(MSVC)
+  target_compile_options(PluginScalerVST2Fixture PRIVATE /W4 /WX /permissive- /utf-8)
+endif()
