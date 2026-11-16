@@ -12,10 +12,16 @@ Das Testpaket aus GitHub Actions herunterladen, ZIP entpacken, EXE
 starten und die beiliegende `START-HERE.txt` befolgen.
 
 Der Viewer benutzt die Windows Magnification API. Das Originalfenster
-bleibt geöffnet. Standardmäßig liegt ein rahmenloses, vergrößertes Overlay
+bleibt geöffnet. Standardmäßig liegt ein vergrößertes Fenster mit Titelleiste als Overlay
 darüber; alternativ lässt sich wieder ein separates Viewer-Fenster wählen.
 Die Kopie kann zwischen 125 und 200 % vergrößert werden.
-Der Viewer hat nun auch im Overlay-Modus eine normale Windows-Titelleiste.\nDie Position kann per Drag verändert werden und bleibt beim Zoomen erhalten.\nMit Strg+Alt+F9 wird der Viewer ausgeblendet. Der Prototyp arbeitet
+Der Viewer ist auch im Overlay-Modus an der normalen Windows-Titelleiste
+verschiebbar. "Auto-Fit" hält das komplette Fenster innerhalb des
+Monitor-Arbeitsbereichs und passt die Mauskoordinaten an den tatsächlich
+verwendeten Zoom an. Die neue optische Original-Abdeckung ist bewusst
+abschaltbar, da die Magnification-Filterliste nicht auf jeder GPU gleich
+funktioniert. Sie verbirgt das Original NICHT über SW_HIDE.
+Mit Strg+Alt+F9 werden Viewer und Abdeckung geschlossen. Der Prototyp arbeitet
 formatunabhängig mit sichtbaren Fenstern: VST2 funktioniert in ersten
 Nutzertests ebenfalls. Die DAW-interne Einbettung ist damit noch nicht
 implementiert. Ein Win32-Maus-Nachrichtenadapter setzt Viewer-Koordinaten
