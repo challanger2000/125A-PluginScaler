@@ -15,7 +15,7 @@ Der Viewer benutzt die Windows Magnification API. Das Originalfenster
 bleibt geöffnet. Standardmäßig liegt ein rahmenloses, vergrößertes Overlay
 darüber; alternativ lässt sich wieder ein separates Viewer-Fenster wählen.
 Die Kopie kann zwischen 125 und 200 % vergrößert werden.
-Mit Strg+Alt+F9 wird der Viewer ausgeblendet. Der Prototyp arbeitet
+Der Viewer hat nun auch im Overlay-Modus eine normale Windows-Titelleiste.\nDie Position kann per Drag verändert werden und bleibt beim Zoomen erhalten.\nMit Strg+Alt+F9 wird der Viewer ausgeblendet. Der Prototyp arbeitet
 formatunabhängig mit sichtbaren Fenstern: VST2 funktioniert in ersten
 Nutzertests ebenfalls. Die DAW-interne Einbettung ist damit noch nicht
 implementiert. Ein Win32-Maus-Nachrichtenadapter setzt Viewer-Koordinaten
