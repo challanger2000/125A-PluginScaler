@@ -98,6 +98,19 @@ int wmain(int argc,wchar_t** argv) {
         cleanup();return 6;
     }
     gEffect->dispatcher(gEffect,kEffOpen,0,0,nullptr,0);
+    if (gEffect->numParams >= 0 && gEffect->numParams <= 256) {
+        for (int i=0; i<gEffect->numParams; ++i) {
+            char name[128]{};
+            // VST2 effGetParamName = 8. Plugin writes into local buffer
+            // on its own UI thread. VST2 names are conventionally <=8 chars.
+            gEffect->dispatcher(gEffect,8,i,0,name,0.f);
+            const float value = gEffect->getParameter ?
+                gEffect->getParameter(gEffect,i) : -1.f;
+            std::cout<<"VST2_PARAMETER_NAME: index="<<i
+                     <<" name="<<name<<" value="<<value<<"\\n";
+        }
+        std::cout<<std::flush;
+    }
     gEffect->dispatcher(gEffect,kEffSetSampleRate,0,0,nullptr,44100.f);
     gEffect->dispatcher(gEffect,kEffSetBlockSize,0,512,nullptr,0);
     ERect* rect=nullptr;
