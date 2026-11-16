@@ -82,7 +82,7 @@ int wmain(int argc,wchar_t** argv) {
     wc.hInstance=GetModuleHandleW(nullptr);
     wc.lpfnWndProc=window_proc;
     wc.lpszClassName=kClass;
-    wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
+    wc.hCursor=LoadCursorW(nullptr,MAKEINTRESOURCEW(32512));
     if(!RegisterClassW(&wc)){cleanup();return 7;}
     RECT outer{0,0,w,h};
     AdjustWindowRectEx(&outer,WS_OVERLAPPEDWINDOW,FALSE,0);
