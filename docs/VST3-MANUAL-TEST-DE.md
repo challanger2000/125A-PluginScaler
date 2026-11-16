@@ -19,20 +19,15 @@ Kein VST3 wird geladen oder verändert. Kein Installer, keine DLL-Injektion.
 10) "An Bildschirm anpassen (Auto-Fit)" ist aktiv: Wenn 150 % oder
     200 % die Bildschirmgrenzen sprengen würden, wird der tatsächliche
     Zoom automatisch reduziert. Die Titelleiste nennt beide Werte.
-11) "Kleines Original optisch abdecken (Test)" blendet nichts wirklich
-    aus. Es legt nur eine deckende Maske über die kleine Original-GUI
-    und nimmt sie aus dem vergrößerten Bild aus.
-    Falls das vergrößerte Bild schwarz wird oder die Maske sichtbar
-    bleibt, Häkchen bei "Kleines Original ..." sofort entfernen!
-12) Regler, Buttons und Mausrad im großen Bild testen.
-13) STRG+ALT+F9 blendet Viewer UND Abdeckung aus.
-    Das Original ist danach unverändert nutzbar.
+11) Regler, Buttons und Mausrad im großen Bild testen.
+12) STRG+ALT+F9 schließt den Viewer.
+    Das Original bleibt unverändert nutzbar.
 
 FÜR JEDES GETESTETE PLUGIN:
 - DAW-Version, Pluginformat (VST2/VST3), Plugin-Name und Version
 - Overlay oder separates Fenster? Lässt es sich an der Titelleiste frei ziehen?
 - Zoom-Prozent; Windows-Bildschirmskalierung
-- Bild sichtbar / schwarz / überlagert? Wird die Abdeckung mitgespiegelt?
+- Bild sichtbar / schwarz / überlagert?
 - Klick, Reglerziehen, Mausrad: ja/nein?
 - Plugin weiter bedienbar, wenn anderes Fenster davorliegt?
 - Windows- oder DAW-Absturz? (Falls ja, vollständige Fehlermeldung)
@@ -50,13 +45,16 @@ BEKANNTE EINSCHRÄNKUNGEN:
   deshalb nicht oder falsch. Tastatureingaben sind nicht umgesetzt.
 - Popup-Menüs können außerhalb der vergrößerten Fläche erscheinen.
 - Ohne Auto-Fit kann ein Fenster größer als der Monitor werden.
-- Eine Maskierung des Originalfensters funktioniert nicht auf jeder GPU-
-  oder Fensterkonfiguration. Sie kann jederzeit deaktiviert werden.
-- Das Originalfenster wird niemals versteckt, verschoben oder geschlossen.
+- Der vorherige Maskierungsversuch wurde nach einem realen Fehlerbericht
+  entfernt: Er spiegelte eine weiße Abdeckung statt der Plugin-Oberfläche.
+- Das Originalfenster bleibt sichtbar und wird nicht versteckt oder geschlossen.
+  Vollständig unsichtbares Original braucht eine andere Aufnahme-Architektur.
 - Ein auf der normalen Windows-Desktop-Sitzung laufender Scaler kann
   weder Administrator-Plugins noch fremde Desktops sicher bedienen.
-- Die CI prüft nur x64-Kompilierung und Koordinatenberechnung, NICHT
-  die praktische Bedienbarkeit mit Cubase oder fremden Plugins.
+- Die CI prüft x64-Kompilierung, Koordinatenberechnung und den
+  Regression-Guard gegen das versehentliche Wiedereinführen einer
+  Maskierung. Sie kann noch keine echte Windows-Desktop-Bildaufnahme
+  mit Pixelvergleich in Studio Pro nachweisen.
 
 Soll ein Plugin garantiert ohne Mausprobleme skalieren, braucht es
 eine aufwendigere Lösung. Dieser Test soll genau das früh klären.
