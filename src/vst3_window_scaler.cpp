@@ -80,10 +80,10 @@ void apply_scale() {
         MonitorFromPoint(g.draggedViewerTopLeft,MONITOR_DEFAULTTONEAREST) :
         MonitorFromWindow(g.source,MONITOR_DEFAULTTONEAREST);
     if(!GetMonitorInfoW(mon,&mi)) return;
-    const int maxW=(std::max)(1,mi.rcWork.right-mi.rcWork.left-
-                              (chrome.right-chrome.left)-16);
-    const int maxH=(std::max)(1,mi.rcWork.bottom-mi.rcWork.top-
-                              (chrome.bottom-chrome.top)-16);
+    const int maxW=(std::max)(1,static_cast<int>(mi.rcWork.right-mi.rcWork.left-
+                              (chrome.right-chrome.left)-16));
+    const int maxH=(std::max)(1,static_cast<int>(mi.rcWork.bottom-mi.rcWork.top-
+                              (chrome.bottom-chrome.top)-16));
     g.effectivePercent=g.autoFit ?
         scaler::fit_percent(g.percent,srcW,srcH,maxW,maxH) : g.percent;
     if(g.effectivePercent<=0) return;
@@ -120,8 +120,10 @@ void apply_scale() {
     }
     const int fullW=outer.right-outer.left,fullH=outer.bottom-outer.top;
     if(g.autoFit){
-        x=(std::max)(mi.rcWork.left,(std::min)(x,mi.rcWork.right-fullW));
-        y=(std::max)(mi.rcWork.top,(std::min)(y,mi.rcWork.bottom-fullH));
+        x=(std::max)(static_cast<int>(mi.rcWork.left),
+            (std::min)(x,static_cast<int>(mi.rcWork.right)-fullW));
+        y=(std::max)(static_cast<int>(mi.rcWork.top),
+            (std::min)(y,static_cast<int>(mi.rcWork.bottom)-fullH));
     }
     SetWindowPos(g.viewer,nullptr,x,y,fullW,fullH,SWP_NOZORDER|SWP_NOACTIVATE);
     MoveWindow(g.magnifier, 0, 0, width, height, TRUE);
