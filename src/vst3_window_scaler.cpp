@@ -216,7 +216,7 @@ void apply_scale() {
     MAGTRANSFORM transform{};
     transform.v[0][0]=transform.v[1][1]=g.effectivePercent/100.f;
     transform.v[2][2]=1.f;
-    if(!MagSetWindowTransform(g.magnifier,&transform)){
+    if(!g.printWindowMode && !MagSetWindowTransform(g.magnifier,&transform)){
         set_status(L"Vergrößerung nicht möglich.");
         return;
     }
@@ -382,15 +382,19 @@ void refresh() {
             viewerClient.bottom != scaler::scaled_pixels(
                 bounds.bottom - bounds.top, g.effectivePercent)) apply_scale();
     }
-    if (g.magnifier) MagSetWindowSource(g.magnifier, bounds);
+    if(g.printWindowMode) {
+        sync_print_cover();
+        if(IsWindow(g.magnifier))InvalidateRect(g.magnifier,nullptr,FALSE);
+    } else if (g.magnifier) MagSetWindowSource(g.magnifier, bounds);
 }
 
 LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
         g.viewer = hwnd;
-        g.magnifier = CreateWindowW(WC_MAGNIFIER, L"",
-                                    WS_CHILD | WS_VISIBLE,
+        g.magnifier = CreateWindowW(
+                                    g.printWindowMode?kPrintCanvasClass:WC_MAGNIFIER,
+                                    L"",WS_CHILD | WS_VISIBLE,
                                     0, 0, 1, 1, hwnd, nullptr, g.instance, nullptr);
         if (!g.magnifier) return -1;
         SetLastError(0);
@@ -398,8 +402,8 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                          reinterpret_cast<LONG_PTR>(magnifier_proc));
         if (!previous && GetLastError() != 0) return -1;
         g.originalMagnifierProc = reinterpret_cast<WNDPROC>(previous);
-        configure_capture_exclusions();
-        SetTimer(hwnd, kRefreshTimer, 33, nullptr);
+        if(!g.printWindowMode)configure_capture_exclusions();
+        SetTimer(hwnd, kRefreshTimer, g.printWindowMode?50:33, nullptr);
         return 0;
     }
     case WM_TIMER:
@@ -425,6 +429,8 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kRefreshTimer);
+        destroy_print_cover();
+        release_print_surface();
         g.viewer = nullptr;
         g.magnifier = nullptr;
         g.originalMagnifierProc = nullptr;
@@ -463,6 +469,7 @@ void create_viewer() {
     }
     apply_scale();
     refresh();
+    if(g.printWindowMode)sync_print_cover();
     SetWindowPos(g.viewer, HWND_TOP, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
@@ -540,10 +547,17 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             16,158,380,22,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(kFit)),
             g.instance,nullptr);
         SendMessageW(g.autoFitCheck,BM_SETCHECK,BST_CHECKED,0);
+        g.printCheck=CreateWindowW(L"BUTTON",
+            L"Original verdecken (PrintWindow, Test)",
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
+            16,183,440,22,hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPrintToggle)),
+            g.instance,nullptr);
+        SendMessageW(g.printCheck,BM_SETCHECK,BST_UNCHECKED,0);
         g.status = CreateWindowW(L"STATIC",
             L"Bereit. Auswahl per Strg+Alt+F8.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            16, 190, 445, 50, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
+            16, 215, 445, 55, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
             g.instance, nullptr);
         if (!RegisterHotKey(hwnd, kCloseHotkey,
                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F9)) {
@@ -560,6 +574,12 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == kCloseHotkey && IsWindow(g.viewer)) DestroyWindow(g.viewer);
         return 0;
     case WM_COMMAND:
+        if(LOWORD(wp)==kPrintToggle && HIWORD(wp)==BN_CLICKED) {
+            g.printWindowMode=
+                SendMessageW(g.printCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+            destroy_print_cover();
+            if(IsWindow(g.source))create_viewer();
+        }
         if(LOWORD(wp)==kFit && HIWORD(wp)==BN_CLICKED){
             g.autoFit=SendMessageW(g.autoFitCheck,BM_GETCHECK,0,0)==BST_CHECKED;
             apply_scale();
@@ -612,13 +632,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     viewer.lpfnWndProc = viewer_proc;
     viewer.lpszClassName = kViewerClass;
     viewer.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    if (!RegisterClassW(&control) || !RegisterClassW(&viewer)) {
+    WNDCLASSW canvas=control;
+    canvas.lpszClassName=kPrintCanvasClass;
+    canvas.lpfnWndProc=print_canvas_proc;
+    WNDCLASSW cover=control;
+    cover.lpszClassName=kPrintCoverClass;
+    cover.lpfnWndProc=print_cover_proc;
+    if (!RegisterClassW(&control) || !RegisterClassW(&viewer) ||
+        !RegisterClassW(&canvas) || !RegisterClassW(&cover)) {
         MagUninitialize();
         return 3;
     }
     HWND hwnd = CreateWindowExW(0, kControllerClass, L"125A PluginScaler — VST2/VST3 GUI-Prototyp",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 485, 295,
+        CW_USEDEFAULT, CW_USEDEFAULT, 485, 320,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         MagUninitialize();
