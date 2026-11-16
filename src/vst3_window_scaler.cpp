@@ -61,7 +61,7 @@ struct App {
 // Alternative GDI/PrintWindow backend: obtain pixels directly from the
 // editor HWND (not the composited desktop). This permits an ordinary opaque
 // cover over the small source without contaminating the large output.
-// The original HWND stays visible; do not call SW_HIDE on the plugin.
+// The original HWND stays visible; never hide the plugin window.
 void release_print_surface() {
     if(g.printDC && g.printOldBitmap)
         SelectObject(g.printDC,g.printOldBitmap);
