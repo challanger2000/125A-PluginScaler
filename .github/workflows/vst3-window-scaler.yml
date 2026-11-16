@@ -33,11 +33,37 @@ jobs:
           } else {
             Write-Host "VISUAL_PASS: capture compared against source-window pixels"
           }
+      - name: Genuine VST2 DLL GUI + Scaler visual integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dll = (Resolve-Path "build/Release/PluginScalerVST2Fixture.dll").Path
+          $hostExe = (Resolve-Path "build/Release/PluginScalerVST2Host.exe").Path
+          $smokeExe = (Resolve-Path "build/Release/PluginScalerRealVST3Smoke.exe").Path
+          $out = Join-Path (Get-Location) "vst2-host-stdout.txt"
+          $err = Join-Path (Get-Location) "vst2-host-stderr.txt"
+          $proc = Start-Process -FilePath $hostExe -ArgumentList @(('"' + $dll + '"')) -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+          try {
+            & $smokeExe --vst2
+            $code = $LASTEXITCODE
+            if ($code -eq 77) {
+              Write-Warning "VST2_VISUAL_INCONCLUSIVE: desktop unavailable; cannot claim real image PASS"
+            } elseif ($code -ne 0) {
+              throw "VST2_VISUAL_FAIL: scaled pixels differ or GUI could not open, exit=$code"
+            } else {
+              Write-Host "VST2_VISUAL_PASS: actual native VST2 DLL editor was magnified"
+            }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $out) { Get-Content $out }
+            if (Test-Path $err) { Get-Content $err }
+          }
       - name: Package for manual Windows VST3 testing
         shell: pwsh
         run: |
           New-Item -Type Directory -Force -Path package | Out-Null
           Copy-Item build/Release/PluginScalerVST3Window.exe package/
+          Copy-Item build/Release/PluginScalerVST2Host.exe package/
           Copy-Item docs/VST3-MANUAL-TEST-DE.md package/START-HERE.txt
       - name: Upload test package
         uses: actions/upload-artifact@v4
