@@ -12,8 +12,13 @@ Das Testpaket aus GitHub Actions herunterladen, ZIP entpacken, EXE
 starten und die beiliegende `START-HERE.txt` befolgen.
 
 Der Viewer benutzt die Windows Magnification API. Das Originalfenster
-bleibt geöffnet; die Kopie kann zwischen 125 und 200 % vergrößert
-werden. Ein Win32-Maus-Nachrichtenadapter setzt Viewer-Koordinaten
+bleibt geöffnet. Standardmäßig liegt ein rahmenloses, vergrößertes Overlay
+darüber; alternativ lässt sich wieder ein separates Viewer-Fenster wählen.
+Die Kopie kann zwischen 125 und 200 % vergrößert werden.
+Mit Strg+Alt+F9 wird der Viewer ausgeblendet. Der Prototyp arbeitet
+formatunabhängig mit sichtbaren Fenstern: VST2 funktioniert in ersten
+Nutzertests ebenfalls. Die DAW-interne Einbettung ist damit noch nicht
+implementiert. Ein Win32-Maus-Nachrichtenadapter setzt Viewer-Koordinaten
 auf Quellkoordinaten um. Dieser Adapter ist **nicht universell**.
 
 ## Entwicklung
