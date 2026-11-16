@@ -58,6 +58,27 @@ jobs:
             if (Test-Path $out) { Get-Content $out }
             if (Test-Path $err) { Get-Content $err }
           }
+      - name: Genuine VST2 OS mouse-to-parameter positive-control
+        shell: pwsh
+        run: |
+          $dll = (Resolve-Path "build/Release/PluginScalerVST2Fixture.dll").Path
+          $hostExe = (Resolve-Path "build/Release/PluginScalerVST2Host.exe").Path
+          $smokeExe = (Resolve-Path "build/Release/PluginScalerRealVST3Smoke.exe").Path
+          $out = Join-Path (Get-Location) "vst2-mouse-host-out.txt"
+          $err = Join-Path (Get-Location) "vst2-mouse-host-err.txt"
+          $proc = Start-Process -FilePath $hostExe -ArgumentList @(('"' + $dll + '"')) -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+          try {
+            & $smokeExe --vst2-input
+            $code = $LASTEXITCODE
+            if ($code -ne 0) {
+              throw "VST2 mouse input QA failed or inconclusive: exit=$code"
+            }
+            Write-Host "VST2_INTERACTION_PASS: real OS mouse through scaled viewer changes fixture VST2 parameter"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $out) { Get-Content $out }
+            if (Test-Path $err) { Get-Content $err }
+          }
       - name: Package for manual Windows VST3 testing
         shell: pwsh
         run: |
