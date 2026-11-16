@@ -38,7 +38,7 @@ COLORREF desktop(int x,int y){
     ReleaseDC(nullptr,dc);
     return c;
 }
-bool near(COLORREF a,COLORREF b,int tolerance=48){
+bool pixel_near(COLORREF a,COLORREF b,int tolerance=48){
     if(a==CLR_INVALID || b==CLR_INVALID)return false;
     return std::abs(int(GetRValue(a))-int(GetRValue(b)))<=tolerance &&
            std::abs(int(GetGValue(a))-int(GetGValue(b)))<=tolerance &&
@@ -111,7 +111,7 @@ int run(HWND source) {
         const bool ok=cap.read(source,flags);
         int matching=0;
         for(const auto& point:base)
-            if(near(cap.at(point.x,point.y),point.color))++matching;
+            if(pixel_near(cap.at(point.x,point.y),point.color))++matching;
         std::cout<<"PRINTWINDOW_PHASE: "<<label
                  <<" api_return="<<(ok?1:0)
                  <<" matched="<<matching
@@ -139,7 +139,7 @@ int run(HWND source) {
     SetWindowPos(mask,HWND_TOPMOST,r.left,r.top,w,h,
         SWP_SHOWWINDOW|SWP_NOACTIVATE);
     for(int n=0;n<8;++n){pump();Sleep(40);}
-    const bool visiblyCovered=near(desktop(r.left+w/2,r.top+h/2),kCoverColor,12);
+    const bool visiblyCovered=pixel_near(desktop(r.left+w/2,r.top+h/2),kCoverColor,12);
     const int occluded=compare("occluded",2);
     DestroyWindow(mask);
     // Now hide the top-level plugin host. If the child's content can
