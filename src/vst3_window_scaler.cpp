@@ -13,8 +13,10 @@ namespace {
 constexpr wchar_t kControllerClass[] = L"125A.VST3Scaler.Controller";
 constexpr wchar_t kViewerClass[] = L"125A.VST3Scaler.Viewer";
 constexpr int kHotkey = 1;
+constexpr int kCloseHotkey = 2;
 constexpr int kCombo = 101;
 constexpr int kStatus = 102;
+constexpr int kOverlay = 103;
 constexpr UINT_PTR kRefreshTimer = 10;
 
 struct App {
@@ -22,6 +24,7 @@ struct App {
     HWND controller{};
     HWND status{};
     HWND combo{};
+    HWND overlayCheck{};
     HWND viewer{};
     HWND magnifier{};
     HWND source{};
@@ -31,6 +34,7 @@ struct App {
     DWORD sourcePid{};
     DWORD sourceThread{};
     int percent{150};
+    bool overlay{true};
     bool leftDown{};
     bool rightDown{};
 } g;
@@ -66,8 +70,24 @@ void apply_scale() {
     const DWORD exstyle = static_cast<DWORD>(GetWindowLongPtrW(g.viewer, GWL_EXSTYLE));
     const UINT dpi = GetDpiForWindow(g.viewer);
     if (!AdjustWindowRectExForDpi(&outer, style, FALSE, exstyle, dpi)) return;
-    SetWindowPos(g.viewer, nullptr, 0, 0, outer.right - outer.left,
-                 outer.bottom - outer.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    // Align the actual viewer CLIENT region with the source client rectangle.
+    // In overlay mode the unscaled editor remains visible to Magnification,
+    // while the enlarged presentation covers it from the user's perspective.
+    int x = g.sourceRect.left + outer.left;
+    int y = g.sourceRect.top + outer.top;
+    if (!g.overlay) {
+        MONITORINFO monitor{};
+        monitor.cbSize = sizeof(monitor);
+        if (GetMonitorInfoW(MonitorFromWindow(g.source, MONITOR_DEFAULTTONEAREST), &monitor)) {
+            x = g.sourceRect.right + 12;
+            if (x + outer.right - outer.left > monitor.rcWork.right)
+                x = monitor.rcWork.left + 24;
+            y = std::max(monitor.rcWork.top,
+                         std::min(g.sourceRect.top, monitor.rcWork.bottom - 140));
+        }
+    }
+    SetWindowPos(g.viewer, nullptr, x, y, outer.right - outer.left,
+                 outer.bottom - outer.top, SWP_NOZORDER | SWP_NOACTIVATE);
     MoveWindow(g.magnifier, 0, 0, width, height, TRUE);
     SetWindowTextW(g.viewer, (L"125A PluginScaler — " + std::to_wstring(g.percent) +
                              L"% (experimentell)").c_str());
@@ -171,10 +191,23 @@ void refresh() {
     if (IsIconic(GetAncestor(g.source, GA_ROOT))) return;
     RECT bounds{};
     if (!source_bounds(g.source, bounds)) return;
-    const bool resized = (bounds.right - bounds.left != g.sourceRect.right - g.sourceRect.left) ||
-                         (bounds.bottom - bounds.top != g.sourceRect.bottom - g.sourceRect.top);
+    const bool movedOrResized = (bounds.left != g.sourceRect.left) ||
+        (bounds.top != g.sourceRect.top) ||
+        (bounds.right != g.sourceRect.right) ||
+        (bounds.bottom != g.sourceRect.bottom);
     g.sourceRect = bounds;
-    if (resized) apply_scale();
+    if (movedOrResized && g.overlay) apply_scale();
+    if (movedOrResized && !g.overlay &&
+        (bounds.right - bounds.left != 0)) {
+        // Recalculate when the separate source changes size, but don't chase
+        // mere source-window movement in separate-viewer mode.
+        RECT viewerClient{};
+        GetClientRect(g.magnifier, &viewerClient);
+        if (viewerClient.right != scaler::scaled_pixels(
+                bounds.right - bounds.left, g.percent) ||
+            viewerClient.bottom != scaler::scaled_pixels(
+                bounds.bottom - bounds.top, g.percent)) apply_scale();
+    }
     if (g.magnifier) MagSetWindowSource(g.magnifier, bounds);
 }
 
@@ -224,6 +257,28 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 }
 
+// Recreate only the presentation window on a mode switch; never recreate
+// or modify the foreign plugin HWND.
+void create_viewer() {
+    if (!IsWindow(g.source)) return;
+    if (IsWindow(g.viewer)) DestroyWindow(g.viewer);
+    const DWORD exstyle = g.overlay ? WS_EX_TOOLWINDOW : WS_EX_APPWINDOW;
+    const DWORD style = (g.overlay ? WS_POPUP :
+                          WS_OVERLAPPEDWINDOW) | WS_CLIPCHILDREN | WS_VISIBLE;
+    g.viewer = CreateWindowExW(exstyle, kViewerClass,
+        L"125A PluginScaler (experimentell)", style,
+        CW_USEDEFAULT, CW_USEDEFAULT, 500, 400,
+        nullptr, nullptr, g.instance, nullptr);
+    if (!g.viewer) {
+        set_status(L"Viewer konnte nicht geöffnet werden.");
+        return;
+    }
+    apply_scale();
+    refresh();
+    SetWindowPos(g.viewer, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 void select_source() {
     POINT cursor{};
     if (!GetCursorPos(&cursor)) return;
@@ -252,28 +307,8 @@ void select_source() {
         g.source = candidate;
         g.sourceThread = GetWindowThreadProcessId(candidate, &g.sourcePid);
         g.sourceRect = bounds;
-        if (IsWindow(g.viewer)) DestroyWindow(g.viewer);
-        const int outputW = scaler::scaled_pixels(width, g.percent);
-        const int outputH = scaler::scaled_pixels(height, g.percent);
-        MONITORINFO monitor{};
-        monitor.cbSize = sizeof(monitor);
-        GetMonitorInfoW(MonitorFromWindow(candidate, MONITOR_DEFAULTTONEAREST), &monitor);
-        int x = bounds.right + 12;
-        if (x + outputW + 60 > monitor.rcWork.right) x = monitor.rcWork.left + 24;
-        int y = std::max(monitor.rcWork.top, std::min(bounds.top, monitor.rcWork.bottom - 140));
-        g.viewer = CreateWindowExW(WS_EX_APPWINDOW, kViewerClass,
-            L"125A PluginScaler (experimentell)",
-            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE,
-            x, y, outputW + 40, outputH + 65,
-            nullptr, nullptr, g.instance, nullptr);
-        if (!g.viewer) {
-            set_status(L"Viewer konnte nicht geöffnet werden.");
-            return;
-        }
-        apply_scale();
-        refresh();
-        SetWindowPos(g.viewer, HWND_TOP, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        create_viewer();
+        if (!IsWindow(g.viewer)) return;
         wchar_t cls[128]{};
         GetClassNameW(candidate, cls, 128);
         set_status(L"Quelle: " + std::wstring(cls) + L" (" +
@@ -289,7 +324,7 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE: {
         g.controller = hwnd;
         CreateWindowW(L"STATIC",
-            L"1. VST3-Plugin in der DAW öffnen.\n"
+            L"1. VST2-/VST3-Plugin in der DAW öffnen.\n"
             L"2. Maus über die eigentliche Plugin-Oberfläche bewegen.\n"
             L"3. Strg + Alt + F8 drücken.",
             WS_CHILD | WS_VISIBLE, 16, 16, 440, 67,
@@ -306,11 +341,21 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         for (auto label : labels)
             SendMessageW(g.combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
         SendMessageW(g.combo, CB_SETCURSEL, 1, 0);
+        g.overlayCheck = CreateWindowW(L"BUTTON", L"Über Original anzeigen (Overlay)",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            16, 133, 320, 22, hwnd,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOverlay)),
+            g.instance, nullptr);
+        SendMessageW(g.overlayCheck, BM_SETCHECK, BST_CHECKED, 0);
         g.status = CreateWindowW(L"STATIC",
             L"Bereit. Auswahl per Strg+Alt+F8.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            16, 138, 445, 42, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
+            16, 165, 445, 42, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
             g.instance, nullptr);
+        if (!RegisterHotKey(hwnd, kCloseHotkey,
+                            MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F9)) {
+            set_status(L"Strg+Alt+F9 ist belegt; Viewer über Fenster schließen.");
+        }
         if (!RegisterHotKey(hwnd, kHotkey,
                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F8)) {
             set_status(L"Strg+Alt+F8 ist belegt; anderen Hotkey freigeben.");
@@ -319,8 +364,16 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_HOTKEY:
         if (wp == kHotkey) select_source();
+        else if (wp == kCloseHotkey && IsWindow(g.viewer)) DestroyWindow(g.viewer);
         return 0;
     case WM_COMMAND:
+        if (LOWORD(wp) == kOverlay && HIWORD(wp) == BN_CLICKED) {
+            const bool wantOverlay = SendMessageW(g.overlayCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            if (wantOverlay != g.overlay) {
+                g.overlay = wantOverlay;
+                if (IsWindow(g.source) && IsWindow(g.viewer)) create_viewer();
+            }
+        }
         if (LOWORD(wp) == kCombo && HIWORD(wp) == CBN_SELCHANGE) {
             const LRESULT selected = SendMessageW(g.combo, CB_GETCURSEL, 0, 0);
             constexpr std::array<int, 4> values{125, 150, 175, 200};
@@ -333,6 +386,7 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         UnregisterHotKey(hwnd, kHotkey);
+        UnregisterHotKey(hwnd, kCloseHotkey);
         if (IsWindow(g.viewer)) DestroyWindow(g.viewer);
         PostQuitMessage(0);
         return 0;
@@ -365,9 +419,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         MagUninitialize();
         return 3;
     }
-    HWND hwnd = CreateWindowExW(0, kControllerClass, L"125A PluginScaler — VST3 GUI-Prototyp",
+    HWND hwnd = CreateWindowExW(0, kControllerClass, L"125A PluginScaler — VST2/VST3 GUI-Prototyp",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 485, 225,
+        CW_USEDEFAULT, CW_USEDEFAULT, 485, 250,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         MagUninitialize();
