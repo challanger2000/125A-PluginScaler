@@ -12,12 +12,15 @@
 namespace {
 constexpr wchar_t kControllerClass[] = L"125A.VST3Scaler.Controller";
 constexpr wchar_t kViewerClass[] = L"125A.VST3Scaler.Viewer";
+constexpr wchar_t kPrintCanvasClass[] = L"125A.VST3Scaler.PrintCanvas";
+constexpr wchar_t kPrintCoverClass[] = L"125A.VST3Scaler.PrintCover";
 constexpr int kHotkey = 1;
 constexpr int kCloseHotkey = 2;
 constexpr int kCombo = 101;
 constexpr int kStatus = 102;
 constexpr int kOverlay = 103;
 constexpr int kFit = 105;
+constexpr int kPrintToggle = 106;
 constexpr UINT_PTR kRefreshTimer = 10;
 
 struct App {
@@ -38,6 +41,15 @@ struct App {
     int effectivePercent{150};
     bool autoFit{true};
     HWND autoFitCheck{};
+    HWND printCheck{};
+    bool printWindowMode{};
+    HWND cover{};
+    HDC printDC{};
+    HBITMAP printBitmap{};
+    HGDIOBJ printOldBitmap{};
+    int printW{};
+    int printH{};
+    int printFailureCount{};
     bool overlay{true};
     // Preserve manually dragged window location across zoom/source changes.
     bool manualViewerPosition{};
@@ -45,6 +57,125 @@ struct App {
     bool leftDown{};
     bool rightDown{};
 } g;
+
+// Alternative GDI/PrintWindow backend: obtain pixels directly from the
+// editor HWND (not the composited desktop). This permits an ordinary opaque
+// cover over the small source without contaminating the large output.
+// The original HWND stays visible; do not call SW_HIDE on the plugin.
+void release_print_surface() {
+    if(g.printDC && g.printOldBitmap)
+        SelectObject(g.printDC,g.printOldBitmap);
+    if(g.printBitmap)DeleteObject(g.printBitmap);
+    if(g.printDC)DeleteDC(g.printDC);
+    g.printDC=nullptr;
+    g.printBitmap=nullptr;
+    g.printOldBitmap=nullptr;
+    g.printW=g.printH=0;
+}
+bool ensure_print_surface() {
+    const int w=g.sourceRect.right-g.sourceRect.left;
+    const int h=g.sourceRect.bottom-g.sourceRect.top;
+    if(w<1||h<1||w>4096||h>4096)return false;
+    if(g.printDC && g.printW==w && g.printH==h)return true;
+    release_print_surface();
+    HDC screen=GetDC(nullptr);
+    if(!screen)return false;
+    g.printDC=CreateCompatibleDC(screen);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth=w;
+    info.bmiHeader.biHeight=-h;
+    info.bmiHeader.biPlanes=1;
+    info.bmiHeader.biBitCount=32;
+    info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;
+    if(g.printDC) g.printBitmap=CreateDIBSection(screen,&info,DIB_RGB_COLORS,
+                                             &pixels,nullptr,0);
+    if(g.printBitmap)
+        g.printOldBitmap=SelectObject(g.printDC,g.printBitmap);
+    ReleaseDC(nullptr,screen);
+    if(!g.printDC||!g.printBitmap||!pixels){
+        release_print_surface();
+        return false;
+    }
+    g.printW=w;
+    g.printH=h;
+    return true;
+}
+void destroy_print_cover() {
+    if(IsWindow(g.cover)) DestroyWindow(g.cover);
+    g.cover=nullptr;
+}
+LRESULT CALLBACK print_cover_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if(msg==WM_PAINT){
+        PAINTSTRUCT ps{};
+        HDC dc=BeginPaint(hwnd,&ps);
+        RECT r{};GetClientRect(hwnd,&r);
+        HBRUSH shade=CreateSolidBrush(RGB(36,38,42));
+        FillRect(dc,&r,shade);
+        DeleteObject(shade);
+        SetBkMode(dc,TRANSPARENT);
+        SetTextColor(dc,RGB(188,193,203));
+        DrawTextW(dc,L"125A PluginScaler\nOriginalansicht verdeckt",
+                  -1,&r,DT_CENTER|DT_VCENTER|DT_WORDBREAK);
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
+void sync_print_cover() {
+    if(!g.printWindowMode || !IsWindow(g.viewer) || !IsWindow(g.source)){
+        destroy_print_cover();
+        return;
+    }
+    const RECT b=g.sourceRect;
+    const int w=b.right-b.left,h=b.bottom-b.top;
+    if(w<=0||h<=0)return;
+    if(!IsWindow(g.cover)){
+        g.cover=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE|
+             WS_EX_TRANSPARENT,kPrintCoverClass,L"125A Originalabdeckung",
+             WS_POPUP,b.left,b.top,w,h,
+             nullptr,nullptr,g.instance,nullptr);
+        if(!IsWindow(g.cover))return;
+    }
+    RECT current{};
+    GetWindowRect(g.cover,&current);
+    if(!IsWindowVisible(g.cover)||
+       current.left!=b.left || current.top!=b.top ||
+       current.right!=b.right || current.bottom!=b.bottom) {
+        SetWindowPos(g.cover,HWND_TOP,b.left,b.top,w,h,
+                     SWP_SHOWWINDOW|SWP_NOACTIVATE);
+        SetWindowPos(g.viewer,HWND_TOP,0,0,0,0,
+                     SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE);
+    }
+}
+LRESULT CALLBACK print_canvas_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if(msg==WM_PAINT){
+        PAINTSTRUCT ps{};
+        HDC dc=BeginPaint(hwnd,&ps);
+        RECT dest{};GetClientRect(hwnd,&dest);
+        const int w=dest.right-dest.left,h=dest.bottom-dest.top;
+        bool drew=false;
+        if(g.printWindowMode && IsWindow(g.source) &&
+           ensure_print_surface() &&
+           PrintWindow(g.source,g.printDC,PW_RENDERFULLCONTENT)) {
+            SetStretchBltMode(dc,HALFTONE);
+            SetBrushOrgEx(dc,0,0,nullptr);
+            drew=StretchBlt(dc,0,0,w,h,g.printDC,0,0,
+                            g.printW,g.printH,SRCCOPY)!=FALSE;
+        }
+        if(!drew){
+            FillRect(dc,&dest,reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1));
+            if(++g.printFailureCount>=8 && IsWindow(g.controller)) {
+                SetWindowTextW(g.status,
+                    L"PrintWindow liefert kein Bild. Modus deaktivieren.");
+            }
+        } else g.printFailureCount=0;
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
 
 void set_status(const std::wstring& message) {
     if (g.status) SetWindowTextW(g.status, message.c_str());
