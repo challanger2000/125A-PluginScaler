@@ -21,6 +21,18 @@ jobs:
       - name: Regression guard — original must remain visible
         shell: pwsh
         run: python tests/source_visibility_guard.py
+      - name: Real Windows magnification pixel smoke (mock editor)
+        shell: pwsh
+        run: |
+          & build/Release/PluginScalerCaptureSmoke.exe
+          $code = $LASTEXITCODE
+          if ($code -eq 77) {
+            Write-Warning "VISUAL_INCONCLUSIVE: hosted Windows runner has no readable interactive desktop. No visual PASS claimed."
+          } elseif ($code -ne 0) {
+            throw "VISUAL_FAIL: capture smoke exited $code"
+          } else {
+            Write-Host "VISUAL_PASS: capture compared against source-window pixels"
+          }
       - name: Package for manual Windows VST3 testing
         shell: pwsh
         run: |
