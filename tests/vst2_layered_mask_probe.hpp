@@ -57,31 +57,10 @@ int run(HWND source) {
     if(!GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),
                        &monitor))return 12;
     const RECT screen=monitor.rcMonitor;
-    // The GitHub desktop is small. Make the real source and enlarged
-    // viewer non-overlapping before reading reference pixels; otherwise
-    // viewer could obscure the source and yield a false mask result.
-    RECT window{};
-    if(!GetWindowRect(g.viewer,&window))return 18;
-    const int viewerW=window.right-window.left;
-    const int viewerH=window.bottom-window.top;
-    int viewerX=window.left,viewerY=window.top;
-    if(bounds.bottom+16+viewerH <= monitor.rcWork.bottom) {
-        viewerY=bounds.bottom+16;
-        viewerX=monitor.rcWork.left+8;
-    } else if(bounds.left-viewerW-16 >= monitor.rcWork.left) {
-        viewerX=bounds.left-viewerW-16;
-        viewerY=monitor.rcWork.top+8;
-    } else if(bounds.right+viewerW+16 <= monitor.rcWork.right) {
-        viewerX=bounds.right+16;
-        viewerY=monitor.rcWork.top+8;
-    } else {
-        std::cout<<"MASK_INCONCLUSIVE: source and enlarged viewer "
-                    "cannot both be shown without overlap\n";
-        return 77;
-    }
-    SetWindowPos(g.viewer,HWND_TOPMOST,viewerX,viewerY,0,0,
-        SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
-    for(int n=0;n<10;++n){pump();Sleep(50);}
+    // Capture original while the viewer is temporarily hidden. The
+    // Windows GitHub runner is too small to show both side by side.
+    ShowWindow(g.viewer,SW_HIDE);
+    for(int n=0;n<12;++n){pump();Sleep(50);}
     std::vector<Probe> before;
     for(int row=1;row<11;++row)for(int col=1;col<15;++col) {
         const int x=width*col/15;
@@ -124,12 +103,16 @@ int run(HWND source) {
     // shield so its output can be sampled. Shield does not touch source HWND.
     SetWindowPos(shield,HWND_TOPMOST,bounds.left,bounds.top,width,height,
         SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    for(int n=0;n<10;++n){pump();Sleep(50);}
+    POINT maskPoint{bounds.left+width/2,bounds.top+height/2};
+    const bool visiblyMasked=similar(read(maskPoint),kColor,12);
+    // Only now display the viewer again: this tests the same display
+    // occlusion pattern as the ordinary overlay, without sampling our own
+    // viewer when building original-reference pixels.
     SetWindowPos(g.viewer,HWND_TOPMOST,0,0,0,0,
         SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
     int matched=0,valid=0;
     for(int n=0;n<20;++n){pump();Sleep(60);}
-    POINT maskPoint{bounds.left+width/2,bounds.top+height/2};
-    const bool visiblyMasked=similar(read(maskPoint),kColor,12);
     for(const Probe& x:before){
         const COLORREF c=read(x.dest);
         if(c==CLR_INVALID)continue;
