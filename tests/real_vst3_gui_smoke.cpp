@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <string>
 #include <iostream>
 #include <set>
 #include <vector>
@@ -41,32 +42,36 @@ bool within(POINT p, const RECT& r) {
 }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const bool vst2 = argc == 2 && std::string(argv[1]) == "--vst2";
+    const wchar_t* hostClass = vst2 ?
+        L"125A_PluginScaler_VST2_EditorHost" :
+        L"125A_Test_Lab_P04_EditorHost";
     g.instance=GetModuleHandleW(nullptr);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if(!MagInitialize()) {
-        std::cout<<"REAL_VST3_INCONCLUSIVE: Magnification API unavailable\n";
+        std::cout<<"REAL_PLUGIN_INCONCLUSIVE: Magnification API unavailable\n";
         return 77;
     }
     // The *actual* Windows HWND created by 125A Plugin Test Lab.
     HWND host=nullptr;
     for(int n=0;n<200;++n) {
-        host=FindWindowW(L"125A_Test_Lab_P04_EditorHost",nullptr);
+        host=FindWindowW(hostClass,nullptr);
         if(IsWindow(host)&&IsWindowVisible(host)&&GetWindow(host,GW_CHILD))break;
         Sleep(50);
     }
     if(!IsWindow(host)||!GetWindow(host,GW_CHILD)) {
-        std::cerr<<"REAL_VST3_FAIL: 125A Test Lab did not expose its real VST3 editor\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: 125A Test Lab did not expose its real plugin editor\n";
         MagUninitialize();return 2;
     }
     HWND editor=GetWindow(host,GW_CHILD);
     if(!IsWindowVisible(editor)) {
-        std::cerr<<"REAL_VST3_FAIL: real VST3 child HWND is not visible\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: real VST3 child HWND is not visible\n";
         MagUninitialize();return 3;
     }
     RECT editorBounds{};
     if(!source_bounds(editor,editorBounds)) {
-        std::cerr<<"REAL_VST3_FAIL: real VST3 editor has no usable bounds\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: real VST3 editor has no usable bounds\n";
         MagUninitialize();return 4;
     }
     MONITORINFO mi{};mi.cbSize=sizeof(mi);
@@ -75,7 +80,7 @@ int main() {
     }
     RECT display{};
     if(!IntersectRect(&display,&editorBounds,&mi.rcMonitor)) {
-        std::cout<<"REAL_VST3_INCONCLUSIVE: plugin editor is entirely off screen\n";
+        std::cout<<"REAL_PLUGIN_INCONCLUSIVE: plugin editor is entirely off screen\n";
         MagUninitialize();return 77;
     }
     const int width=editorBounds.right-editorBounds.left;
@@ -96,7 +101,7 @@ int main() {
         }
     }
     if(samples.size()<24 || distinct.size()<6) {
-        std::cout<<"REAL_VST3_INCONCLUSIVE: real editor pixels are not readable/diverse "
+        std::cout<<"REAL_PLUGIN_INCONCLUSIVE: real editor pixels are not readable/diverse "
                  <<"samples="<<samples.size()<<" distinct="<<distinct.size()<<"\n";
         MagUninitialize();return 77;
     }
@@ -107,7 +112,7 @@ int main() {
     wc.lpszClassName=kViewerClass;
     wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);
     if(!RegisterClassW(&wc)) {
-        std::cerr<<"REAL_VST3_FAIL: scaler viewer class registration\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: scaler viewer class registration\n";
         MagUninitialize();return 6;
     }
     g.source=editor;
@@ -118,7 +123,7 @@ int main() {
     g.overlay=false;
     create_viewer();
     if(!IsWindow(g.viewer)||!IsWindow(g.magnifier)) {
-        std::cerr<<"REAL_VST3_FAIL: actual scaler viewer creation\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: actual scaler viewer creation\n";
         MagUninitialize();return 7;
     }
     // Allow Direct2D/VSTGUI + Magnification refresh to settle.
@@ -126,7 +131,7 @@ int main() {
     int matched=0,valid=0;
     const int zoom=g.effectivePercent;
     if (zoom <= 100) {
-        std::cout << "REAL_VST3_INCONCLUSIVE: product was reduced to "
+        std::cout << "REAL_PLUGIN_INCONCLUSIVE: product was reduced to "
                   << zoom << "% by Auto-Fit, not enlarged; smaller GUI or "
                      "larger desktop required\n";
         if(IsWindow(g.viewer))DestroyWindow(g.viewer);
@@ -145,20 +150,20 @@ int main() {
         if(similar(c,s.color))++matched;
     }
     const double agreement=valid?double(matched)/valid:0.0;
-    std::cout<<"REAL_VST3_CAPTURE: source="<<width<<"x"<<height
+    std::cout<<"REAL_PLUGIN_CAPTURE: source="<<width<<"x"<<height
              <<" requested=150 actual="<<zoom
              <<" samples="<<samples.size()<<" valid="<<valid
              <<" matched="<<matched<<" agreement="<<agreement<<"\n";
     if(IsWindow(g.viewer))DestroyWindow(g.viewer);
     MagUninitialize();
     if(valid<24) {
-        std::cout<<"REAL_VST3_INCONCLUSIVE: insufficient visible magnified pixels\n";
+        std::cout<<"REAL_PLUGIN_INCONCLUSIVE: insufficient visible magnified pixels\n";
         return 77;
     }
     if(agreement<0.65) {
-        std::cerr<<"REAL_VST3_FAIL: real editor diverged from its magnified pixels\n";
+        std::cerr<<"REAL_PLUGIN_FAIL: real editor diverged from its magnified pixels\n";
         return 8;
     }
-    std::cout<<"REAL_VST3_PASS: actual 125A VST3 editor and enlarged pixels agree\n";
+    std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
     return 0;
 }
