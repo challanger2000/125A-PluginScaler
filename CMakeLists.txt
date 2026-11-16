@@ -22,6 +22,6 @@ set_property(TARGET PluginScalerGeometryTests PROPERTY
 add_test(NAME geometry_mapping COMMAND PluginScalerGeometryTests)
 
 if(MSVC)
-  target_compile_options(PluginScalerVST3Window PRIVATE /W4 /WX /permissive-)
+  target_compile_options(PluginScalerVST3Window PRIVATE /W4 /WX /permissive- /utf-8)
   target_compile_options(PluginScalerGeometryTests PRIVATE /W4 /WX /permissive-)
 endif()

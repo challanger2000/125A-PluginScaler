@@ -1,9 +1,5 @@
 // 125A PluginScaler: intentionally small, external Windows GUI experiment.
 // Does not load VST2/VST3 modules, touch audio or inject code into the host.
-#define UNICODE
-#define _UNICODE
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <windows.h>
 #include <windowsx.h>
 #include <magnification.h>
@@ -302,7 +298,7 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                       16, 100, 120, 20, hwnd, nullptr, g.instance, nullptr);
         g.combo = CreateWindowW(L"COMBOBOX", L"",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST,
-            142, 95, 110, 120, hwnd, reinterpret_cast<HMENU>(kCombo),
+            142, 95, 110, 120, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCombo)),
             g.instance, nullptr);
         const std::array<const wchar_t*, 4> labels{
             L"125 %", L"150 %", L"175 %", L"200 %"
@@ -313,7 +309,7 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g.status = CreateWindowW(L"STATIC",
             L"Bereit. Auswahl per Strg+Alt+F8.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            16, 138, 445, 42, hwnd, reinterpret_cast<HMENU>(kStatus),
+            16, 138, 445, 42, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
             g.instance, nullptr);
         if (!RegisterHotKey(hwnd, kHotkey,
                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F8)) {
