@@ -15,6 +15,7 @@
 #include <fstream>
 #include "../src/vst3_window_scaler.cpp"
 #include "vst2_input_probe.hpp"
+#include "vst2_layered_mask_probe.hpp"
 
 namespace {
 struct PixelProbe { int x{},y{}; COLORREF color{}; };
@@ -90,9 +91,10 @@ bool within(POINT p, const RECT& r) {
 }
 
 int main(int argc, char** argv) {
+    const bool maskTest = argc == 2 && std::string(argv[1]) == "--vst2-mask";
     const bool targeted = argc == 2 && std::string(argv[1]) == "--vst2-controls";
     const bool interaction = targeted || (argc == 2 && std::string(argv[1]) == "--vst2-input");
-    const bool vst2 = interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
+    const bool vst2 = maskTest || interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
     const wchar_t* hostClass = vst2 ?
         L"125A_PluginScaler_VST2_EditorHost" :
         L"125A_Test_Lab_P04_EditorHost";
@@ -220,7 +222,9 @@ int main(int argc, char** argv) {
         return 8;
     }
     std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
-    const int code = targeted ?
+    const int code = maskTest ?
+        scaler_mask_experiment::run(editor) :
+        targeted ?
         scaler_vst2_interaction::run_targeted(host,width,height) :
         interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
     if(IsWindow(g.viewer))DestroyWindow(g.viewer);
