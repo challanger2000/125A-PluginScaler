@@ -12,12 +12,14 @@
 namespace {
 constexpr wchar_t kControllerClass[] = L"125A.VST3Scaler.Controller";
 constexpr wchar_t kViewerClass[] = L"125A.VST3Scaler.Viewer";
+constexpr wchar_t kShieldClass[] = L"125A.VST3Scaler.SourceShield";
 constexpr int kHotkey = 1;
 constexpr int kCloseHotkey = 2;
 constexpr int kCombo = 101;
 constexpr int kStatus = 102;
 constexpr int kOverlay = 103;
 constexpr int kFit = 105;
+constexpr int kShield = 104;
 constexpr UINT_PTR kRefreshTimer = 10;
 
 struct App {
@@ -26,6 +28,8 @@ struct App {
     HWND status{};
     HWND combo{};
     HWND overlayCheck{};
+    HWND shieldCheck{};
+    HWND shield{};
     HWND viewer{};
     HWND magnifier{};
     HWND source{};
@@ -39,6 +43,7 @@ struct App {
     bool autoFit{true};
     HWND autoFitCheck{};
     bool overlay{true};
+    bool maskOriginal{true};
     // Preserve manually dragged window location across zoom/source changes.
     bool manualViewerPosition{};
     POINT draggedViewerTopLeft{};
@@ -212,12 +217,79 @@ LRESULT CALLBACK magnifier_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return CallWindowProcW(g.originalMagnifierProc, hwnd, msg, wp, lp);
 }
 
+// The plugin HWND is never hidden or moved. This independent window
+// only visually masks its old bounds while the Magnification API is
+// instructed to exclude that mask from capture.
+LRESULT CALLBACK shield_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_PAINT) {
+        PAINTSTRUCT ps{};
+        HDC dc = BeginPaint(hwnd,&ps);
+        RECT rect{}; GetClientRect(hwnd,&rect);
+        FillRect(dc,&rect,reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1));
+        SetBkMode(dc,TRANSPARENT);
+        SetTextColor(dc,RGB(50,50,50));
+        DrawTextW(dc,L"125A PluginScaler\\nOriginal optisch abgedeckt\\nStrg+Alt+F9: Ansicht schließen",
+                  -1,&rect,DT_CENTER|DT_VCENTER|DT_WORDBREAK);
+        EndPaint(hwnd,&ps);
+        return 0;
+    }
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
+
+bool update_exclusions() {
+    if(!IsWindow(g.magnifier))return false;
+    HWND excluded[3]{g.viewer,g.controller,g.shield};
+    return MagSetWindowFilterList(g.magnifier,MW_FILTERMODE_EXCLUDE,
+                                 g.shield ? 3 : 2,excluded)!=FALSE;
+}
+
+void remove_shield() {
+    if(IsWindow(g.shield))DestroyWindow(g.shield);
+    g.shield=nullptr;
+    if(IsWindow(g.magnifier))update_exclusions();
+}
+
+void sync_shield() {
+    if(!g.overlay || !g.maskOriginal || !IsWindow(g.viewer) ||
+       !IsWindow(g.source) || IsIconic(GetAncestor(g.source,GA_ROOT))) {
+        if(g.shield)remove_shield();
+        return;
+    }
+    if(!IsWindow(g.shield)){
+        g.shield=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
+            kShieldClass,L"125A Original-Maske",WS_POPUP,
+            g.sourceRect.left,g.sourceRect.top,
+            g.sourceRect.right-g.sourceRect.left,
+            g.sourceRect.bottom-g.sourceRect.top,
+            nullptr,nullptr,g.instance,nullptr);
+        if(!g.shield || !update_exclusions()){
+            remove_shield();
+            g.maskOriginal=false;
+            if(g.shieldCheck)SendMessageW(g.shieldCheck,BM_SETCHECK,BST_UNCHECKED,0);
+            set_status(L"Maske nicht verfügbar. Original bleibt sichtbar.");
+            return;
+        }
+    }
+    RECT actual{};GetWindowRect(g.shield,&actual);
+    if(!IsWindowVisible(g.shield) || actual.left!=g.sourceRect.left ||
+       actual.top!=g.sourceRect.top || actual.right!=g.sourceRect.right ||
+       actual.bottom!=g.sourceRect.bottom){
+        SetWindowPos(g.shield,HWND_TOP,g.sourceRect.left,g.sourceRect.top,
+            g.sourceRect.right-g.sourceRect.left,
+            g.sourceRect.bottom-g.sourceRect.top,
+            SWP_NOACTIVATE|SWP_SHOWWINDOW);
+        SetWindowPos(g.viewer,HWND_TOP,0,0,0,0,
+            SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    }
+}
+
 void refresh() {
     DWORD pid{};
     const DWORD thread = IsWindow(g.source) ? GetWindowThreadProcessId(g.source, &pid) : 0;
     if (!thread || pid != g.sourcePid || thread != g.sourceThread) {
         set_status(L"Pluginfenster geschlossen. Neues Fenster mit Strg+Alt+F8 wählen.");
         if (IsWindow(g.viewer)) DestroyWindow(g.viewer);
+        remove_shield();
         g.source = nullptr;
         return;
     }
@@ -242,6 +314,7 @@ void refresh() {
                 bounds.bottom - bounds.top, g.effectivePercent)) apply_scale();
     }
     if (g.magnifier) MagSetWindowSource(g.magnifier, bounds);
+    sync_shield();
 }
 
 LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -257,8 +330,7 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                          reinterpret_cast<LONG_PTR>(magnifier_proc));
         if (!previous && GetLastError() != 0) return -1;
         g.originalMagnifierProc = reinterpret_cast<WNDPROC>(previous);
-        HWND excludes[]{hwnd, g.controller};
-        MagSetWindowFilterList(g.magnifier, MW_FILTERMODE_EXCLUDE, 2, excludes);
+        update_exclusions();
         SetTimer(hwnd, kRefreshTimer, 33, nullptr);
         return 0;
     }
@@ -285,6 +357,7 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         KillTimer(hwnd, kRefreshTimer);
+        remove_shield();
         g.viewer = nullptr;
         g.magnifier = nullptr;
         g.originalMagnifierProc = nullptr;
@@ -400,10 +473,15 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             16,158,380,22,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(kFit)),
             g.instance,nullptr);
         SendMessageW(g.autoFitCheck,BM_SETCHECK,BST_CHECKED,0);
+        g.shieldCheck=CreateWindowW(L"BUTTON",L"Kleines Original optisch abdecken (Test)",
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
+            16,183,425,22,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(kShield)),
+            g.instance,nullptr);
+        SendMessageW(g.shieldCheck,BM_SETCHECK,BST_CHECKED,0);
         g.status = CreateWindowW(L"STATIC",
             L"Bereit. Auswahl per Strg+Alt+F8.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            16, 190, 445, 50, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
+            16, 215, 445, 50, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
             g.instance, nullptr);
         if (!RegisterHotKey(hwnd, kCloseHotkey,
                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F9)) {
@@ -420,6 +498,10 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == kCloseHotkey && IsWindow(g.viewer)) DestroyWindow(g.viewer);
         return 0;
     case WM_COMMAND:
+        if(LOWORD(wp)==kShield && HIWORD(wp)==BN_CLICKED){
+            g.maskOriginal=SendMessageW(g.shieldCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+            sync_shield();
+        }
         if(LOWORD(wp)==kFit && HIWORD(wp)==BN_CLICKED){
             g.autoFit=SendMessageW(g.autoFitCheck,BM_GETCHECK,0,0)==BST_CHECKED;
             apply_scale();
@@ -472,13 +554,17 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     viewer.lpfnWndProc = viewer_proc;
     viewer.lpszClassName = kViewerClass;
     viewer.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    if (!RegisterClassW(&control) || !RegisterClassW(&viewer)) {
+    WNDCLASSW shield=control;
+    shield.lpfnWndProc=shield_proc;
+    shield.lpszClassName=kShieldClass;
+    if(!RegisterClassW(&control) || !RegisterClassW(&viewer) ||
+       !RegisterClassW(&shield)) {
         MagUninitialize();
         return 3;
     }
     HWND hwnd = CreateWindowExW(0, kControllerClass, L"125A PluginScaler — VST2/VST3 GUI-Prototyp",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 485, 295,
+        CW_USEDEFAULT, CW_USEDEFAULT, 485, 320,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         MagUninitialize();
