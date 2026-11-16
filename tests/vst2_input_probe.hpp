@@ -135,4 +135,158 @@ inline int run(HWND host,int sourceW,int sourceH) {
                 "changed plugin VST2 parameter values\n";
     return 0;
 }
+
+constexpr UINT kParamWrite = WM_APP + 0x126;
+struct ControlPoint {
+    const char* name;
+    int x;
+    int y;
+    bool toggle;
+};
+
+// Centres read from the actual original DD Reverb (2).dll GUI screenshot
+// produced by private Windows CI (472x240). No synthetic GUI coordinates.
+constexpr ControlPoint kDDReverbControls[]={
+    {"Room Size",55,63,false},
+    {"Damping",143,63,false},
+    {"Density",231,63,false},
+    {"Width",320,63,false},
+    {"Mix",408,63,false},
+    {"Predelay",143,168,false},
+    {"Low Cut",231,168,false},
+    {"High Cut",320,168,false},
+    {"Sync",35,188,true},
+    {"Dead Duck",396,151,true},
+    {"Bypass",440,207,true}
+};
+inline bool write_parameter(HWND host,int index,int normalized) {
+    DWORD_PTR result{};
+    return SendMessageTimeoutW(host,kParamWrite,static_cast<WPARAM>(index),
+        static_cast<LPARAM>(normalized),SMTO_ABORTIFHUNG | SMTO_BLOCK,1500,
+        &result) && result==1;
+}
+inline bool restore_all(HWND host,const std::vector<int>& initial) {
+    for(size_t index=0;index<initial.size();++index)
+        if(!write_parameter(host,static_cast<int>(index),initial[index]))
+            return false;
+    return true;
+}
+inline int run_targeted(HWND host,int sourceW,int sourceH) {
+    if(sourceW!=472 || sourceH!=240) {
+        std::cerr<<"DD_TARGETED_INCONCLUSIVE: unexpected GUI dimensions "
+                 <<sourceW<<"x"<<sourceH<<"\n";
+        return 77;
+    }
+    int count{};
+    if(!get_parameter(host,-1,count) || count<=0 || count>256) {
+        std::cerr<<"DD_TARGETED_FAIL: cannot read parameter count\n";
+        return 21;
+    }
+    const auto originals=snapshot(host,count);
+    if(originals.size()!=static_cast<size_t>(count)) {
+        std::cerr<<"DD_TARGETED_FAIL: cannot save original parameter state\n";
+        return 22;
+    }
+    int totalGestures=0;
+    std::vector<bool> hit(static_cast<size_t>(count),false);
+    SetWindowPos(g.viewer,HWND_TOPMOST,0,0,0,0,
+                 SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
+    SetForegroundWindow(g.viewer);
+    RECT bounds{};GetWindowRect(g.magnifier,&bounds);
+    for(const auto& control:kDDReverbControls) {
+        std::vector<int> changed;
+        // Controls are explicitly identified by the true GUI screenshot,
+        // not a blind grid. For knobs, both directions are tested, including
+        // parameter values that start at 0 or 1.
+        const int modes=control.toggle ? 1 : 3;
+        for(int mode=0;mode<modes;++mode) {
+            if(!restore_all(host,originals)) {
+                std::cerr<<"DD_TARGETED_FAIL: could not restore baseline\n";
+                return 23;
+            }
+            pump_input();Sleep(35);
+            const auto before=snapshot(host,count);
+            if(before.size()!=static_cast<size_t>(count))return 24;
+            POINT start{};
+            if(!viewer_point(control.x,control.y,start))return 25;
+            if(!SetCursorPos(start.x,start.y))return 26;
+            pump_input();Sleep(40);
+            button(true);
+            if(mode>0) {
+                const int shift=(mode==1) ? -80 : +80;
+                const int finalY=(std::max)(bounds.top+6,
+                    (std::min)(bounds.bottom-6,start.y+shift));
+                for(int step=1;step<=12;++step) {
+                    if(!SetCursorPos(start.x,
+                        start.y+(finalY-start.y)*step/12))return 27;
+                    pump_input();
+                    Sleep(15);
+                }
+            }
+            button(false);
+            pump_input();Sleep(125);
+            ++totalGestures;
+            const auto after=snapshot(host,count);
+            if(after.size()!=static_cast<size_t>(count))return 28;
+            for(int i=0;i<count;++i) {
+                if(std::abs(after[static_cast<size_t>(i)]-
+                    before[static_cast<size_t>(i)])>1000) {
+                    hit[static_cast<size_t>(i)]=true;
+                    if(std::find(changed.begin(),changed.end(),i)==changed.end())
+                        changed.push_back(i);
+                    std::cout<<"DD_TARGETED_CHANGE: control="<<control.name
+                             <<" gesture="<<mode
+                             <<" parameter="<<i
+                             <<" before="<<before[static_cast<size_t>(i)]
+                             <<" after="<<after[static_cast<size_t>(i)]<<"\n";
+                }
+            }
+        }
+        std::cout<<"DD_TARGETED_CONTROL: name="<<control.name
+                 <<" changed_parameters=";
+        if(changed.empty())std::cout<<"none";
+        for(size_t i=0;i<changed.size();++i) {
+            if(i)std::cout<<",";
+            std::cout<<changed[i];
+        }
+        std::cout<<"\n";
+    }
+    if(!restore_all(host,originals)) {
+        std::cerr<<"DD_TARGETED_FAIL: final baseline restore failed\n";
+        return 29;
+    }
+    pump_input();Sleep(100);
+    const auto restored=snapshot(host,count);
+    if(restored.size()!=static_cast<size_t>(count))return 30;
+    int restoreFailures=0,covered=0;
+    for(int i=0;i<count;++i) {
+        if(hit[static_cast<size_t>(i)])++covered;
+        if(std::abs(restored[static_cast<size_t>(i)]-
+            originals[static_cast<size_t>(i)])>1000)++restoreFailures;
+        std::cout<<"DD_TARGETED_PARAMETER: index="<<i
+                 <<" covered="<<(hit[static_cast<size_t>(i)]?1:0)
+                 <<" initial="<<originals[static_cast<size_t>(i)]
+                 <<" final="<<restored[static_cast<size_t>(i)]<<"\n";
+    }
+    std::cout<<"DD_TARGETED_RESULT: controls="
+             <<(sizeof(kDDReverbControls)/sizeof(kDDReverbControls[0]))
+             <<" gestures="<<totalGestures<<" verified_parameters="<<covered
+             <<" total_parameters="<<count
+             <<" restoration_failures="<<restoreFailures<<"\n";
+    if(restoreFailures) return 31;
+    if(covered==count) {
+        std::cout<<"DD_TARGETED_PASS: ALL exposed VST2 parameters respond "
+                    "to original DD Reverb GUI controls at fitted 150% zoom\n";
+        return 0;
+    }
+    if(covered==0) {
+        std::cerr<<"DD_TARGETED_FAIL: no target responded to scaled mouse actions\n";
+        return 32;
+    }
+    // Partial interaction coverage is not a GUI malfunction by itself:
+    // not every VST2 parameter must be reachable from the editor.
+    std::cout<<"DD_TARGETED_PARTIAL: uncovered indices must be investigated; "
+                "do not claim all controls verified\n";
+    return 78;
+}
 }  // namespace scaler_vst2_interaction
