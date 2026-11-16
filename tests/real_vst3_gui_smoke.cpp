@@ -15,9 +15,6 @@
 
 namespace {
 struct PixelProbe { int x{},y{}; COLORREF color{}; };
-LRESULT CALLBACK host_dummy(HWND h,UINT m,WPARAM w,LPARAM l) {
-    return DefWindowProcW(h,m,w,l);
-}
 void pump() {
     MSG msg{};
     while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {
