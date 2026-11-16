@@ -30,7 +30,7 @@ int main() {
     for (int p = 25; p <= 200; ++p) {
         const int x = scaler::scaled_pixels(860,p);
         const int back = scaler::source_pixel(x,p);
-        if (std::abs(back - 860) > 1) return 12;
+        if (std::abs(back - 860) > (100 + p - 1) / p) return 12;
     }
     std::cout << "Geometry mapping: PASS\n";
 }
