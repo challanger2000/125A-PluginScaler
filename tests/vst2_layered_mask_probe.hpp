@@ -57,6 +57,31 @@ int run(HWND source) {
     if(!GetMonitorInfoW(MonitorFromWindow(source,MONITOR_DEFAULTTONEAREST),
                        &monitor))return 12;
     const RECT screen=monitor.rcMonitor;
+    // The GitHub desktop is small. Make the real source and enlarged
+    // viewer non-overlapping before reading reference pixels; otherwise
+    // viewer could obscure the source and yield a false mask result.
+    RECT window{};
+    if(!GetWindowRect(g.viewer,&window))return 18;
+    const int viewerW=window.right-window.left;
+    const int viewerH=window.bottom-window.top;
+    int viewerX=window.left,viewerY=window.top;
+    if(bounds.bottom+16+viewerH <= monitor.rcWork.bottom) {
+        viewerY=bounds.bottom+16;
+        viewerX=monitor.rcWork.left+8;
+    } else if(bounds.left-viewerW-16 >= monitor.rcWork.left) {
+        viewerX=bounds.left-viewerW-16;
+        viewerY=monitor.rcWork.top+8;
+    } else if(bounds.right+viewerW+16 <= monitor.rcWork.right) {
+        viewerX=bounds.right+16;
+        viewerY=monitor.rcWork.top+8;
+    } else {
+        std::cout<<"MASK_INCONCLUSIVE: source and enlarged viewer "
+                    "cannot both be shown without overlap\n";
+        return 77;
+    }
+    SetWindowPos(g.viewer,HWND_TOPMOST,viewerX,viewerY,0,0,
+        SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    for(int n=0;n<10;++n){pump();Sleep(50);}
     std::vector<Probe> before;
     for(int row=1;row<11;++row)for(int col=1;col<15;++col) {
         const int x=width*col/15;
