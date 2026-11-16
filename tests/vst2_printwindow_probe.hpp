@@ -149,6 +149,41 @@ int run(HWND source) {
     ShowWindow(root,SW_HIDE);
     for(int n=0;n<8;++n){pump();Sleep(40);}
     const int hidden=compare("host-hidden",2);
+    // A still image alone is insufficient: mutate a genuine VST2
+    // knob while the parent editor remains SW_HIDE'd.
+    DWORD_PTR beforeParameter{};
+    const bool readOk=SendMessageTimeoutW(root,WM_APP+0x125,5,0,
+         SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&beforeParameter)!=FALSE;
+    const int previous=static_cast<int>(beforeParameter);
+    const int changedTo=previous>700000?250000:850000;
+    std::vector<COLORREF> knobBefore;
+    for(int y=25;y<105;++y)for(int x=15;x<100;++x)
+        knobBefore.push_back(cap.at(x,y));
+    DWORD_PTR written{};
+    const bool writeOk=readOk &&
+        SendMessageTimeoutW(root,WM_APP+0x126,5,
+            static_cast<LPARAM>(changedTo),
+            SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&written)!=FALSE;
+    for(int n=0;n<8;++n){pump();Sleep(60);}
+    const bool repainted=cap.read(source,2);
+    int changedPixels=0;
+    size_t offset=0;
+    for(int y=25;y<105;++y)for(int x=15;x<100;++x) {
+        if(!pixel_near(cap.at(x,y),knobBefore[offset],3))++changedPixels;
+        ++offset;
+    }
+    DWORD_PTR restoredResult{};
+    const bool restoreOk=writeOk &&
+        SendMessageTimeoutW(root,WM_APP+0x126,5,
+            static_cast<LPARAM>(previous),
+            SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&restoredResult)!=FALSE;
+    std::cout<<"PRINTWINDOW_HIDDEN_DYNAMIC: read="<<(readOk?1:0)
+             <<" write="<<(writeOk?1:0)
+             <<" captured="<<(repainted?1:0)
+             <<" changed_pixels="<<changedPixels
+             <<" restore="<<(restoreOk?1:0)
+             <<" value_before="<<previous
+             <<" value_during="<<changedTo<<"\n";
     if(rootVisible)ShowWindow(root,SW_SHOWNA);
     ShowWindow(g.viewer,SW_SHOWNA);
     pump();
@@ -162,8 +197,14 @@ int run(HWND source) {
         return 77;
     }
     if(hidden/total>=0.90) {
-        std::cout<<"PRINTWINDOW_HIDDEN_PASS: original VST2 editor can be rendered "
-                    "after its host is hidden (static image only)\n";
+        if(!readOk || !writeOk || !repainted || !restoreOk ||
+           changedPixels<20) {
+            std::cout<<"PRINTWINDOW_HIDDEN_STATIC_ONLY: no reliable dynamic "
+                        "repaint proven after hidden knob parameter update\n";
+            return 21;
+        }
+        std::cout<<"PRINTWINDOW_HIDDEN_LIVE_PASS: original hidden editor "
+                    "repaints dynamically through PrintWindow\n";
         return 0;
     }
     if(occluded/total>=0.90) {
