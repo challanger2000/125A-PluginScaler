@@ -35,6 +35,9 @@ struct App {
     DWORD sourceThread{};
     int percent{150};
     bool overlay{true};
+    // Preserve manually dragged window location across zoom/source changes.
+    bool manualViewerPosition{};
+    POINT draggedViewerTopLeft{};
     bool leftDown{};
     bool rightDown{};
 } g;
@@ -85,6 +88,10 @@ void apply_scale() {
             y = std::max(monitor.rcWork.top,
                          std::min(g.sourceRect.top, monitor.rcWork.bottom - 140));
         }
+    }
+    if (g.manualViewerPosition) {
+        x = g.draggedViewerTopLeft.x;
+        y = g.draggedViewerTopLeft.y;
     }
     SetWindowPos(g.viewer, nullptr, x, y, outer.right - outer.left,
                  outer.bottom - outer.top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -232,9 +239,19 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == kRefreshTimer) refresh();
         return 0;
+    case WM_EXITSIZEMOVE: {
+        // Triggered after the user drags the native Windows title bar. Do not
+        // snap the viewer back on a later zoom or source-window movement.
+        RECT moved{};
+        if (GetWindowRect(hwnd, &moved)) {
+            g.draggedViewerTopLeft = {moved.left, moved.top};
+            g.manualViewerPosition = true;
+        }
+        return 0;
+    }
     case WM_SIZE:
-        // A manually resized frame may clip; the image keeps its chosen zoom.
-        // Deliberately do not introduce a second, undocumented stretch factor.
+        // The viewer uses a fixed-size client area: zoom is controlled by the
+        // percentage selector, not freeform stretching of a magnified bitmap.
         return 0;
     case WM_CAPTURECHANGED:
         g.leftDown = g.rightDown = false;
@@ -262,9 +279,14 @@ LRESULT CALLBACK viewer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void create_viewer() {
     if (!IsWindow(g.source)) return;
     if (IsWindow(g.viewer)) DestroyWindow(g.viewer);
-    const DWORD exstyle = g.overlay ? WS_EX_TOOLWINDOW : WS_EX_APPWINDOW;
-    const DWORD style = (g.overlay ? WS_POPUP :
-                          WS_OVERLAPPEDWINDOW) | WS_CLIPCHILDREN | WS_VISIBLE;
+    // Never use a borderless WS_POPUP for the overlay: it had no draggable
+    // caption, making the enlarged GUI impractical to reposition.
+    // Both modes get a native full-height title bar, close and minimize.
+    // No thickframe: resizing this bitmap-backed surface would clip content.
+    g.manualViewerPosition = false;
+    constexpr DWORD exstyle = WS_EX_APPWINDOW;
+    constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
+                            WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_VISIBLE;
     g.viewer = CreateWindowExW(exstyle, kViewerClass,
         L"125A PluginScaler (experimentell)", style,
         CW_USEDEFAULT, CW_USEDEFAULT, 500, 400,
