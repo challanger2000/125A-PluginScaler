@@ -141,6 +141,41 @@ int run(HWND source) {
     for(int n=0;n<8;++n){pump();Sleep(40);}
     const bool visiblyCovered=pixel_near(desktop(r.left+w/2,r.top+h/2),kCoverColor,12);
     const int occluded=compare("occluded",2);
+    HWND rootCovered=GetAncestor(source,GA_ROOT);
+    DWORD_PTR originalParam{};
+    const bool coveredRead=SendMessageTimeoutW(rootCovered,WM_APP+0x125,5,0,
+        SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&originalParam)!=FALSE;
+    const int coveredOriginal=static_cast<int>(originalParam);
+    const int coveredTarget=coveredOriginal>700000?250000:850000;
+    std::vector<COLORREF> coveredKnobBefore;
+    for(int y=25;y<105;++y)for(int x=15;x<100;++x)
+        coveredKnobBefore.push_back(cap.at(x,y));
+    DWORD_PTR dummy{};
+    const bool coveredWrite=coveredRead &&
+        SendMessageTimeoutW(rootCovered,WM_APP+0x126,5,
+            static_cast<LPARAM>(coveredTarget),
+            SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&dummy)!=FALSE;
+    for(int n=0;n<10;++n){pump();Sleep(50);}
+    const bool coveredPaint=cap.read(source,2);
+    int coveredChanged=0;
+    size_t coveredOffset=0;
+    for(int y=25;y<105;++y)for(int x=15;x<100;++x){
+        if(!pixel_near(cap.at(x,y),coveredKnobBefore[coveredOffset],3))
+            ++coveredChanged;
+        ++coveredOffset;
+    }
+    DWORD_PTR coveredRestoreValue{};
+    const bool coveredRestored=coveredWrite &&
+        SendMessageTimeoutW(rootCovered,WM_APP+0x126,5,
+            static_cast<LPARAM>(coveredOriginal),
+            SMTO_ABORTIFHUNG|SMTO_BLOCK,1500,&coveredRestoreValue)!=FALSE;
+    for(int n=0;n<4;++n){pump();Sleep(50);}
+    (void)cap.read(source,2);
+    std::cout<<"PRINTWINDOW_OCCLUDED_DYNAMIC: read="<<(coveredRead?1:0)
+             <<" write="<<(coveredWrite?1:0)
+             <<" captured="<<(coveredPaint?1:0)
+             <<" changed_pixels="<<coveredChanged
+             <<" restore="<<(coveredRestored?1:0)<<"\n";
     DestroyWindow(mask);
     // Now hide the top-level plugin host. If the child's content can
     // still be captured, this is a real window-hidden backend candidate.
@@ -208,8 +243,15 @@ int run(HWND source) {
         return 0;
     }
     if(occluded/total>=0.90) {
-        std::cout<<"PRINTWINDOW_OCCLUDED_ONLY: capture survives masking but not SW_HIDE\n";
-        return 19;
+        if(coveredRead && coveredWrite && coveredPaint &&
+           coveredRestored && coveredChanged>=20) {
+            std::cout<<"PRINTWINDOW_OCCLUDED_LIVE_PASS: visually masked "
+                        "editor repaints after real parameter change\n";
+            return 19;
+        }
+        std::cout<<"PRINTWINDOW_OCCLUDED_STATIC_ONLY: source capture stays "
+                    "frozen after knob parameter change\n";
+        return 22;
     }
     std::cout<<"PRINTWINDOW_NO_GO: original editor cannot be captured while "
                 "visually obscured or hidden\n";
