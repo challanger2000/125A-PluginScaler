@@ -46,3 +46,97 @@ jobs:
           path: package/*
           if-no-files-found: error
           retention-days: 14
+
+  real-125a-vst3-graphics:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Scaler (under test)
+        uses: actions/checkout@v4
+      - name: Checkout original 125A MixEngine (READ-ONLY)
+        uses: actions/checkout@v4
+        with:
+          repository: challanger2000/125A-MixEngine-Final
+          ref: 1d319b59f54ef737df9b44efe805917aafcb8ec3
+          path: mixengine
+      - name: Checkout original 125A Test Lab (READ-ONLY)
+        uses: actions/checkout@v4
+        with:
+          repository: challanger2000/125A-Plugin-Test-Lab
+          ref: 7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c
+          path: testlab
+      - name: Checkout pinned VST3 SDK for MixEngine
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          ref: 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
+          path: vst3sdk
+          submodules: recursive
+      - name: Build original 125A MixEngine Channel VST3
+        shell: pwsh
+        run: |
+          cmake -S mixengine -B mix-build -G "Visual Studio 17 2022" -A x64 -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE/vst3sdk" -DSMTG_CREATE_PLUGIN_LINK=0
+          if ($LASTEXITCODE -ne 0) { throw "MixEngine configuration failed" }
+          cmake --build mix-build --config Release --target 125A-MixEngine-Channel --parallel
+          if ($LASTEXITCODE -ne 0) { throw "125A real product VST3 build failed" }
+      - name: Prepare isolated Test Lab hold-open mode (no product changes)
+        shell: pwsh
+        run: |
+          python tests/patch_testlab_gui_hold.py testlab/src/gui_host.cpp
+          if ($LASTEXITCODE -ne 0) { throw "Test Lab source anchor changed" }
+      - name: Build actual 125A Test Lab native VST3 GUI host
+        shell: pwsh
+        run: |
+          cmake -S testlab -B lab-build -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) { throw "Test Lab configuration failed" }
+          cmake --build lab-build --config Release --target TestLabGUI --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Test Lab GUI host build failed" }
+      - name: Build actual 125A Scaler visual verifier
+        shell: pwsh
+        run: |
+          cmake -S . -B scaler-build -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) { throw "Scaler configure failed" }
+          cmake --build scaler-build --config Release --target PluginScalerRealVST3Smoke --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Scaler visual test build failed" }
+      - name: Open real 125A VST3 and compare magnified pixels
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $plugin = Get-ChildItem "mix-build" -Recurse -Directory -Filter "125A-MixEngine-Channel.vst3" | Select-Object -First 1
+          $hostExe = Get-ChildItem "lab-build" -Recurse -File -Filter "125A_Test_Lab_GUI.exe" | Select-Object -First 1
+          $smokeExe = Get-ChildItem "scaler-build" -Recurse -File -Filter "PluginScalerRealVST3Smoke.exe" | Select-Object -First 1
+          if (-not $plugin -or -not $hostExe -or -not $smokeExe) { throw "Missing real product, real Test Lab GUI host or Scaler visual test" }
+          Write-Host "REAL_125A_PLUGIN=$($plugin.FullName)"
+          (Get-FileHash (Get-ChildItem $plugin.FullName -Recurse -File -Filter "*.vst3" | Select-Object -First 1).FullName -Algorithm SHA256) | Format-List
+          $env:125A_SCALER_HOLD_MS = "25000"
+          $stdout = Join-Path (Get-Location) "real-125a-host-stdout.txt"
+          $stderr = Join-Path (Get-Location) "real-125a-host-stderr.txt"
+          $bmp = Join-Path (Get-Location) "real-125a-host.bmp"
+          $args = @("--snapshot-editor", ('"' + $plugin.FullName + '"'), ('"' + $bmp + '"'))
+          $proc = Start-Process -FilePath $hostExe.FullName -ArgumentList $args -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          try {
+            & $smokeExe.FullName
+            $code = $LASTEXITCODE
+            if ($code -eq 77) {
+              Write-Warning "REAL_125A_VST3_INCONCLUSIVE: no supported desktop capture. Never count this as visual PASS."
+            } elseif ($code -ne 0) {
+              throw "REAL_125A_VST3_FAIL: magnifier image check exited $code"
+            } else {
+              Write-Host "REAL_125A_VST3_PASS: actual MixEngine Channel visual scaling observed"
+            }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+          }
+      - name: Upload real-product test host evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 125A-Scaler-Real-MixEngine-VST3-Evidence
+          path: |
+            real-125a-host-stdout.txt
+            real-125a-host-stderr.txt
+            real-125a-host.bmp
+          if-no-files-found: warn
+          retention-days: 7
