@@ -1,4 +1,4 @@
-125A PluginScaler — einfacher VST3-GUI-Test (Windows 11 x64)
+125A PluginScaler — VST2/VST3-Fenster-Test (Windows 11 x64)
 
 WICHTIG: EXPERIMENT. Kein fertiger, universeller Plugin-Scaler.
 Kein VST3 wird geladen oder verändert. Kein Installer, keine DLL-Injektion.
@@ -14,15 +14,25 @@ Kein VST3 wird geladen oder verändert. Kein Installer, keine DLL-Injektion.
    ohne das Plugin oder die DAW zu verändern.
 8) Falls die Overlay-Darstellung schwarz oder fehlerhaft ist, Häkchen
    entfernen: ein separates vergrößertes Fenster wird angezeigt.
-9) Das vergrößerte Fenster an der normalen Windows-Titelleiste frei verschieben.\n   Die Position bleibt nach einem Zoom-Wechsel erhalten.\n10) Regler, Buttons, Ziehen und Mausrad im vergrößerten Bild testen.
-11) STRG+ALT+F9 blendet den Viewer aus. Die Original-GUI bleibt
-    normal zugänglich. Bei Problemen Scaler schließen.
+9) Das vergrößerte Fenster an der Windows-Titelleiste frei verschieben.
+   Die Position bleibt nach einem Zoom-Wechsel erhalten.
+10) "An Bildschirm anpassen (Auto-Fit)" ist aktiv: Wenn 150 % oder
+    200 % die Bildschirmgrenzen sprengen würden, wird der tatsächliche
+    Zoom automatisch reduziert. Die Titelleiste nennt beide Werte.
+11) "Kleines Original optisch abdecken (Test)" blendet nichts wirklich
+    aus. Es legt nur eine deckende Maske über die kleine Original-GUI
+    und nimmt sie aus dem vergrößerten Bild aus.
+    Falls das vergrößerte Bild schwarz wird oder die Maske sichtbar
+    bleibt, Häkchen bei "Kleines Original ..." sofort entfernen!
+12) Regler, Buttons und Mausrad im großen Bild testen.
+13) STRG+ALT+F9 blendet Viewer UND Abdeckung aus.
+    Das Original ist danach unverändert nutzbar.
 
 FÜR JEDES GETESTETE PLUGIN:
 - DAW-Version, Pluginformat (VST2/VST3), Plugin-Name und Version
 - Overlay oder separates Fenster? Lässt es sich an der Titelleiste frei ziehen?
 - Zoom-Prozent; Windows-Bildschirmskalierung
-- Bild sichtbar / schwarz / überlagert?
+- Bild sichtbar / schwarz / überlagert? Wird die Abdeckung mitgespiegelt?
 - Klick, Reglerziehen, Mausrad: ja/nein?
 - Plugin weiter bedienbar, wenn anderes Fenster davorliegt?
 - Windows- oder DAW-Absturz? (Falls ja, vollständige Fehlermeldung)
@@ -39,7 +49,10 @@ BEKANNTE EINSCHRÄNKUNGEN:
   verlangen echtes Cursor-Tracking, Raw Input oder Fokus und reagieren
   deshalb nicht oder falsch. Tastatureingaben sind nicht umgesetzt.
 - Popup-Menüs können außerhalb der vergrößerten Fläche erscheinen.
-- Hohe Vergrößerung kann ein Fenster größer als den Monitor machen.
+- Ohne Auto-Fit kann ein Fenster größer als der Monitor werden.
+- Eine Maskierung des Originalfensters funktioniert nicht auf jeder GPU-
+  oder Fensterkonfiguration. Sie kann jederzeit deaktiviert werden.
+- Das Originalfenster wird niemals versteckt, verschoben oder geschlossen.
 - Ein auf der normalen Windows-Desktop-Sitzung laufender Scaler kann
   weder Administrator-Plugins noch fremde Desktops sicher bedienen.
 - Die CI prüft nur x64-Kompilierung und Koordinatenberechnung, NICHT
