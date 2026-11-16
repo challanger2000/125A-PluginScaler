@@ -18,5 +18,19 @@ int main() {
     if (scaler::scaled_pixels(762, 150) != 1143) return 4;
     if (scaler::scaled_pixels(358, 200) != 716) return 5;
     if (scaler::source_pixel(-15, 150) != -10) return 6;
+    // Zoom must be reduced, preserving aspect ratio, when the full window
+    // would exceed the monitor work area.
+    const int fit = scaler::fit_percent(150, 860, 611, 1600, 780);
+    if (fit < 100 || fit >= 150) return 7;
+    if (scaler::scaled_pixels(860, fit) > 1600 ||
+        scaler::scaled_pixels(611, fit) > 780) return 8;
+    if (scaler::fit_percent(200, 300, 300, 1600, 780) != 200) return 9;
+    if (scaler::fit_percent(125, 800, 600, 400, 300) > 50) return 10;
+    if (scaler::fit_percent(150, 0, 300, 700, 700) != 0) return 11;
+    for (int p = 25; p <= 200; ++p) {
+        const int x = scaler::scaled_pixels(860,p);
+        const int back = scaler::source_pixel(x,p);
+        if (std::abs(back - 860) > 1) return 12;
+    }
     std::cout << "Geometry mapping: PASS\n";
 }
