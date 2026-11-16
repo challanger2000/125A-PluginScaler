@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <algorithm>
 #include <cwchar>
+#include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include "scaler/vst2_abi.hpp"
@@ -13,6 +15,11 @@
 using namespace scaler::vst2;
 namespace {
 constexpr wchar_t kClass[] = L"125A_PluginScaler_VST2_EditorHost";
+// Test-only, synchronous, same-integrity-window protocol. A VST2 parameter
+// is read on the plugin's owner/UI thread, never from a foreign process.
+constexpr UINT kParamReadMessage = WM_APP + 0x125;
+constexpr UINT kParamWriteMessage = WM_APP + 0x126;
+constexpr int kParameterScale = 1000000;
 AEffect* gEffect{};
 HINSTANCE gModule{};
 HWND gWindow{};
@@ -26,6 +33,26 @@ Ptr __cdecl host_callback(AEffect*, Int opcode, Int, Ptr, void*, float) {
     }
 }
 LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == kParamReadMessage) {
+        if (!gEffect) return -1;
+        const auto index = static_cast<int>(w);
+        if (index == -1) return gEffect->numParams;
+        if (index < 0 || index >= gEffect->numParams || !gEffect->getParameter)
+            return -1;
+        const float value = gEffect->getParameter(gEffect, index);
+        if (!std::isfinite(value) || value < 0.f || value > 1.f) return -2;
+        return static_cast<LRESULT>(std::lround(value * kParameterScale));
+    }
+    if (msg == kParamWriteMessage) {
+        if (!gEffect || !gEffect->setParameter || !gEffect->getParameter)
+            return -1;
+        const auto index = static_cast<int>(w);
+        if (index < 0 || index >= gEffect->numParams ||
+            l < 0 || l > kParameterScale) return -1;
+        gEffect->setParameter(gEffect, index,
+            static_cast<float>(l) / static_cast<float>(kParameterScale));
+        return 1;
+    }
     if(msg==WM_CLOSE) {DestroyWindow(hwnd);return 0;}
     if(msg==WM_DESTROY) {PostQuitMessage(0);return 0;}
     return DefWindowProcW(hwnd,msg,w,l);
