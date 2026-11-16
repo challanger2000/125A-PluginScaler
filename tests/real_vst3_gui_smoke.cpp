@@ -90,7 +90,8 @@ bool within(POINT p, const RECT& r) {
 }
 
 int main(int argc, char** argv) {
-    const bool interaction = argc == 2 && std::string(argv[1]) == "--vst2-input";
+    const bool targeted = argc == 2 && std::string(argv[1]) == "--vst2-controls";
+    const bool interaction = targeted || (argc == 2 && std::string(argv[1]) == "--vst2-input");
     const bool vst2 = interaction || (argc == 2 && std::string(argv[1]) == "--vst2");
     const wchar_t* hostClass = vst2 ?
         L"125A_PluginScaler_VST2_EditorHost" :
@@ -219,7 +220,9 @@ int main(int argc, char** argv) {
         return 8;
     }
     std::cout<<"REAL_PLUGIN_PASS: actual plugin editor and enlarged pixels agree\n";
-    const int code = interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
+    const int code = targeted ?
+        scaler_vst2_interaction::run_targeted(host,width,height) :
+        interaction ? scaler_vst2_interaction::run(host,width,height) : 0;
     if(IsWindow(g.viewer))DestroyWindow(g.viewer);
     MagUninitialize();
     return code;
