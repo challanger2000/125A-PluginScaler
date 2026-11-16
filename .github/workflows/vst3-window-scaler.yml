@@ -53,32 +53,25 @@ jobs:
     steps:
       - name: Checkout Scaler (under test)
         uses: actions/checkout@v4
-      - name: Checkout original 125A MixEngine (READ-ONLY)
+      - name: Checkout original 125A Ugly Reverb (READ-ONLY)
         uses: actions/checkout@v4
         with:
-          repository: challanger2000/125A-MixEngine-Final
-          ref: 1d319b59f54ef737df9b44efe805917aafcb8ec3
-          path: mixengine
+          repository: challanger2000/125A-Ugly-Reverb-Final
+          ref: 631c79b5fddfb19b916d927f0918134576a3a031
+          path: uglyreverb
       - name: Checkout original 125A Test Lab (READ-ONLY)
         uses: actions/checkout@v4
         with:
           repository: challanger2000/125A-Plugin-Test-Lab
           ref: 7213fe1f81f4036f74431cb5b2d7dbd09b73ee5c
           path: testlab
-      - name: Checkout pinned VST3 SDK for MixEngine
-        uses: actions/checkout@v4
-        with:
-          repository: steinbergmedia/vst3sdk
-          ref: 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
-          path: vst3sdk
-          submodules: recursive
-      - name: Build original 125A MixEngine Channel VST3
+      - name: Build original 125A Ugly Reverb VST3
         shell: pwsh
         run: |
-          cmake -S mixengine -B mix-build -G "Visual Studio 17 2022" -A x64 -DVST3_SDK_ROOT="$env:GITHUB_WORKSPACE/vst3sdk" -DSMTG_CREATE_PLUGIN_LINK=0
-          if ($LASTEXITCODE -ne 0) { throw "MixEngine configuration failed" }
-          cmake --build mix-build --config Release --target 125A-MixEngine-Channel --parallel
-          if ($LASTEXITCODE -ne 0) { throw "125A real product VST3 build failed" }
+          cmake -S uglyreverb -B ugly-build -G "Visual Studio 17 2022" -A x64
+          if ($LASTEXITCODE -ne 0) { throw "Ugly Reverb configuration failed" }
+          cmake --build ugly-build --config Release --target UglyReverb --parallel
+          if ($LASTEXITCODE -ne 0) { throw "125A Ugly Reverb source VST3 build failed" }
       - name: Prepare isolated Test Lab hold-open mode (no product changes)
         shell: pwsh
         run: |
@@ -98,11 +91,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Scaler configure failed" }
           cmake --build scaler-build --config Release --target PluginScalerRealVST3Smoke --parallel
           if ($LASTEXITCODE -ne 0) { throw "Scaler visual test build failed" }
-      - name: Open real 125A VST3 and compare magnified pixels
+      - name: Open real 125A Ugly Reverb and compare magnified pixels
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $plugin = Get-ChildItem "mix-build" -Recurse -Directory -Filter "125A-MixEngine-Channel.vst3" | Select-Object -First 1
+          $plugin = Get-ChildItem "ugly-build" -Recurse -Directory -Filter "UglyReverb.vst3" | Select-Object -First 1
           $hostExe = Get-ChildItem "lab-build" -Recurse -File -Filter "125A_Test_Lab_GUI.exe" | Select-Object -First 1
           $smokeExe = Get-ChildItem "scaler-build" -Recurse -File -Filter "PluginScalerRealVST3Smoke.exe" | Select-Object -First 1
           if (-not $plugin -or -not $hostExe -or -not $smokeExe) { throw "Missing real product, real Test Lab GUI host or Scaler visual test" }
@@ -118,11 +111,11 @@ jobs:
             & $smokeExe.FullName
             $code = $LASTEXITCODE
             if ($code -eq 77) {
-              Write-Warning "REAL_125A_VST3_INCONCLUSIVE: no supported desktop capture. Never count this as visual PASS."
+              Write-Warning "REAL_125A_VST3_INCONCLUSIVE: Windows capture was unavailable or Auto-Fit prevented genuine enlargement. Do not claim PASS."
             } elseif ($code -ne 0) {
               throw "REAL_125A_VST3_FAIL: magnifier image check exited $code"
             } else {
-              Write-Host "REAL_125A_VST3_PASS: actual MixEngine Channel visual scaling observed"
+              Write-Host "REAL_125A_VST3_PASS: actual Ugly Reverb magnification observed"
             }
           } finally {
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -133,7 +126,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: 125A-Scaler-Real-MixEngine-VST3-Evidence
+          name: 125A-Scaler-Real-UglyReverb-VST3-Evidence
           path: |
             real-125a-host-stdout.txt
             real-125a-host-stderr.txt
