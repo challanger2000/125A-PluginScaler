@@ -18,6 +18,9 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Run deterministic geometry tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Regression guard — original must remain visible
+        shell: pwsh
+        run: python tests/source_visibility_guard.py
       - name: Package for manual Windows VST3 testing
         shell: pwsh
         run: |
