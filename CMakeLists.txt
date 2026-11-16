@@ -31,7 +31,7 @@ add_executable(PluginScalerCaptureSmoke tests/capture_smoke.cpp)
 target_compile_features(PluginScalerCaptureSmoke PRIVATE cxx_std_20)
 target_include_directories(PluginScalerCaptureSmoke PRIVATE include)
 target_compile_definitions(PluginScalerCaptureSmoke PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(PluginScalerCaptureSmoke PRIVATE user32 Magnification)
+target_link_libraries(PluginScalerCaptureSmoke PRIVATE user32 gdi32 Magnification)
 set_property(TARGET PluginScalerCaptureSmoke PROPERTY
   MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 if(MSVC)
