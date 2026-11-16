@@ -83,7 +83,7 @@ struct Capture {
     bool read(HWND hwnd,UINT flags) {
         if(!bits)return false;
         std::fill_n(static_cast<unsigned char*>(bits),
-                    static_cast<size_t>(width)*height*4,0);
+                    static_cast<size_t>(width)*height*4,static_cast<unsigned char>(0));
         return PrintWindow(hwnd,memory,flags)!=FALSE;
     }
 };
