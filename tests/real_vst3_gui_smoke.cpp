@@ -12,6 +12,7 @@
 #include <iostream>
 #include <set>
 #include <vector>
+#include <fstream>
 #include "../src/vst3_window_scaler.cpp"
 #include "vst2_input_probe.hpp"
 
@@ -37,6 +38,51 @@ bool similar(COLORREF a,COLORREF b) {
     return std::abs(int(GetRValue(a))-int(GetRValue(b)))<=kMaxChannelDiff &&
            std::abs(int(GetGValue(a))-int(GetGValue(b)))<=kMaxChannelDiff &&
            std::abs(int(GetBValue(a))-int(GetBValue(b)))<=kMaxChannelDiff;
+}
+bool capture_desktop_bitmap(const char* filename, const RECT& screen) {
+    const int width=screen.right-screen.left;
+    const int height=screen.bottom-screen.top;
+    if(width<=0||height<=0||width>8192||height>8192)return false;
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth=width;
+    bi.bmiHeader.biHeight=-height; // top down
+    bi.bmiHeader.biPlanes=1;
+    bi.bmiHeader.biBitCount=32;
+    bi.bmiHeader.biCompression=BI_RGB;
+    HDC desktop=GetDC(nullptr);
+    if(!desktop)return false;
+    HDC memory=CreateCompatibleDC(desktop);
+    void* pixels=nullptr;
+    HBITMAP bitmap=memory?CreateDIBSection(desktop,&bi,DIB_RGB_COLORS,
+                              &pixels,nullptr,0):nullptr;
+    bool ok=false;
+    if(bitmap && pixels){
+        HGDIOBJ old=SelectObject(memory,bitmap);
+        if(BitBlt(memory,0,0,width,height,desktop,screen.left,screen.top,
+                  SRCCOPY|CAPTUREBLT)){
+            BITMAPFILEHEADER header{};
+            const auto len=static_cast<DWORD>(width*height*4);
+            header.bfType=0x4D42;
+            header.bfOffBits=sizeof(BITMAPFILEHEADER)+sizeof(BITMAPINFOHEADER);
+            header.bfSize=header.bfOffBits+len;
+            std::ofstream file(filename,std::ios::binary);
+            if(file){
+                file.write(reinterpret_cast<const char*>(&header),
+                           sizeof(header));
+                file.write(reinterpret_cast<const char*>(&bi.bmiHeader),
+                           sizeof(bi.bmiHeader));
+                file.write(static_cast<const char*>(pixels),
+                           static_cast<std::streamsize>(len));
+                ok=file.good();
+            }
+        }
+        SelectObject(memory,old);
+    }
+    if(bitmap)DeleteObject(bitmap);
+    if(memory)DeleteDC(memory);
+    ReleaseDC(nullptr,desktop);
+    return ok;
 }
 bool within(POINT p, const RECT& r) {
     return p.x>=r.left&&p.y>=r.top&&p.x<r.right&&p.y<r.bottom;
@@ -102,6 +148,10 @@ int main(int argc, char** argv) {
             distinct.insert(c);
         }
     }
+    if(interaction) {
+        if(capture_desktop_bitmap("vst2-source-before.bmp",editorBounds))
+            std::cout<<"VST2_SOURCE_BITMAP_WRITTEN\\n";
+    }
     if(samples.size()<24 || distinct.size()<6) {
         std::cout<<"REAL_PLUGIN_INCONCLUSIVE: real editor pixels are not readable/diverse "
                  <<"samples="<<samples.size()<<" distinct="<<distinct.size()<<"\n";
@@ -141,6 +191,10 @@ int main(int argc, char** argv) {
         return 77;
     }
     RECT viewerRect{};GetWindowRect(g.magnifier,&viewerRect);
+    if(interaction) {
+        if(capture_desktop_bitmap("vst2-magnified-before.bmp",viewerRect))
+            std::cout<<"VST2_MAGNIFIED_BITMAP_WRITTEN\\n";
+    }
     for(const auto& s:samples) {
         POINT mapped{scaler::scaled_pixels(s.x,zoom),
                      scaler::scaled_pixels(s.y,zoom)};
