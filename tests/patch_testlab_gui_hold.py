@@ -21,6 +21,6 @@ replacement=anchor+"""        if (const char* hold = std::getenv("125A_SCALER_HO
         }
 """
 content=content.replace(anchor,replacement)
-content='#include <cstdlib>\\n'+content
+content='#include <cstdlib>\n'+content
 file.write_text(content,encoding="utf-8")
 print("Scoped Test Lab GUI hold hook installed in temporary checkout")
