@@ -17,6 +17,7 @@ constexpr int kCloseHotkey = 2;
 constexpr int kCombo = 101;
 constexpr int kStatus = 102;
 constexpr int kOverlay = 103;
+constexpr int kFit = 105;
 constexpr UINT_PTR kRefreshTimer = 10;
 
 struct App {
@@ -34,6 +35,9 @@ struct App {
     DWORD sourcePid{};
     DWORD sourceThread{};
     int percent{150};
+    int effectivePercent{150};
+    bool autoFit{true};
+    HWND autoFitCheck{};
     bool overlay{true};
     // Preserve manually dragged window location across zoom/source changes.
     bool manualViewerPosition{};
@@ -58,21 +62,37 @@ bool source_bounds(HWND hwnd, RECT& out) {
 
 void apply_scale() {
     if (!g.viewer || !g.magnifier || !IsWindow(g.viewer)) return;
+    const int srcW = g.sourceRect.right-g.sourceRect.left;
+    const int srcH = g.sourceRect.bottom-g.sourceRect.top;
+    if(srcW<=0 || srcH<=0) return;
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(g.viewer,GWL_STYLE));
+    const DWORD exstyle = static_cast<DWORD>(GetWindowLongPtrW(g.viewer,GWL_EXSTYLE));
+    const UINT dpi = GetDpiForWindow(g.viewer);
+    RECT chrome{0,0,0,0};
+    if(!AdjustWindowRectExForDpi(&chrome,style,FALSE,exstyle,dpi)) return;
+    MONITORINFO mi{}; mi.cbSize=sizeof(mi);
+    HMONITOR mon = g.manualViewerPosition ?
+        MonitorFromPoint(g.draggedViewerTopLeft,MONITOR_DEFAULTTONEAREST) :
+        MonitorFromWindow(g.source,MONITOR_DEFAULTTONEAREST);
+    if(!GetMonitorInfoW(mon,&mi)) return;
+    const int maxW=(std::max)(1,mi.rcWork.right-mi.rcWork.left-
+                              (chrome.right-chrome.left)-16);
+    const int maxH=(std::max)(1,mi.rcWork.bottom-mi.rcWork.top-
+                              (chrome.bottom-chrome.top)-16);
+    g.effectivePercent=g.autoFit ?
+        scaler::fit_percent(g.percent,srcW,srcH,maxW,maxH) : g.percent;
+    if(g.effectivePercent<=0) return;
     MAGTRANSFORM transform{};
-    transform.v[0][0] = transform.v[1][1] = static_cast<float>(g.percent) / 100.0f;
-    transform.v[2][2] = 1.0f;
-    if (!MagSetWindowTransform(g.magnifier, &transform)) {
-        set_status(L"Fehler: Magnification-Transformation nicht möglich.");
+    transform.v[0][0]=transform.v[1][1]=g.effectivePercent/100.f;
+    transform.v[2][2]=1.f;
+    if(!MagSetWindowTransform(g.magnifier,&transform)){
+        set_status(L"Vergrößerung nicht möglich.");
         return;
     }
-    const int width = scaler::scaled_pixels(g.sourceRect.right - g.sourceRect.left, g.percent);
-    const int height = scaler::scaled_pixels(g.sourceRect.bottom - g.sourceRect.top, g.percent);
-    if (width < 1 || height < 1) return;
-    RECT outer{0, 0, width, height};
-    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(g.viewer, GWL_STYLE));
-    const DWORD exstyle = static_cast<DWORD>(GetWindowLongPtrW(g.viewer, GWL_EXSTYLE));
-    const UINT dpi = GetDpiForWindow(g.viewer);
-    if (!AdjustWindowRectExForDpi(&outer, style, FALSE, exstyle, dpi)) return;
+    const int width=scaler::scaled_pixels(srcW,g.effectivePercent);
+    const int height=scaler::scaled_pixels(srcH,g.effectivePercent);
+    RECT outer{0,0,width,height};
+    if(!AdjustWindowRectExForDpi(&outer,style,FALSE,exstyle,dpi))return;
     // Align the actual viewer CLIENT region with the source client rectangle.
     // In overlay mode the unscaled editor remains visible to Magnification,
     // while the enlarged presentation covers it from the user's perspective.
@@ -93,11 +113,17 @@ void apply_scale() {
         x = g.draggedViewerTopLeft.x;
         y = g.draggedViewerTopLeft.y;
     }
-    SetWindowPos(g.viewer, nullptr, x, y, outer.right - outer.left,
-                 outer.bottom - outer.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    const int fullW=outer.right-outer.left,fullH=outer.bottom-outer.top;
+    if(g.autoFit){
+        x=(std::max)(mi.rcWork.left,(std::min)(x,mi.rcWork.right-fullW));
+        y=(std::max)(mi.rcWork.top,(std::min)(y,mi.rcWork.bottom-fullH));
+    }
+    SetWindowPos(g.viewer,nullptr,x,y,fullW,fullH,SWP_NOZORDER|SWP_NOACTIVATE);
     MoveWindow(g.magnifier, 0, 0, width, height, TRUE);
-    SetWindowTextW(g.viewer, (L"125A PluginScaler — " + std::to_wstring(g.percent) +
-                             L"% (experimentell)").c_str());
+    std::wstring caption=L"125A PluginScaler — "+std::to_wstring(g.percent)+L"%";
+    if(g.percent!=g.effectivePercent)
+        caption+=L" (angepasst: "+std::to_wstring(g.effectivePercent)+L"%)";
+    SetWindowTextW(g.viewer,caption.c_str());
 }
 
 HWND editor_child_at(POINT screen) {
@@ -128,8 +154,8 @@ void forward_mouse(HWND receiver, UINT msg, WPARAM wp, LPARAM lp) {
     if (!holding && (p.x < 0 || p.y < 0 ||
                      p.x >= magClient.right || p.y >= magClient.bottom)) return;
     POINT screen{
-        g.sourceRect.left + scaler::source_pixel(p.x, g.percent),
-        g.sourceRect.top + scaler::source_pixel(p.y, g.percent)
+        g.sourceRect.left + scaler::source_pixel(p.x, g.effectivePercent),
+        g.sourceRect.top + scaler::source_pixel(p.y, g.effectivePercent)
     };
     HWND target = holding && IsWindow(g.mouseTarget) ?
                   g.mouseTarget : editor_child_at(screen);
@@ -211,9 +237,9 @@ void refresh() {
         RECT viewerClient{};
         GetClientRect(g.magnifier, &viewerClient);
         if (viewerClient.right != scaler::scaled_pixels(
-                bounds.right - bounds.left, g.percent) ||
+                bounds.right - bounds.left, g.effectivePercent) ||
             viewerClient.bottom != scaler::scaled_pixels(
-                bounds.bottom - bounds.top, g.percent)) apply_scale();
+                bounds.bottom - bounds.top, g.effectivePercent)) apply_scale();
     }
     if (g.magnifier) MagSetWindowSource(g.magnifier, bounds);
 }
@@ -369,10 +395,15 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kOverlay)),
             g.instance, nullptr);
         SendMessageW(g.overlayCheck, BM_SETCHECK, BST_CHECKED, 0);
+        g.autoFitCheck=CreateWindowW(L"BUTTON",L"An Bildschirm anpassen (Auto-Fit)",
+            WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_AUTOCHECKBOX,
+            16,158,380,22,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(kFit)),
+            g.instance,nullptr);
+        SendMessageW(g.autoFitCheck,BM_SETCHECK,BST_CHECKED,0);
         g.status = CreateWindowW(L"STATIC",
             L"Bereit. Auswahl per Strg+Alt+F8.",
             WS_CHILD | WS_VISIBLE | SS_LEFT,
-            16, 165, 445, 42, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
+            16, 190, 445, 50, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kStatus)),
             g.instance, nullptr);
         if (!RegisterHotKey(hwnd, kCloseHotkey,
                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F9)) {
@@ -389,6 +420,10 @@ LRESULT CALLBACK controller_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (wp == kCloseHotkey && IsWindow(g.viewer)) DestroyWindow(g.viewer);
         return 0;
     case WM_COMMAND:
+        if(LOWORD(wp)==kFit && HIWORD(wp)==BN_CLICKED){
+            g.autoFit=SendMessageW(g.autoFitCheck,BM_GETCHECK,0,0)==BST_CHECKED;
+            apply_scale();
+        }
         if (LOWORD(wp) == kOverlay && HIWORD(wp) == BN_CLICKED) {
             const bool wantOverlay = SendMessageW(g.overlayCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
             if (wantOverlay != g.overlay) {
@@ -443,7 +478,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     }
     HWND hwnd = CreateWindowExW(0, kControllerClass, L"125A PluginScaler — VST2/VST3 GUI-Prototyp",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 485, 250,
+        CW_USEDEFAULT, CW_USEDEFAULT, 485, 295,
         nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         MagUninitialize();
